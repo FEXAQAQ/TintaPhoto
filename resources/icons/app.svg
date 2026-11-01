@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- TintaPhoto's application icon: a drop of ink carrying the whole range
+       of colour the program is for. The interface itself uses no gradients
+       (PLAN.md 3.4); this is the one piece of artwork that does. -->
+  <defs>
+    <linearGradient id="ink" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#FFD166"/>
+      <stop offset="0.3" stop-color="#FF7A5C"/>
+      <stop offset="0.6" stop-color="#C45BE0"/>
+      <stop offset="1" stop-color="#4D9BFF"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" ry="56" fill="#141414"/>
+  <path d="M128 28 C128 28 64 108 64 152 a64 64 0 0 0 128 0 C192 108 128 28 128 28 Z"
+        fill="url(#ink)"/>
+</svg>

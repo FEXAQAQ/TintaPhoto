@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tintaphoto"
+# The version is written in app/paths.py and nowhere else; see CLAUDE.md 11.
+dynamic = ["version"]
+description = "A minimal RAW photo editor for Windows"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+dependencies = [
+    "PySide6>=6.7",
+    "rawpy>=0.21",
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
+    "Pillow>=10.2",
+    "tifffile>=2024.1.30",
+    "piexif>=1.1.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pip-licenses>=4.3",
+    "pyinstaller>=6.3",
+]
+
+[tool.setuptools]
+packages = ["app", "core", "ui", "ui.widgets"]
+
+[tool.setuptools.dynamic]
+version = { attr = "app.paths.APP_VERSION" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    "error",
+    # piexif writes an Exif sub-IFD without the trailing offset Pillow expects,
+    # so Pillow warns when the tests read back the JPEGs they build themselves.
+    # Files written by a camera are not affected.
+    "ignore:Corrupt EXIF data:UserWarning",
+]

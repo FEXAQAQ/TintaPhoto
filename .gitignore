@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# Packaging output
+build/
+dist/
+*.spec.bak
+
+# Test photos (large RAW files are not committed; see README)
+tests/samples/*.ARW
+tests/samples/*.arw
+tests/samples/*.CR2
+tests/samples/*.CR3
+tests/samples/*.NEF
+tests/samples/*.RAF
+tests/samples/*.ORF
+tests/samples/*.RW2
+tests/samples/*.DNG
+tests/samples/*.JPG
+tests/samples/*.jpg
+tests/samples/*.JPEG
+tests/samples/*.jpeg
+tests/samples/*.json
+
+# Sample photos kept outside the test folder (never committed)
+sample/
+各相片測試/
+
+# Reference images produced by tests
+tests/output/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

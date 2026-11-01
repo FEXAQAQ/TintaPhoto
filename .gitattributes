@@ -1,0 +1,10 @@
+# The licence texts are copied verbatim from their official source, so they
+# are stored exactly as they were downloaded rather than normalised.
+licenses/*.txt -text
+# The Lensfun database is bundled as it was downloaded, for the same reason.
+resources/lensfun/*.xml -text
+# The face detection model is a binary file, kept byte for byte.
+resources/models/*.onnx binary
+
+# cmd.exe runs the launchers, and it wants Windows line endings.
+*.bat text eol=crlf

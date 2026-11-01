@@ -1,0 +1,701 @@
+"""Two photos side by side or one above the other (PLAN.md 2.8, 3.13).
+
+A collage is a fixed canvas - 1920 x 1080 lying down, 1080 x 1350 standing
+up, the sizes the social platforms show best - split in half across or down,
+with one photo in each half. The gap between the halves is taken out of the
+halves, never added to the canvas, so the file always comes out at the size
+the platform wants.
+
+Each photo is placed by three numbers: how far it is zoomed in past the fit
+the collage asks for, and which point of the photo sits in the middle of its
+half. Those are fractions of the photo, not pixels, so the same placement
+lands in the same place whether the photo is the small copy the screen shows
+or the full size one the export develops. The window draws its preview from
+:func:`photo_rect` and the export renders with it, so they cannot disagree.
+
+Linked, the two photos are one scene shot twice - by night and by day, say
+- and both are laid over the whole canvas with one placement, so that each
+half shows its own part of the scene and the seam lines up. Because two
+shots never quite match, the second can be shifted and scaled a little
+against the first: its alignment.
+
+Everything here is pure: arrays and values in, new arrays out.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from typing import Any, Final
+
+import cv2
+import numpy as np
+from numpy.typing import NDArray
+
+from core import color_management as cm
+from core import pipeline
+
+# --------------------------------------------------------------------------
+# What can be chosen
+# --------------------------------------------------------------------------
+
+ORIENTATION_LANDSCAPE: Final[str] = "landscape"
+ORIENTATION_PORTRAIT: Final[str] = "portrait"
+ORIENTATIONS: Final[tuple[str, ...]] = (ORIENTATION_LANDSCAPE, ORIENTATION_PORTRAIT)
+
+#: The canvas of each orientation, in pixels: 16:9 for a landscape post and
+#: 4:5, the tallest social feeds show in full, for a portrait one.
+CANVAS_SIZES: Final[dict[str, tuple[int, int]]] = {
+    ORIENTATION_LANDSCAPE: (1920, 1080),
+    ORIENTATION_PORTRAIT: (1080, 1350),
+}
+
+#: Left and right halves, or top and bottom ones.
+SPLIT_SIDE_BY_SIDE: Final[str] = "side_by_side"
+SPLIT_STACKED: Final[str] = "stacked"
+SPLITS: Final[tuple[str, ...]] = (SPLIT_SIDE_BY_SIDE, SPLIT_STACKED)
+
+#: Fill the half and lose the edges, or show the whole photo and leave a
+#: border of the background colour.
+FIT_COVER: Final[str] = "cover"
+FIT_CONTAIN: Final[str] = "contain"
+FITS: Final[tuple[str, ...]] = (FIT_COVER, FIT_CONTAIN)
+
+BACKGROUND_WHITE: Final[str] = "white"
+BACKGROUND_BLACK: Final[str] = "black"
+BACKGROUNDS: Final[tuple[str, ...]] = (BACKGROUND_WHITE, BACKGROUND_BLACK)
+
+#: The colour of the gap and of whatever a contained photo leaves bare, as
+#: 8 bit sRGB. Pure white and pure black are the same in every colour space,
+#: so they need no conversion on the way to the file or to the screen.
+BACKGROUND_SRGB8: Final[dict[str, tuple[int, int, int]]] = {
+    BACKGROUND_WHITE: (255, 255, 255),
+    BACKGROUND_BLACK: (0, 0, 0),
+}
+
+#: The gap between the two halves, in pixels of the canvas.
+GAP_MIN: Final[int] = 0
+GAP_MAX: Final[int] = 20
+
+#: How far a photo can be zoomed in past its fit; 1 is the fit itself.
+ZOOM_MIN: Final[float] = 1.0
+ZOOM_MAX: Final[float] = 4.0
+
+#: Where the halves meet, as a fraction of the canvas along the split. In
+#: the middle unless moved, and never so far that one half all but goes.
+SEAM_DEFAULT: Final[float] = 0.5
+SEAM_MIN: Final[float] = 0.2
+SEAM_MAX: Final[float] = 0.8
+
+#: How far the second photo of a linked pair can be moved against the first,
+#: as a fraction of its own size, and how far scaled. Enough to make up for
+#: two shots taken by hand from the same spot, not to recompose one.
+ALIGN_SHIFT_MAX: Final[float] = 0.25
+ALIGN_SCALE_MIN: Final[float] = 0.8
+ALIGN_SCALE_MAX: Final[float] = 1.25
+
+#: What a collage's file name ends with, after the names of its photos.
+#: Not translated: a file name should not depend on the interface language.
+FILE_SUFFIX: Final[str] = "_collage"
+
+#: What each photo of a carousel is named, after the collage's own name:
+#: letters, because a number is what is added when a name is taken (X-05).
+SINGLE_SUFFIXES: Final[tuple[str, ...]] = ("_a", "_b")
+
+#: How many photos a collage holds.
+SLOTS: Final[int] = 2
+
+#: How far beyond the visible part of a photo is kept when it is cut out
+#: before scaling, in source pixels, so that the filter reaching past the
+#: edge of the half still has real pixels to read.
+_CUT_MARGIN: Final[int] = 2
+
+_EIGHT_BIT_MAX: Final[float] = 255.0
+
+#: Halvings when looking for the least zoom that keeps a linked pair
+#: covered: thirty take the answer far below anything that can be seen.
+_ZOOM_SEARCH_STEPS: Final[int] = 30
+
+
+@dataclass(frozen=True)
+class Layout:
+    """How the canvas is shaped and split, and what fills the gaps."""
+
+    orientation: str = ORIENTATION_LANDSCAPE
+    split: str = SPLIT_SIDE_BY_SIDE
+    fit: str = FIT_COVER
+    gap: int = GAP_MIN
+    background: str = BACKGROUND_WHITE
+    #: Both photos laid over the whole canvas with one placement, each half
+    #: showing its own part of the same scene.
+    linked: bool = False
+    seam: float = SEAM_DEFAULT
+
+    def sane(self) -> "Layout":
+        """Return this layout with every value one that can be drawn."""
+        try:
+            seam = float(self.seam)
+        except (TypeError, ValueError):
+            seam = SEAM_DEFAULT
+        if not math.isfinite(seam):
+            seam = SEAM_DEFAULT
+        return Layout(
+            orientation=_one_of(self.orientation, ORIENTATIONS),
+            split=_one_of(self.split, SPLITS),
+            fit=_one_of(self.fit, FITS),
+            gap=int(min(GAP_MAX, max(GAP_MIN, int(self.gap)))),
+            background=_one_of(self.background, BACKGROUNDS),
+            linked=bool(self.linked),
+            seam=min(SEAM_MAX, max(SEAM_MIN, seam)),
+        )
+
+    @property
+    def fit_used(self) -> str:
+        """Return the fit the photos are placed with; linked, always cover."""
+        return FIT_COVER if self.linked else _one_of(self.fit, FITS)
+
+    @property
+    def canvas_size(self) -> tuple[int, int]:
+        """Return the width and height of the finished collage."""
+        return CANVAS_SIZES[_one_of(self.orientation, ORIENTATIONS)]
+
+
+@dataclass(frozen=True)
+class Cell:
+    """One half of the canvas, in whole pixels."""
+
+    x: int
+    y: int
+    width: int
+    height: int
+
+    @property
+    def centre(self) -> tuple[float, float]:
+        """Return the middle of the half."""
+        return self.x + self.width / 2.0, self.y + self.height / 2.0
+
+
+@dataclass(frozen=True)
+class Placement:
+    """Where one photo sits in its half.
+
+    ``zoom`` is how far past the fit it is enlarged; ``focus_x`` and
+    ``focus_y`` are the point of the photo, as fractions of its width and
+    height, that sits in the middle of the half.
+    """
+
+    zoom: float = ZOOM_MIN
+    focus_x: float = 0.5
+    focus_y: float = 0.5
+
+
+@dataclass(frozen=True)
+class Alignment:
+    """How the second photo of a linked pair is moved against the first.
+
+    ``shift_x`` and ``shift_y`` are fractions of the photo's shown width and
+    height; ``scale`` enlarges it about its own centre.
+    """
+
+    shift_x: float = 0.0
+    shift_y: float = 0.0
+    scale: float = 1.0
+
+    def sane(self) -> "Alignment":
+        """Return this alignment inside the range it may take."""
+        return Alignment(
+            shift_x=_clamp(self.shift_x, -ALIGN_SHIFT_MAX, ALIGN_SHIFT_MAX),
+            shift_y=_clamp(self.shift_y, -ALIGN_SHIFT_MAX, ALIGN_SHIFT_MAX),
+            scale=_clamp(self.scale, ALIGN_SCALE_MIN, ALIGN_SCALE_MAX),
+        )
+
+
+#: The alignment that leaves a photo where its placement put it.
+UNALIGNED: Final[Alignment] = Alignment()
+
+
+def cells(layout: Layout) -> tuple[Cell, Cell]:
+    """Return the two halves of the canvas, first left or top.
+
+    They meet at the seam, and the gap is taken out of them either side of
+    it. When the gap is odd the second half gets the pixel left over, which
+    is the only way to keep the canvas its size.
+    """
+    layout = layout.sane()
+    width, height = layout.canvas_size
+    gap = layout.gap
+    length = width if layout.split == SPLIT_SIDE_BY_SIDE else height
+    first = math.floor(length * layout.seam - gap / 2.0)
+    first = max(1, min(length - gap - 1, first))
+    second = length - gap - first
+    if layout.split == SPLIT_SIDE_BY_SIDE:
+        return Cell(0, 0, first, height), Cell(first + gap, 0, second, height)
+    return Cell(0, 0, width, first), Cell(0, first + gap, width, second)
+
+
+def canvas_cell(layout: Layout) -> Cell:
+    """Return the whole canvas as one cell."""
+    width, height = layout.sane().canvas_size
+    return Cell(0, 0, width, height)
+
+
+def frame(layout: Layout, slot: int) -> Cell:
+    """Return what a photo is placed against: its half, or linked, the canvas."""
+    layout = layout.sane()
+    return canvas_cell(layout) if layout.linked else cells(layout)[slot]
+
+
+def aligned(
+    rect: tuple[float, float, float, float], alignment: Alignment
+) -> tuple[float, float, float, float]:
+    """Return *rect* moved and scaled by *alignment*, about its own centre."""
+    alignment = alignment.sane()
+    left, top, width, height = rect
+    centre_x = left + width / 2.0 + alignment.shift_x * width
+    centre_y = top + height / 2.0 + alignment.shift_y * height
+    width *= alignment.scale
+    height *= alignment.scale
+    return centre_x - width / 2.0, centre_y - height / 2.0, width, height
+
+
+def placed_rect(
+    layout: Layout,
+    slot: int,
+    photo_size: tuple[int, int],
+    placement: Placement,
+    alignment: Alignment = UNALIGNED,
+) -> tuple[float, float, float, float]:
+    """Return where the photo in *slot* lands on the canvas.
+
+    The one place the preview and the export both ask, so they agree.
+    *alignment* only counts when the layout is linked.
+    """
+    layout = layout.sane()
+    rect = photo_rect(placement, photo_size, frame(layout, slot), layout.fit_used)
+    return aligned(rect, alignment) if layout.linked else rect
+
+
+def linked_placement(
+    layout: Layout,
+    placement: Placement,
+    sizes: Sequence[tuple[int, int] | None],
+    alignment: Alignment = UNALIGNED,
+) -> Placement:
+    """Return the shared placement of a linked pair, with no background showing.
+
+    The first photo must still cover the canvas, and the second, moved and
+    scaled by *alignment*, must still cover its own half. Where both cannot
+    hold at the zoom asked for, the pair is zoomed in together just as far as
+    it takes - aligning a photo never leaves a bare strip down one side - and
+    the focus is then kept where both hold, as near as can be to the one
+    asked for.
+    """
+    layout = layout.sane()
+    canvas = canvas_cell(layout)
+    first, second = (list(sizes) + [None, None])[:2]
+    reference = first if first is not None else second
+    if reference is None:
+        return placement
+    base = settled(placement, reference, canvas, FIT_COVER)
+    if first is None or second is None:
+        return base
+    alignment = alignment.sane()
+    half = cells(layout)[1]
+
+    def bounds(zoom: float, axis: int) -> tuple[float, float]:
+        room = (canvas.width, canvas.height)[axis]
+        shown_first = first[axis] * fitted_scale(first, canvas, FIT_COVER) * zoom
+        shown_second = second[axis] * fitted_scale(second, canvas, FIT_COVER) * zoom
+        margin = room / 2.0 / shown_first
+        shift = (alignment.shift_x, alignment.shift_y)[axis]
+        start = (half.x, half.y)[axis]
+        end = start + (half.width, half.height)[axis]
+        low = 0.5 + shift - alignment.scale / 2.0 + (room / 2.0 - start) / shown_second
+        high = 0.5 + shift + alignment.scale / 2.0 - (end - room / 2.0) / shown_second
+        return max(margin, low), min(1.0 - margin, high)
+
+    def holds(zoom: float) -> bool:
+        return all(low <= high for low, high in (bounds(zoom, 0), bounds(zoom, 1)))
+
+    zoom = base.zoom
+    if not holds(zoom):
+        if not holds(ZOOM_MAX):
+            return base
+        low, high = zoom, ZOOM_MAX
+        for _ in range(_ZOOM_SEARCH_STEPS):
+            middle = (low + high) / 2.0
+            if holds(middle):
+                high = middle
+            else:
+                low = middle
+        zoom = high
+    (low_x, high_x), (low_y, high_y) = bounds(zoom, 0), bounds(zoom, 1)
+    return Placement(
+        zoom=zoom,
+        focus_x=min(high_x, max(low_x, base.focus_x)),
+        focus_y=min(high_y, max(low_y, base.focus_y)),
+    )
+
+
+def nudged(
+    alignment: Alignment, delta: tuple[float, float], rect: tuple[float, float, float, float]
+) -> Alignment:
+    """Return the alignment after its photo is moved by *delta* canvas pixels.
+
+    *rect* is where the placement alone puts the photo, before aligning.
+    """
+    alignment = alignment.sane()
+    _left, _top, width, height = rect
+    shown_w = width * alignment.scale
+    shown_h = height * alignment.scale
+    return replace(
+        alignment,
+        shift_x=alignment.shift_x + (delta[0] / width if shown_w > 0 else 0.0),
+        shift_y=alignment.shift_y + (delta[1] / height if shown_h > 0 else 0.0),
+    ).sane()
+
+
+def rescaled(
+    alignment: Alignment,
+    scale: float,
+    anchor: tuple[float, float],
+    rect: tuple[float, float, float, float],
+) -> Alignment:
+    """Return the alignment at *scale*, keeping the point under *anchor* still."""
+    alignment = alignment.sane()
+    scale = _clamp(scale, ALIGN_SCALE_MIN, ALIGN_SCALE_MAX)
+    left, top, width, height = rect
+    if width <= 0 or height <= 0:
+        return replace(alignment, scale=scale)
+    now_left, now_top, now_w, now_h = aligned(rect, alignment)
+    under_x = (anchor[0] - now_left) / now_w
+    under_y = (anchor[1] - now_top) / now_h
+    new_w = width * scale
+    new_h = height * scale
+    centre_x = anchor[0] - under_x * new_w + new_w / 2.0
+    centre_y = anchor[1] - under_y * new_h + new_h / 2.0
+    return Alignment(
+        shift_x=(centre_x - (left + width / 2.0)) / width,
+        shift_y=(centre_y - (top + height / 2.0)) / height,
+        scale=scale,
+    ).sane()
+
+
+def fitted_scale(photo_size: tuple[int, int], cell: Cell, fit: str) -> float:
+    """Return how much the photo is scaled to fill or to fit inside *cell*."""
+    width, height = photo_size
+    if width <= 0 or height <= 0:
+        return 1.0
+    across = cell.width / width
+    down = cell.height / height
+    return max(across, down) if fit == FIT_COVER else min(across, down)
+
+
+def settled(
+    placement: Placement, photo_size: tuple[int, int], cell: Cell, fit: str
+) -> Placement:
+    """Return *placement* with the zoom in range and the photo kept in place.
+
+    A photo larger than its half along one direction may slide only as far
+    as its edge: it never uncovers background it could have covered. A photo
+    smaller than its half along a direction is centred along it.
+    """
+    zoom = float(min(ZOOM_MAX, max(ZOOM_MIN, placement.zoom)))
+    scale = fitted_scale(photo_size, cell, fit) * zoom
+    focus_x = _settled_focus(placement.focus_x, photo_size[0] * scale, cell.width)
+    focus_y = _settled_focus(placement.focus_y, photo_size[1] * scale, cell.height)
+    return Placement(zoom=zoom, focus_x=focus_x, focus_y=focus_y)
+
+
+def _settled_focus(focus: float, shown: float, room: float) -> float:
+    """Return a focus that keeps a photo *shown* long inside *room*."""
+    if shown <= room or shown <= 0.0:
+        return 0.5
+    margin = room / 2.0 / shown
+    return float(min(1.0 - margin, max(margin, focus)))
+
+
+def photo_rect(
+    placement: Placement, photo_size: tuple[int, int], cell: Cell, fit: str
+) -> tuple[float, float, float, float]:
+    """Return where the whole photo lands on the canvas: x, y, width, height.
+
+    Most of it may lie outside the half; whatever does is cut away.
+    """
+    placement = settled(placement, photo_size, cell, fit)
+    scale = fitted_scale(photo_size, cell, fit) * placement.zoom
+    width = photo_size[0] * scale
+    height = photo_size[1] * scale
+    centre_x, centre_y = cell.centre
+    return (
+        centre_x - placement.focus_x * width,
+        centre_y - placement.focus_y * height,
+        width,
+        height,
+    )
+
+
+def panned(
+    placement: Placement,
+    delta: tuple[float, float],
+    photo_size: tuple[int, int],
+    cell: Cell,
+    fit: str,
+) -> Placement:
+    """Return the placement after the photo is dragged by *delta* canvas pixels."""
+    _x, _y, width, height = photo_rect(placement, photo_size, cell, fit)
+    current = settled(placement, photo_size, cell, fit)
+    moved = replace(
+        current,
+        focus_x=current.focus_x - (delta[0] / width if width > 0 else 0.0),
+        focus_y=current.focus_y - (delta[1] / height if height > 0 else 0.0),
+    )
+    return settled(moved, photo_size, cell, fit)
+
+
+def zoomed(
+    placement: Placement,
+    zoom: float,
+    anchor: tuple[float, float],
+    photo_size: tuple[int, int],
+    cell: Cell,
+    fit: str,
+) -> Placement:
+    """Return the placement at *zoom*, keeping the point under *anchor* still.
+
+    *anchor* is in canvas pixels; it is where the pointer was when the wheel
+    turned, as in the preview (PLAN.md 3.3).
+    """
+    left, top, width, height = photo_rect(placement, photo_size, cell, fit)
+    zoom = float(min(ZOOM_MAX, max(ZOOM_MIN, zoom)))
+    if width <= 0 or height <= 0:
+        return settled(replace(placement, zoom=zoom), photo_size, cell, fit)
+    # The point of the photo under the anchor, as fractions of the photo.
+    under_x = (anchor[0] - left) / width
+    under_y = (anchor[1] - top) / height
+    scale = fitted_scale(photo_size, cell, fit) * zoom
+    new_width = photo_size[0] * scale
+    new_height = photo_size[1] * scale
+    new_left = anchor[0] - under_x * new_width
+    new_top = anchor[1] - under_y * new_height
+    centre_x, centre_y = cell.centre
+    moved = Placement(
+        zoom=zoom,
+        focus_x=(centre_x - new_left) / new_width,
+        focus_y=(centre_y - new_top) / new_height,
+    )
+    return settled(moved, photo_size, cell, fit)
+
+
+# --------------------------------------------------------------------------
+# Rendering
+# --------------------------------------------------------------------------
+
+
+def background_level(background: str) -> float:
+    """Return the background as linear light, the same in every channel."""
+    return BACKGROUND_SRGB8[_one_of(background, BACKGROUNDS)][0] / _EIGHT_BIT_MAX
+
+
+def render_cell(
+    image: NDArray[Any],
+    cell: Cell,
+    rect: tuple[float, float, float, float],
+    background: str,
+) -> NDArray[np.float32]:
+    """Return one half of the canvas as linear light, *image* laid at *rect*.
+
+    *rect* is where the whole photo lands on the canvas, from
+    :func:`placed_rect`; only the part inside *cell* is drawn.
+
+    *image* is a developed photo in sRGB, 8 or 16 bit, at any size: what
+    matters is its shape, which says where it goes. Only the part that shows
+    is cut out and turned into floating point, so a full size photo costs
+    little more memory than the half it fills.
+
+    Scaling happens in linear light, where averaging pixels averages light.
+    A photo shrunk is first reduced with area averaging, which is what keeps
+    fine detail from turning into moire; whatever scale is left over, and
+    the fraction of a pixel the placement asks for, is done by one affine
+    warp whose border is the background, so the photo's edge is smooth.
+    """
+    level = background_level(background)
+    height, width = image.shape[:2]
+    left, top, shown_w, shown_h = rect
+    scale = shown_w / width
+    if scale <= 0.0 or shown_h <= 0.0:
+        return np.full((cell.height, cell.width, 3), level, dtype=np.float32)
+
+    # The part of the source that lands inside the half, with a margin.
+    x0 = max(0, math.floor((cell.x - left) / scale) - _CUT_MARGIN)
+    y0 = max(0, math.floor((cell.y - top) / scale) - _CUT_MARGIN)
+    x1 = min(width, math.ceil((cell.x + cell.width - left) / scale) + _CUT_MARGIN)
+    y1 = min(height, math.ceil((cell.y + cell.height - top) / scale) + _CUT_MARGIN)
+    if x1 <= x0 or y1 <= y0:
+        return np.full((cell.height, cell.width, 3), level, dtype=np.float32)
+
+    cut = _to_linear(image[y0:y1, x0:x1])
+    factor_x = factor_y = 1.0
+    if scale < 1.0:
+        size = (
+            max(1, round((x1 - x0) * scale)),
+            max(1, round((y1 - y0) * scale)),
+        )
+        factor_x = size[0] / (x1 - x0)
+        factor_y = size[1] / (y1 - y0)
+        cut = cv2.resize(cut, size, interpolation=cv2.INTER_AREA)
+
+    # Pixel centres sit at half steps: a source pixel c of the cut lies at
+    # x0 + (c + 0.5) / factor in the photo, which lands at left + scale * that
+    # on the canvas, and the half's own pixel i has its centre at i + 0.5.
+    step_x = scale / factor_x
+    step_y = scale / factor_y
+    matrix = np.array(
+        [
+            [step_x, 0.0, left - cell.x + scale * x0 + 0.5 * step_x - 0.5],
+            [0.0, step_y, top - cell.y + scale * y0 + 0.5 * step_y - 0.5],
+        ],
+        dtype=np.float64,
+    )
+    # The warp reads past the cut by repeating its edge, and the photo's own
+    # edge is drawn below from exactly how much of each pixel it covers, so
+    # an enlarged photo does not smear into the background over several
+    # pixels and a photo filling its half does not fade at the sides.
+    placed = cv2.warpAffine(
+        cut,
+        matrix,
+        (cell.width, cell.height),
+        flags=cv2.INTER_LINEAR if scale < 1.0 else cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+    # Bicubic enlarging can ring just past black and white.
+    np.clip(placed, 0.0, 1.0, out=placed)
+    across = _coverage(cell.width, left - cell.x, shown_w)
+    down = _coverage(cell.height, top - cell.y, shown_h)
+    covered = (down[:, None] * across[None, :])[..., None]
+    if np.all(covered == 1.0):
+        return placed
+    return (placed * covered + np.float32(level) * (1.0 - covered)).astype(np.float32)
+
+
+def _coverage(count: int, start: float, length: float) -> NDArray[np.float32]:
+    """Return how much of each of *count* pixels the span from *start* covers."""
+    edges = np.arange(count, dtype=np.float64)
+    covered = np.minimum(edges + 1.0, start + length) - np.maximum(edges, start)
+    return np.clip(covered, 0.0, 1.0).astype(np.float32)
+
+
+def compose(layout: Layout, halves: Sequence[NDArray[np.float32] | None]) -> NDArray[np.float32]:
+    """Return the canvas in linear light, each half laid where it belongs.
+
+    A half with nothing in it is left the background colour, and so is the gap.
+    """
+    layout = layout.sane()
+    width, height = layout.canvas_size
+    canvas = np.full((height, width, 3), background_level(layout.background), dtype=np.float32)
+    for cell, half in zip(cells(layout), halves):
+        if half is None:
+            continue
+        if half.shape[:2] != (cell.height, cell.width):
+            raise ValueError(
+                f"a half of {half.shape[1]}x{half.shape[0]} was given for one of "
+                f"{cell.width}x{cell.height}"
+            )
+        canvas[cell.y : cell.y + cell.height, cell.x : cell.x + cell.width] = half
+    return canvas
+
+
+def encode(
+    canvas: NDArray[np.float32], bits: int = pipeline.EIGHT_BIT, dither: bool = False
+) -> NDArray[Any]:
+    """Return the linear canvas as sRGB samples of *bits* bits (PLAN.md 6 step 12)."""
+    encoded = cm.linear_to_srgb(np.clip(canvas, 0.0, 1.0))
+    if bits == pipeline.SIXTEEN_BIT:
+        return pipeline.quantise_srgb16(encoded)
+    return pipeline.quantise_srgb8(encoded, dither)
+
+
+def render_slot(
+    layout: Layout,
+    slot: int,
+    image: NDArray[Any],
+    placement: Placement,
+    alignment: Alignment = UNALIGNED,
+) -> NDArray[np.float32]:
+    """Return the half *slot* fills, *image* placed as the layout says."""
+    layout = layout.sane()
+    size = (int(image.shape[1]), int(image.shape[0]))
+    rect = placed_rect(layout, slot, size, placement, alignment)
+    return render_cell(image, cells(layout)[slot], rect, layout.background)
+
+
+def single_rect(
+    layout: Layout, photo_size: tuple[int, int], placement: Placement
+) -> tuple[float, float, float, float]:
+    """Return where a photo lands when it fills a canvas of its own.
+
+    The single photos of a carousel are posted after the collage, so they
+    take its size and nothing is cropped off when they are swiped through.
+    The photo keeps the zoom and the focus it has in its half, measured
+    against the whole canvas instead: the same point sits in the middle, and
+    the wider frame shows more around it. Linked, the alignment is left out:
+    it only lines the halves up at the seam, and on a canvas of its own it
+    could uncover a strip of background.
+    """
+    layout = layout.sane()
+    return photo_rect(placement, photo_size, canvas_cell(layout), layout.fit_used)
+
+
+def render_single(
+    layout: Layout, image: NDArray[Any], placement: Placement
+) -> NDArray[np.float32]:
+    """Return one photo filling the whole canvas, as linear light (carousel)."""
+    layout = layout.sane()
+    size = (int(image.shape[1]), int(image.shape[0]))
+    rect = single_rect(layout, size, placement)
+    return render_cell(image, canvas_cell(layout), rect, layout.background)
+
+
+def render(
+    layout: Layout,
+    images: Sequence[NDArray[Any] | None],
+    placements: Sequence[Placement],
+    alignments: Sequence[Alignment] | None = None,
+    bits: int = pipeline.EIGHT_BIT,
+    dither: bool = False,
+) -> NDArray[Any]:
+    """Return the finished collage: developed photos in, sRGB samples out.
+
+    Linked, both photos are meant to be given the same placement.
+    """
+    layout = layout.sane()
+    alignments = alignments or [UNALIGNED] * len(placements)
+    halves = [
+        None if image is None else render_slot(layout, slot, image, placement, alignment)
+        for slot, (image, placement, alignment) in enumerate(zip(images, placements, alignments))
+    ]
+    return encode(compose(layout, halves), bits, dither)
+
+
+def _to_linear(image: NDArray[Any]) -> NDArray[np.float32]:
+    """Return sRGB samples of either depth as linear light."""
+    full_scale = np.iinfo(image.dtype).max if image.dtype.kind == "u" else 1.0
+    encoded = image.astype(np.float32) / np.float32(full_scale)
+    return cm.srgb_to_linear(encoded)
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    """Return *value* within *low* and *high*; anything unusable is the middle."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = (low + high) / 2.0
+    if not math.isfinite(number):
+        number = (low + high) / 2.0
+    return min(high, max(low, number))
+
+
+def _one_of(value: str, choices: tuple[str, ...]) -> str:
+    """Return *value* if it is one of *choices*, otherwise the first of them."""
+    return value if value in choices else choices[0]
