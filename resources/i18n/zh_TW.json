@@ -111,7 +111,7 @@
   "toast.pick_clipped": "這裡過曝了，請點沒有過曝的灰色或白色地方",
   "crop.group.aspect": "比例",
   "crop.group.angle": "角度",
-  "crop.group.tools": "工具",
+  "crop.group.orientation": "方向",
   "crop.aspect.original": "原始",
   "crop.aspect.free": "自由",
   "crop.aspect.square": "1:1",

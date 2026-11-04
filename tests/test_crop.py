@@ -317,11 +317,21 @@ def test_the_flip_buttons_ask_for_each_flip(crop_tab: CropTab) -> None:
     assert flips == [False, True]
 
 
-def test_the_flip_buttons_name_their_shortcuts(crop_tab: CropTab) -> None:
+def test_only_straighten_has_a_tooltip(crop_tab: CropTab) -> None:
+    """The turns and flips say everything on the button; straighten keeps
+    its hint, since nothing else tells the user to draw a line (PLAN.md 3.2)."""
     from app.i18n import tr
 
-    assert tr("shortcut.mirror_horizontal") in crop_tab.mirror_horizontal_button.toolTip()
-    assert tr("shortcut.mirror_vertical") in crop_tab.mirror_vertical_button.toolTip()
+    crop_tab.retranslate()
+
+    assert crop_tab.straighten_button.toolTip() == tr("crop.straighten.hint")
+    for button in (
+        crop_tab.turn_left_button,
+        crop_tab.turn_right_button,
+        crop_tab.mirror_horizontal_button,
+        crop_tab.mirror_vertical_button,
+    ):
+        assert button.toolTip() == ""
 
 
 def test_the_straighten_button_arms_the_tool(crop_tab: CropTab) -> None:
@@ -462,7 +472,7 @@ def test_the_crop_tab_is_laid_out_in_headed_groups(crop_tab: CropTab) -> None:
     assert headers == [
         tr("crop.group.aspect"),
         tr("crop.group.angle"),
-        tr("crop.group.tools"),
+        tr("crop.group.orientation"),
     ]
 
 

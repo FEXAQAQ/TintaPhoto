@@ -1,7 +1,7 @@
 """The crop tab of the right hand panel (PLAN.md 3.2).
 
 Three groups, top to bottom, each under a header that folds it away: the
-seven ratios in three columns, the angle slider, and the tools - straighten
+seven ratios in three columns, the angle slider, and the orientation tools - straighten
 and the quarter turns on one row, the two flips under them. The tab only says what
 the user asked for; what that does to the crop box is worked out by
 :mod:`core.geometry` and applied by the controller.
@@ -26,7 +26,7 @@ from app.i18n import tr
 from core import geometry
 from core.geometry import Geometry
 from ui import icons, theme
-from ui.widgets.buttons import ROLE_CHOICE, TextButton, tooltip
+from ui.widgets.buttons import ROLE_CHOICE, TextButton
 from ui.widgets.group import ControlGroup
 from ui.widgets.slider_row import SliderRow, SliderSpec
 
@@ -68,7 +68,7 @@ def angle_spec() -> SliderSpec:
 
 
 class CropTab(QWidget):
-    """The ratios, the angle and the tools."""
+    """The ratios, the angle and the orientation tools."""
 
     #: A ratio was chosen, by its name in :data:`core.geometry.ASPECTS`.
     aspect_chosen = Signal(str)
@@ -101,7 +101,7 @@ class CropTab(QWidget):
         self._group_widgets = (
             self._build_aspects(),
             self._build_angle(),
-            self._build_tools(),
+            self._build_orientation(),
         )
         for group in self._group_widgets:
             content.addWidget(group)
@@ -145,9 +145,9 @@ class CropTab(QWidget):
         group.add_row(self.angle_row)
         return group
 
-    def _build_tools(self) -> ControlGroup:
+    def _build_orientation(self) -> ControlGroup:
         """Build the straighten, quarter turn and flip buttons (C-04, C-06, C-08)."""
-        group = ControlGroup("crop.group.tools", parent=self)
+        group = ControlGroup("crop.group.orientation", parent=self)
 
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -160,12 +160,10 @@ class CropTab(QWidget):
         self.straighten_button.toggled.connect(self.straighten_toggled)
 
         self.turn_left_button = TextButton("crop.turn_left")
-        self.turn_left_button.setToolTip(tooltip("crop.turn_left", "shortcut.turn_left"))
         self.turn_left_button.setIcon(icons.load_icon(icons.ICON_TURN_LEFT))
         self.turn_left_button.clicked.connect(lambda: self.turn_requested.emit(-1))
 
         self.turn_right_button = TextButton("crop.turn_right")
-        self.turn_right_button.setToolTip(tooltip("crop.turn_right", "shortcut.turn_right"))
         self.turn_right_button.setIcon(icons.load_icon(icons.ICON_TURN_RIGHT))
         self.turn_right_button.clicked.connect(lambda: self.turn_requested.emit(1))
 
@@ -189,7 +187,6 @@ class CropTab(QWidget):
         self.mirror_vertical_button.setIcon(icons.load_icon(icons.ICON_FLIP_VERTICAL))
         self.mirror_vertical_button.clicked.connect(lambda: self.mirror_requested.emit(True))
 
-        self._set_mirror_tooltips()
         for button in (self.mirror_horizontal_button, self.mirror_vertical_button):
             # Halves of the row whatever the labels say: "Flip horizontal"
             # would otherwise push its neighbour narrower.
@@ -198,17 +195,8 @@ class CropTab(QWidget):
         group.add_layout(flips)
         return group
 
-    def _set_mirror_tooltips(self) -> None:
-        """Name each flip with its shortcut."""
-        self.mirror_horizontal_button.setToolTip(
-            tooltip("crop.mirror_horizontal", "shortcut.mirror_horizontal")
-        )
-        self.mirror_vertical_button.setToolTip(
-            tooltip("crop.mirror_vertical", "shortcut.mirror_vertical")
-        )
-
     def retranslate(self) -> None:
-        """Read the ratios, the slider and the tools again (U-02).
+        """Read the ratios, the slider and the orientation tools again (U-02).
 
         The slider gets a whole fresh description, because the degree sign
         after its number is part of it.
@@ -217,9 +205,6 @@ class CropTab(QWidget):
             button.setText(tr(_ASPECT_LABELS[aspect]))
         self.angle_row.set_spec(angle_spec())
         self.straighten_button.setToolTip(tr("crop.straighten.hint"))
-        self.turn_left_button.setToolTip(tooltip("crop.turn_left", "shortcut.turn_left"))
-        self.turn_right_button.setToolTip(tooltip("crop.turn_right", "shortcut.turn_right"))
-        self._set_mirror_tooltips()
 
     # -- state -----------------------------------------------------------
 

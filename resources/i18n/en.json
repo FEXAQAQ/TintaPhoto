@@ -111,7 +111,7 @@
   "toast.pick_clipped": "This spot is overexposed. Click a grey or white spot that isn't",
   "crop.group.aspect": "Ratio",
   "crop.group.angle": "Angle",
-  "crop.group.tools": "Tools",
+  "crop.group.orientation": "Orientation",
   "crop.aspect.original": "Original",
   "crop.aspect.free": "Free",
   "crop.aspect.square": "1:1",
