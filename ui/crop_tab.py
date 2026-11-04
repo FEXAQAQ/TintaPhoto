@@ -44,14 +44,6 @@ _ASPECT_LABELS: Final[dict[str, str]] = {
     geometry.ASPECT_9_16: "crop.aspect.9_16",
 }
 
-#: What the social ratios are for, said in their tooltips. The rest are
-#: plain shapes with nothing to add beyond their two numbers.
-_ASPECT_USES: Final[dict[str, str]] = {
-    geometry.ASPECT_4_5: "crop.aspect.use.4_5",
-    geometry.ASPECT_16_9: "crop.aspect.use.16_9",
-    geometry.ASPECT_9_16: "crop.aspect.use.9_16",
-}
-
 #: PLAN.md 3.2 turns the chosen ratio on its side when it is clicked again,
 #: but these three have nothing to turn: "original" is the name of the whole
 #: picture, "free" has no shape, and a square is the same either way.
@@ -60,20 +52,6 @@ _ASPECT_USES: Final[dict[str, str]] = {
 _RECLICK_APPLIES_AGAIN: Final[frozenset[str]] = frozenset(
     {geometry.ASPECT_ORIGINAL, geometry.ASPECT_FREE, geometry.ASPECT_SQUARE}
 )
-
-
-def _aspect_tooltip(aspect: str) -> str:
-    """Return the tooltip of a ratio button: its name, X, and what it is for."""
-    label_key = _ASPECT_LABELS[aspect]
-    use_key = _ASPECT_USES.get(aspect)
-    if use_key is None:
-        return tooltip(label_key, "shortcut.crop_flip")
-    return tr(
-        "crop.aspect.tooltip",
-        label=tr(label_key),
-        shortcut=tr("shortcut.crop_flip"),
-        use=tr(use_key),
-    )
 
 
 def angle_spec() -> SliderSpec:
@@ -149,7 +127,6 @@ class CropTab(QWidget):
             button.setCheckable(True)
             button.setFixedHeight(theme.BUTTON_HEIGHT)
             button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-            button.setToolTip(_aspect_tooltip(aspect))
             button.clicked.connect(lambda _checked, name=aspect: self._on_aspect(name))
             self._aspect_group.addButton(button, index)
             self._aspect_buttons[aspect] = button
@@ -238,7 +215,6 @@ class CropTab(QWidget):
         """
         for aspect, button in self._aspect_buttons.items():
             button.setText(tr(_ASPECT_LABELS[aspect]))
-            button.setToolTip(_aspect_tooltip(aspect))
         self.angle_row.set_spec(angle_spec())
         self.straighten_button.setToolTip(tr("crop.straighten.hint"))
         self.turn_left_button.setToolTip(tooltip("crop.turn_left", "shortcut.turn_left"))

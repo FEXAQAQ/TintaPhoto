@@ -445,22 +445,12 @@ def test_9_16_has_a_button_of_its_own(crop_tab: CropTab) -> None:
     assert button.isVisibleTo(crop_tab)
 
 
-def test_the_social_ratios_say_what_they_are_for(crop_tab: CropTab) -> None:
-    """A tooltip carries the ratio, its shortcut and its use (PLAN.md 3.4)."""
-    from app.i18n import tr
+def test_the_ratio_buttons_have_no_tooltip(crop_tab: CropTab) -> None:
+    """The ratios say everything on the button itself (PLAN.md 3.2)."""
+    crop_tab.retranslate()
 
-    buttons = crop_tab.aspect_buttons()
-    for aspect, use_key in (
-        (geometry.ASPECT_4_5, "crop.aspect.use.4_5"),
-        (geometry.ASPECT_16_9, "crop.aspect.use.16_9"),
-        (geometry.ASPECT_9_16, "crop.aspect.use.9_16"),
-    ):
-        hint = buttons[aspect].toolTip()
-        assert tr(use_key) in hint
-        assert tr("shortcut.crop_flip") in hint
-
-    # A plain shape has nothing to add beyond its two numbers.
-    assert tr("crop.aspect.use.4_5") not in buttons[geometry.ASPECT_3_2].toolTip()
+    for button in crop_tab.aspect_buttons().values():
+        assert button.toolTip() == ""
 
 
 def test_the_crop_tab_is_laid_out_in_headed_groups(crop_tab: CropTab) -> None:
