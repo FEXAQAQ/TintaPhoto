@@ -570,12 +570,12 @@ def test_the_welcome_screen_can_be_used_once_the_window_is_wired(
     # see yet.
     assert window.toolbar.menu.open_file_action.isEnabled()
     assert window.toolbar.menu.open_folder_action.isEnabled()
-    assert not welcome.open_folder_button.isEnabled()
+    assert not any(button.isEnabled() for button in welcome.buttons())
 
     from ui.welcome_view import opening_length
 
     _settle(qt_app, opening_length() + theme.DURATION_PHOTO_FADE_MS)
-    assert welcome.open_folder_button.isEnabled()
+    assert all(button.isEnabled() for button in welcome.buttons())
 
 
 # -- language -------------------------------------------------------------
@@ -1739,6 +1739,7 @@ def test_every_button_is_the_height_its_token_says(window: MainWindow) -> None:
         (window.toolbar.export_button, theme.BUTTON_HEIGHT),
         (window.toolbar.undo_button, theme.ICON_BUTTON_SIZE),
         (window.preview.view_bar.fit_button, theme.BUTTON_HEIGHT),
+        (window.preview.welcome.open_file_button, theme.WELCOME_BUTTON_HEIGHT),
         (window.preview.welcome.open_folder_button, theme.WELCOME_BUTTON_HEIGHT),
         (window.inspector.adjust_tab.groups()[0].header, theme.GROUP_HEADER_HEIGHT),
         (window.inspector.crop_tab.straighten_button, theme.BUTTON_HEIGHT),

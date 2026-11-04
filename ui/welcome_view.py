@@ -1,9 +1,9 @@
 """The welcome screen shown before any photo is open (PLAN.md 3.7).
 
 The drop of ink from the application icon, the name under it and the
-tagline under that; then one column with the "open folder" button and the
-folders opened lately, and under them a line saying photos can be dropped
-anywhere on the window.
+tagline under that; then one column with the "open file" and "open folder"
+buttons side by side and the folders opened lately, and under them a line
+saying photos can be dropped anywhere on the window.
 
 The drop, the name and the tagline are drawn by :class:`OpeningCanvas`
 across the whole screen rather than by labels in the column, because the
@@ -15,7 +15,7 @@ The opening plays once, when the program starts (PLAN.md 3.6, 3.7): a drop
 falls and lands, rings spread from where it landed in the drop's four
 colours, the drop grows to its size, the name comes up a letter at a time in
 those colours and settles to white, the tagline is laid down from left to
-right like a brush stroke, and the button, the list and the hint follow.
+right like a brush stroke, and the buttons, the list and the hint follow.
 Coming back here after closing a folder only fades the screen in, and with
 Windows set to show no animation the screen is simply there.
 """
@@ -307,13 +307,22 @@ class RiseEffect(QGraphicsEffect):
 # -- what can be pressed ----------------------------------------------------------
 
 
-class OpenFolderButton(QPushButton):
-    """The one action: outlined, its icon and name at the left, its shortcut at the right."""
+class WelcomeButton(QPushButton):
+    """One of the two actions: outlined, its icon at the left, its name over its shortcut."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        icon_name: str,
+        label_key: str,
+        shortcut_key: str,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._icon_name = icon_name
+        self._label_key = label_key
+        self._shortcut_key = shortcut_key
         self.setProperty("role", ROLE_HERO)
-        self.setFixedHeight(theme.WELCOME_BUTTON_HEIGHT)
+        self.setFixedSize(theme.WELCOME_BUTTON_WIDTH, theme.WELCOME_BUTTON_HEIGHT)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self._hover = HoverFade(self)
         self.retranslate()
@@ -321,12 +330,17 @@ class OpenFolderButton(QPushButton):
     @property
     def label(self) -> str:
         """Return the button's name."""
-        return tr("welcome.open_folder")
+        return tr(self._label_key)
+
+    @property
+    def keys(self) -> str:
+        """Return the shortcut written under the name."""
+        return tr(self._shortcut_key)
 
     def retranslate(self) -> None:
         """Read the name and the tooltip again after a language change (U-02)."""
         self.setAccessibleName(self.label)
-        self.setToolTip(tooltip("welcome.open_folder", "shortcut.open_folder"))
+        self.setToolTip(tooltip(self._label_key, self._shortcut_key))
         self.update()
 
     def enterEvent(self, event) -> None:  # noqa: N802 - Qt naming
@@ -348,28 +362,31 @@ class OpenFolderButton(QPushButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         middle = self.height() / 2
-        left = theme.SPACE_LG + theme.SPACE_XS
+        left = theme.SPACE_LG
         size = theme.ICON_SIZE
-        icon = icons.load_icon(icons.ICON_FOLDER)
+        icon = icons.load_icon(self._icon_name)
         mode = QIcon.Mode.Normal if enabled else QIcon.Mode.Disabled
         icon.paint(painter, QRect(left, round(middle - size / 2), size, size), mode=mode)
+        text_left = left + size + theme.SPACE_MD
+        room = max(0.0, self.width() - text_left - theme.SPACE_MD)
+        # Two lines around the middle, as a recent folder's row has them.
+        upper = middle - theme.SPACE_XS / 2
+        lower = middle + theme.SPACE_XS / 2
         name_font = _font(theme.FONT_SIZE_TITLE, theme.FONT_WEIGHT_TITLE)
         name_metrics = QFontMetricsF(name_font)
         painter.setFont(name_font)
         painter.setPen(QColor(theme.TEXT_PRIMARY if enabled else theme.TEXT_TERTIARY))
-        baseline = middle + (name_metrics.ascent() - name_metrics.descent()) / 2
-        painter.drawText(QPointF(left + size + theme.SPACE_SM, baseline), self.label)
+        painter.drawText(
+            QPointF(text_left, upper - name_metrics.descent()),
+            name_metrics.elidedText(self.label, Qt.TextElideMode.ElideRight, room),
+        )
         keys_font = _font(theme.FONT_SIZE_LABEL, theme.FONT_WEIGHT_NORMAL)
         keys_metrics = QFontMetricsF(keys_font)
-        keys = tr("shortcut.open_folder")
         painter.setFont(keys_font)
         painter.setPen(QColor(theme.TEXT_TERTIARY))
         painter.drawText(
-            QPointF(
-                self.width() - left - keys_metrics.horizontalAdvance(keys),
-                middle + (keys_metrics.ascent() - keys_metrics.descent()) / 2,
-            ),
-            keys,
+            QPointF(text_left, lower + keys_metrics.ascent()),
+            keys_metrics.elidedText(self.keys, Qt.TextElideMode.ElideRight, room),
         )
         painter.end()
 
@@ -673,6 +690,7 @@ class WelcomeView(QWidget):
     folder_requested = Signal(str)
     #: A folder is to be taken off the recent list (its record only).
     folder_removed = Signal(str)
+    open_file_requested = Signal()
     open_folder_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -691,15 +709,29 @@ class WelcomeView(QWidget):
         self.canvas = OpeningCanvas(self.hero, self)
         self.canvas.lower()
 
-        self.open_folder_button = OpenFolderButton(self._column)
+        # A single photo on the left, a whole folder on the right.
+        self._buttons = QWidget(self._column)
+        self.open_file_button = WelcomeButton(
+            icons.ICON_IMAGE, "welcome.open_file", "shortcut.open_file", self._buttons
+        )
+        self.open_file_button.clicked.connect(self.open_file_requested)
+        self.open_folder_button = WelcomeButton(
+            icons.ICON_FOLDER, "welcome.open_folder", "shortcut.open_folder", self._buttons
+        )
         self.open_folder_button.clicked.connect(self.open_folder_requested)
+        buttons_layout = QHBoxLayout(self._buttons)
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(theme.WELCOME_BUTTON_GAP)
+        buttons_layout.addWidget(self.open_file_button)
+        buttons_layout.addWidget(self.open_folder_button)
         # Two things have to be true before a control can be used: the
         # window has something to act on, and the opening has put it on the
         # screen. Both are held here, and `_refresh_controls` is the one
         # place that works out what they come to.
         self._opening_enabled = False
         self._shown_by_opening = True
-        self.open_folder_button.setEnabled(False)
+        for button in self.buttons():
+            button.setEnabled(False)
 
         # The recent folders and the space above them are one thing that
         # goes away together: on a first run there is nothing to list, and
@@ -724,7 +756,7 @@ class WelcomeView(QWidget):
         column_layout.setSpacing(0)
         column_layout.addWidget(self.hero)
         column_layout.addSpacing(theme.WELCOME_GROUP_GAP)
-        column_layout.addWidget(self.open_folder_button)
+        column_layout.addWidget(self._buttons)
         column_layout.addWidget(self._recent_block)
 
         self.drop_hint = DropHint(self._page)
@@ -758,7 +790,7 @@ class WelcomeView(QWidget):
 
         # What rises into place during the opening, each on its own clock.
         self._rises: dict[QWidget, RiseEffect] = {}
-        for widget in (self.open_folder_button, self.recent_title, self.drop_hint):
+        for widget in (*self.buttons(), self.recent_title, self.drop_hint):
             self._rise(widget)
         self._rows: list[RecentFolderRow] = []
         self._opening: QVariantAnimation | None = None
@@ -772,6 +804,10 @@ class WelcomeView(QWidget):
         widget.setGraphicsEffect(effect)
         self._rises[widget] = effect
         return effect
+
+    def buttons(self) -> tuple[WelcomeButton, WelcomeButton]:
+        """Return the two buttons, "open file" then "open folder"."""
+        return self.open_file_button, self.open_folder_button
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         """Keep the canvas over the whole screen, under the page."""
@@ -893,9 +929,8 @@ class WelcomeView(QWidget):
         """Put every stage where *elapsed* milliseconds leaves it."""
         self.canvas.set_elapsed(elapsed)
         item = theme.OPENING_ITEM_MS
-        self._rises[self.open_folder_button].set_progress(
-            _share(elapsed, theme.OPENING_BUTTON_AT_MS, item)
-        )
+        for button in self.buttons():
+            self._rises[button].set_progress(_share(elapsed, theme.OPENING_BUTTON_AT_MS, item))
         self._rises[self.recent_title].set_progress(
             _share(elapsed, theme.OPENING_LIST_AT_MS, item)
         )
@@ -962,6 +997,7 @@ class WelcomeView(QWidget):
         """Enable what can be used: the window has to have something to act
         on, and the opening has to have put it on the screen."""
         usable = self._opening_enabled and self._shown_by_opening
-        self.open_folder_button.setEnabled(usable)
+        for button in self.buttons():
+            button.setEnabled(usable)
         for row in self._rows:
             row.setEnabled(usable)

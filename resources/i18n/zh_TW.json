@@ -24,6 +24,7 @@
   "panel.action.done": "完成",
   "panel.action.save_preset": "儲存目前調整為預設集",
   "filmstrip.empty": "開啟資料夾後顯示縮圖",
+  "welcome.open_file": "開啟檔案",
   "welcome.open_folder": "開啟資料夾",
   "welcome.recent": "最近開啟",
   "welcome.drop_hint": "也可以把照片或資料夾拖曳到視窗的任何地方",

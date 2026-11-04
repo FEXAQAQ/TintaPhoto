@@ -40,6 +40,8 @@ ICON_FILTERS: Final[str] = "filters"
 ICON_RETOUCH: Final[str] = "retouch"
 ICON_INFO: Final[str] = "info"
 ICON_FOLDER: Final[str] = "folder"
+#: A framed picture: the welcome screen's "open file" button.
+ICON_IMAGE: Final[str] = "image"
 #: A cross: takes a folder off the welcome screen's recent list.
 ICON_X: Final[str] = "x"
 #: The mark on an edited thumbnail; drawn small, so it has thicker strokes

@@ -24,6 +24,7 @@
   "panel.action.done": "Done",
   "panel.action.save_preset": "Save current settings as preset",
   "filmstrip.empty": "Thumbnails appear once a folder is open",
+  "welcome.open_file": "Open File",
   "welcome.open_folder": "Open Folder",
   "welcome.recent": "Recent",
   "welcome.drop_hint": "You can also drop photos or folders anywhere on the window",

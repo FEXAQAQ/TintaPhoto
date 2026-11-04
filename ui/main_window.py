@@ -363,6 +363,7 @@ class MainWindow(QMainWindow):
         menu.about_action.triggered.connect(self.open_about)
 
 
+        self.preview.welcome.open_file_requested.connect(self.open_file_dialog)
         self.preview.welcome.open_folder_requested.connect(self.open_folder_dialog)
         self.preview.welcome.folder_requested.connect(lambda path: self._open_path(Path(path)))
         self.preview.welcome.folder_removed.connect(self._forget_folder)

@@ -1,7 +1,7 @@
 """Tests for the welcome screen (PLAN.md 3.6 and 3.7).
 
 The drop, the name and the tagline are drawn by the opening canvas; the
-button, the recent folders and the drop hint are widgets that rise into
+two buttons, the recent folders and the drop hint are widgets that rise into
 place. The opening is driven by hand here, frame by frame, through
 ``apply_opening``, and the screen is grabbed whole and measured, so that
 what is checked is what is drawn.
@@ -153,12 +153,50 @@ def test_at_rest_the_name_is_white_not_ink(welcome: WelcomeView) -> None:
     assert float((bright.max(axis=1) - bright.min(axis=1)).mean()) < 12
 
 
-def test_the_button_names_its_shortcut(welcome: WelcomeView) -> None:
-    button = welcome.open_folder_button
-    assert button.label == tr("welcome.open_folder")
-    assert tr("shortcut.open_folder") in button.toolTip()
-    assert button.height() == theme.WELCOME_BUTTON_HEIGHT
-    assert button.width() == theme.WELCOME_CONTENT_WIDTH
+def test_each_button_names_its_shortcut(welcome: WelcomeView) -> None:
+    for button, label, keys in (
+        (welcome.open_file_button, "welcome.open_file", "shortcut.open_file"),
+        (welcome.open_folder_button, "welcome.open_folder", "shortcut.open_folder"),
+    ):
+        assert button.label == tr(label)
+        assert button.keys == tr(keys)
+        assert tr(keys) in button.toolTip()
+        assert button.height() == theme.WELCOME_BUTTON_HEIGHT
+        assert button.width() == theme.WELCOME_BUTTON_WIDTH
+        assert button.width() % theme.UNIT == 0
+
+
+def test_open_file_sits_left_of_open_folder_across_the_column(welcome: WelcomeView) -> None:
+    welcome._stop_opening()
+    file_x, file_y, file_w, _h = _of(welcome, welcome.open_file_button)
+    folder_x, folder_y, folder_w, _h = _of(welcome, welcome.open_folder_button)
+    _hero_x, _hero_y, hero_w, _hero_h = _hero(welcome)
+    assert file_y == folder_y
+    assert folder_x - (file_x + file_w) == theme.WELCOME_BUTTON_GAP
+    assert file_w + theme.WELCOME_BUTTON_GAP + folder_w == hero_w == theme.WELCOME_CONTENT_WIDTH
+
+
+def test_each_button_asks_for_its_own_dialog(welcome: WelcomeView) -> None:
+    welcome._stop_opening()
+    asked: list[str] = []
+    welcome.open_file_requested.connect(lambda: asked.append("file"))
+    welcome.open_folder_requested.connect(lambda: asked.append("folder"))
+    QTest.mouseClick(welcome.open_file_button, Qt.MouseButton.LeftButton)
+    QTest.mouseClick(welcome.open_folder_button, Qt.MouseButton.LeftButton)
+    assert asked == ["file", "folder"]
+
+
+def test_the_two_lines_of_a_button_both_show(welcome: WelcomeView) -> None:
+    """The name sits over the shortcut; both are drawn, neither cut off."""
+    welcome._stop_opening()
+    screen = _screen(welcome)
+    for button in welcome.buttons():
+        x, y, w, h = _of(welcome, button)
+        text_x = x + theme.SPACE_LG + theme.ICON_SIZE
+        upper = _ink(_area(welcome, screen, text_x, y + 4, w - text_x + x - 4, h / 2 - 4))
+        lower = _ink(_area(welcome, screen, text_x, y + h / 2, w - text_x + x - 4, h / 2 - 4))
+        assert upper > 1e3, "no name"
+        assert lower > 1e2, "no shortcut"
 
 
 def test_a_recent_folder_says_its_name_path_count_and_day(welcome: WelcomeView) -> None:
@@ -305,8 +343,8 @@ def test_english_names_the_month(qt_app: object) -> None:
 # -- the pointer and a drag (PLAN.md 3.6) ----------------------------------------
 
 
-def test_a_row_and_the_button_answer_the_pointer_over_80_ms(welcome: WelcomeView) -> None:
-    for widget in (welcome.open_folder_button, welcome.recent_rows()[0]):
+def test_a_row_and_the_buttons_answer_the_pointer_over_80_ms(welcome: WelcomeView) -> None:
+    for widget in (*welcome.buttons(), welcome.recent_rows()[0]):
         widget._hover.set_hovered(True)
         assert widget._hover.value < 1.0, "the hover switched at once"
         assert _settle(lambda w=widget: w._hover.value == 1.0)
@@ -415,12 +453,12 @@ def test_the_tagline_is_laid_down_from_left_to_right(welcome: WelcomeView) -> No
 
 def test_the_rest_rises_into_place_in_order(welcome: WelcomeView) -> None:
     welcome._stop_opening()
-    button = _of(welcome, welcome.open_folder_button)
     row = _of(welcome, welcome.recent_rows()[0])
     hint = _of(welcome, welcome.drop_hint)
 
     at_button = _frame(welcome, theme.OPENING_BUTTON_AT_MS + theme.OPENING_ITEM_MS)
-    assert _ink(_area(welcome, at_button, *button)) > 1e3
+    for button in welcome.buttons():
+        assert _ink(_area(welcome, at_button, *_of(welcome, button))) > 1e3
     assert _ink(_area(welcome, at_button, *hint)) < 50
 
     done = _frame(welcome, opening_length())
@@ -434,10 +472,12 @@ def test_nothing_can_be_pressed_before_the_opening_has_shown_it(
 ) -> None:
     """An opacity of zero hides a control from the eye and from nothing else."""
     asked: list[str] = []
+    welcome.open_file_requested.connect(lambda: asked.append("file"))
     welcome.open_folder_requested.connect(lambda: asked.append("open"))
     welcome.folder_requested.connect(asked.append)
 
     _frame(welcome, theme.OPENING_TAGLINE_AT_MS)
+    QTest.mouseClick(welcome.open_file_button, Qt.MouseButton.LeftButton)
     QTest.mouseClick(welcome.open_folder_button, Qt.MouseButton.LeftButton)
     QTest.mouseClick(welcome.recent_rows()[0], Qt.MouseButton.LeftButton)
     for _ in range(6):
@@ -482,7 +522,7 @@ def test_nothing_animates_when_windows_is_set_to_show_no_animation(
         assert not view.opening, "the opening played anyway"
         assert not view.fading
         assert view.canvas.elapsed is None
-        assert view.open_folder_button.isEnabled()
+        assert all(button.isEnabled() for button in view.buttons())
         view.set_drop_target(True)
         assert view.drop_hint.lit == 1.0
     finally:

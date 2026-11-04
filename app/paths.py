@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Final
 
 APP_NAME: Final[str] = "TintaPhoto"
-APP_VERSION: Final[str] = "0.31.0"
+APP_VERSION: Final[str] = "0.32.0"
 
 _LOG_FILE_NAME: Final[str] = "tintaphoto.log"
 _LOG_MAX_BYTES: Final[int] = 1_000_000

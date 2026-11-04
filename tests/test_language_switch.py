@@ -160,6 +160,7 @@ def test_the_menu_the_welcome_screen_and_the_filmstrip_change(
     assert window.toolbar.menu.open_file_action.text() == english.tr("menu.open_file")
     assert window.toolbar.menu.recent_menu.title() == english.tr("menu.recent")
     assert window.preview.welcome.canvas.tagline == english.tr("welcome.tagline")
+    assert window.preview.welcome.open_file_button.label == english.tr("welcome.open_file")
     assert window.preview.welcome.open_folder_button.label == english.tr("welcome.open_folder")
     assert window.preview.before_label.text() == english.tr("preview.before")
     assert window.filmstrip._empty.text() == english.tr("filmstrip.empty")

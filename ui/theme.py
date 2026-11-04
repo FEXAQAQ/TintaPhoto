@@ -243,7 +243,7 @@ FOCUS_RING_WIDTH: Final[int] = 1
 SCROLLBAR_WIDTH: Final[int] = 8
 
 #: The welcome screen (PLAN.md 3.7). One centred column, as wide as the
-#: "open folder" button; the drop, the name and the tagline are drawn across
+#: two buttons side by side; the drop, the name and the tagline are drawn across
 #: the whole screen above it, so that the opening's ripples are not cut off
 #: at the column's edge.
 WELCOME_CONTENT_WIDTH: Final[int] = 340
@@ -267,10 +267,13 @@ WELCOME_GROUP_GAP: Final[int] = 32
 #: Between one section of the screen and the next: the button and the list.
 WELCOME_SECTION_GAP: Final[int] = 44
 
-#: The one button of the welcome screen. Taller than a button in a panel,
-#: because on an otherwise empty screen it is the thing to reach for, and as
-#: wide as the column, with its shortcut written at its right end.
+#: The two buttons of the welcome screen, "open file" and "open folder", side
+#: by side across the column. Taller than a button in a panel, because on an
+#: otherwise empty screen they are the things to reach for; each has its
+#: name over its shortcut, since half the column cannot hold both on a line.
 WELCOME_BUTTON_HEIGHT: Final[int] = 48
+WELCOME_BUTTON_GAP: Final[int] = SPACE_MD
+WELCOME_BUTTON_WIDTH: Final[int] = (WELCOME_CONTENT_WIDTH - WELCOME_BUTTON_GAP) // 2
 
 #: The line under the welcome screen's list saying photos can be dropped
 #: anywhere on the window: a small dashed square stands for the drop, the
