@@ -32,6 +32,7 @@ class Shortcut:
 SHORTCUTS: Final[tuple[Shortcut, ...]] = (
     Shortcut("menu.open_file", "shortcut.open_file"),
     Shortcut("menu.open_folder", "shortcut.open_folder"),
+    Shortcut("shortcut.name.recent_remove", "shortcut.recent_remove"),
     Shortcut("toolbar.undo", "shortcut.undo"),
     Shortcut("toolbar.redo", "shortcut.keys.redo"),
     Shortcut("panel.action.copy", "shortcut.copy_settings"),

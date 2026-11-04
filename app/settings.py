@@ -484,6 +484,23 @@ class Settings:
             if item in self.recent_folders
         }
 
+    def forget_folder(self, folder: str) -> None:
+        """Take *folder* off the recent list; the folder itself is not touched.
+
+        It is no longer the last folder either, so it is not opened again at
+        start-up behind the user's back (PLAN.md 3.7).
+        """
+        self.recent_folders = [item for item in self.recent_folders if item != folder]
+        self.recent_details.pop(folder, None)
+        if self.last_folder == folder:
+            self.last_folder = None
+
+    def clear_recent(self) -> None:
+        """Empty the recent list, and with it the last folder (PLAN.md 3.1)."""
+        self.recent_folders = []
+        self.recent_details = {}
+        self.last_folder = None
+
 
 def _one_of(value: Any, allowed: tuple[Any, ...], default: Any) -> Any:
     """Return *value* when it is one of *allowed*, and *default* otherwise."""

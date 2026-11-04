@@ -127,6 +127,55 @@ def test_a_recent_folder_remembers_its_photo_count_and_day() -> None:
     assert settings.recent_details["A"] == RecentFolder(count=148, opened="2026-10-30")
 
 
+def test_forgetting_a_folder_takes_it_and_its_details_off_the_list() -> None:
+    settings = Settings()
+    settings.remember_folder("A", 3)
+    settings.remember_folder("B", 5)
+
+    settings.forget_folder("A")
+
+    assert settings.recent_folders == ["B"]
+    assert "A" not in settings.recent_details
+    assert settings.recent_details["B"].count == 5
+    assert settings.last_folder == "B"
+
+
+def test_forgetting_the_last_folder_stops_it_opening_at_start_up() -> None:
+    settings = Settings()
+    settings.remember_folder("A")
+    settings.remember_folder("B")
+
+    settings.forget_folder("B")
+
+    assert settings.recent_folders == ["A"]
+    assert settings.last_folder is None
+
+
+def test_forgetting_a_folder_not_on_the_list_changes_nothing() -> None:
+    settings = Settings()
+    settings.remember_folder("A", 3)
+
+    settings.forget_folder("Z")
+
+    assert settings.recent_folders == ["A"]
+    assert settings.last_folder == "A"
+
+
+def test_clearing_the_recent_list_empties_it(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    settings = Settings()
+    settings.remember_folder("A", 3)
+    settings.remember_folder("B", 5)
+
+    settings.clear_recent()
+    settings.save(path)
+    loaded = Settings.load(path)
+
+    assert loaded.recent_folders == []
+    assert loaded.recent_details == {}
+    assert loaded.last_folder is None
+
+
 def test_the_details_survive_a_save_and_a_load(tmp_path: Path) -> None:
     from datetime import date
 

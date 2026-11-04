@@ -354,6 +354,7 @@ class MainWindow(QMainWindow):
         menu.open_folder_action.setEnabled(True)
         menu.open_folder_action.triggered.connect(self.open_folder_dialog)
         menu.folder_chosen.connect(self._open_path)
+        menu.recent_cleared.connect(self._clear_recent_folders)
         menu.settings_action.setEnabled(True)
         menu.settings_action.triggered.connect(self.open_settings)
         menu.devlog_action.setEnabled(True)
@@ -364,6 +365,7 @@ class MainWindow(QMainWindow):
 
         self.preview.welcome.open_folder_requested.connect(self.open_folder_dialog)
         self.preview.welcome.folder_requested.connect(lambda path: self._open_path(Path(path)))
+        self.preview.welcome.folder_removed.connect(self._forget_folder)
         self.preview.welcome.set_opening_enabled(True)
 
     # -- opening photos --------------------------------------------------
@@ -391,13 +393,29 @@ class MainWindow(QMainWindow):
     def _open_path(self, path: Path) -> None:
         self.controller.open(path)
 
+    def _show_recent_folders(self) -> None:
+        """Show the recent folders in the menu and on the welcome screen."""
+        recent = self._settings.recent_folders
+        self.toolbar.menu.set_recent_folders(recent)
+        self.preview.welcome.set_recent_folders(recent, self._settings.recent_details)
+
+    def _forget_folder(self, folder: str) -> None:
+        """Take *folder* off the recent list; the folder itself stays as it is."""
+        self._settings.forget_folder(folder)
+        self._settings.save()
+        self._show_recent_folders()
+
+    def _clear_recent_folders(self) -> None:
+        """Empty the recent list; no folder or photo is touched."""
+        self._settings.clear_recent()
+        self._settings.save()
+        self._show_recent_folders()
+
     def _on_folder_opened(self, photos: list[Path]) -> None:
         """Fill the filmstrip and start making its thumbnails."""
         self.filmstrip.set_photos(photos)
         self.controller.request_thumbnails(photos)
-        recent = self._settings.recent_folders
-        self.toolbar.menu.set_recent_folders(recent)
-        self.preview.welcome.set_recent_folders(recent, self._settings.recent_details)
+        self._show_recent_folders()
         # There is something to show now, so the panels come back.
         self._apply_panel_visibility()
 
@@ -1325,9 +1343,7 @@ class MainWindow(QMainWindow):
 
         self._apply_panel_visibility(animate=False)
 
-        recent = self._settings.recent_folders
-        self.toolbar.menu.set_recent_folders(recent)
-        self.preview.welcome.set_recent_folders(recent, self._settings.recent_details)
+        self._show_recent_folders()
         self._open_last_folder()
 
     def _open_last_folder(self) -> None:

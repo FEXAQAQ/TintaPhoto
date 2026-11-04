@@ -193,6 +193,83 @@ def test_clicking_a_folder_opens_it(welcome: WelcomeView) -> None:
     assert asked == [LAKE]
 
 
+def _point_at(row, over: bool) -> None:
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QEnterEvent
+    from PySide6.QtWidgets import QApplication
+
+    if over:
+        point = QPointF(row.width() / 2, row.height() / 2)
+        QApplication.sendEvent(row, QEnterEvent(point, point, point))
+    else:
+        QApplication.sendEvent(row, QEvent(QEvent.Type.Leave))
+
+
+def test_the_remove_button_shows_only_while_the_pointer_is_over_a_row(
+    welcome: WelcomeView,
+) -> None:
+    kyoto, lake = welcome.recent_rows()
+    assert not kyoto.offers_removal and not lake.offers_removal
+
+    _point_at(kyoto, True)
+    assert kyoto.offers_removal
+    assert kyoto.remove_button.isVisibleTo(kyoto)
+    assert not lake.offers_removal
+
+    _point_at(kyoto, False)
+    assert not kyoto.offers_removal
+
+
+def test_the_remove_button_sits_at_the_right_end_in_place_of_the_count(
+    welcome: WelcomeView,
+) -> None:
+    row = welcome.recent_rows()[0]
+    button = row.remove_button
+    assert button.width() == button.height() == theme.ICON_BUTTON_SIZE
+    assert button.geometry().right() + 1 == row.width() - theme.SPACE_SM
+    assert button.geometry().center().y() == row.rect().center().y()
+
+
+def test_the_remove_button_says_what_it_does_and_its_key(welcome: WelcomeView) -> None:
+    button = welcome.recent_rows()[0].remove_button
+    assert tr("welcome.recent.remove") in button.toolTip()
+    assert tr("shortcut.recent_remove") in button.toolTip()
+
+
+def test_the_remove_button_asks_for_that_folder_to_go(welcome: WelcomeView) -> None:
+    removed: list[str] = []
+    opened: list[str] = []
+    welcome.folder_removed.connect(removed.append)
+    welcome.folder_requested.connect(opened.append)
+    lake = welcome.recent_rows()[1]
+    _point_at(lake, True)
+
+    QTest.mouseClick(lake.remove_button, Qt.MouseButton.LeftButton)
+
+    assert removed == [LAKE]
+    assert opened == [], "removing a folder must not open it"
+
+
+def test_delete_on_a_row_asks_for_that_folder_to_go(welcome: WelcomeView) -> None:
+    removed: list[str] = []
+    welcome.folder_removed.connect(removed.append)
+
+    QTest.keyClick(welcome.recent_rows()[0], Qt.Key.Key_Delete)
+
+    assert removed == [KYOTO]
+
+
+def test_a_disabled_row_offers_no_removal(welcome: WelcomeView) -> None:
+    row = welcome.recent_rows()[0]
+    _point_at(row, True)
+    row.setEnabled(False)
+    assert not row.offers_removal
+    removed: list[str] = []
+    welcome.folder_removed.connect(removed.append)
+    QTest.keyClick(row, Qt.Key.Key_Delete)
+    assert removed == []
+
+
 def test_the_list_goes_away_on_a_first_run(welcome: WelcomeView) -> None:
     welcome.set_recent_folders(())
     assert welcome.recent_rows() == []

@@ -1762,6 +1762,60 @@ def test_the_welcome_screen_closes_up_when_there_are_no_recent_folders(
     assert welcome._column.sizeHint().height() < qt_app_processed
 
 
+def _with_recent(window: MainWindow, monkeypatch: pytest.MonkeyPatch, *folders: str) -> list[int]:
+    """Give the window *folders* as its recent list; count the saves, not writing them."""
+    saves: list[int] = []
+    monkeypatch.setattr(window._settings, "save", lambda *_args: saves.append(1) or True)
+    for folder in reversed(folders):
+        window._settings.remember_folder(folder, 10)
+    window._show_recent_folders()
+    return saves
+
+
+def _menu_folders(window: MainWindow) -> list[str]:
+    return [action.data() for action in window.toolbar.menu.recent_menu.actions() if action.data()]
+
+
+def test_removing_a_folder_on_the_welcome_screen_forgets_it_everywhere(
+    window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    saves = _with_recent(window, monkeypatch, "D:/A", "D:/B", "D:/C")
+    welcome = window.preview.welcome
+
+    welcome.recent_rows()[1].remove_requested.emit()
+
+    assert window._settings.recent_folders == ["D:/A", "D:/C"]
+    assert [row.folder for row in welcome.recent_rows()] == ["D:/A", "D:/C"]
+    assert _menu_folders(window) == ["D:/A", "D:/C"]
+    assert saves, "the list must be saved at once"
+
+
+def test_the_recent_menu_ends_with_a_command_that_clears_it(
+    window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_recent(window, monkeypatch, "D:/A", "D:/B")
+    actions = window.toolbar.menu.recent_menu.actions()
+    clear = window.toolbar.menu.clear_recent_action
+    assert actions[-1] is clear
+    assert actions[-2].isSeparator()
+    assert clear.text() == tr("menu.recent_clear")
+    assert clear.isEnabled()
+
+
+def test_clearing_the_recent_menu_empties_both_lists(
+    window: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    saves = _with_recent(window, monkeypatch, "D:/A", "D:/B")
+
+    window.toolbar.menu.clear_recent_action.trigger()
+
+    assert window._settings.recent_folders == []
+    assert window._settings.last_folder is None
+    assert window.preview.welcome.recent_rows() == []
+    assert not window.toolbar.menu.recent_menu.isEnabled()
+    assert saves
+
+
 # -- the white balance eyedropper (A-24) ------------------------------------
 
 

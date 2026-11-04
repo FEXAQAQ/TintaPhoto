@@ -1,7 +1,7 @@
 """The application menu in the top left corner (PLAN.md 3.1).
 
 Holds the file and application level commands: open file, open folder, recent
-folders, settings, the development log and about. The actions are created here
+folders (with a command at the bottom that clears them), settings, the development log and about. The actions are created here
 and exposed as attributes so that the controller can connect them in a later
 stage; in stage 0 they are disabled because nothing can be opened yet.
 """
@@ -23,6 +23,8 @@ class AppMenu(QMenu):
 
     #: A folder picked from the recent list.
     folder_chosen = Signal(Path)
+    #: The recent list is to be emptied (the records only, not the folders).
+    recent_cleared = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -37,6 +39,10 @@ class AppMenu(QMenu):
 
         self.recent_menu = QMenu(tr("menu.recent"), self)
         self.addMenu(self.recent_menu)
+        # Owned by this menu rather than the submenu, so rebuilding the
+        # submenu takes it out without deleting it.
+        self.clear_recent_action = QAction(tr("menu.recent_clear"), self)
+        self.clear_recent_action.triggered.connect(self.recent_cleared)
         self.set_recent_folders(())
 
         self.addSeparator()
@@ -61,6 +67,7 @@ class AppMenu(QMenu):
             if shortcut_key is not None:
                 action.setShortcut(QKeySequence(tr(shortcut_key)))
         self.recent_menu.setTitle(tr("menu.recent"))
+        self.clear_recent_action.setText(tr("menu.recent_clear"))
         self.set_recent_folders(self._recent_folders)
 
     def set_recent_folders(self, folders: Sequence[str]) -> None:
@@ -82,3 +89,5 @@ class AppMenu(QMenu):
                 lambda _checked=False, path=folder: self.folder_chosen.emit(Path(path))
             )
             self.recent_menu.addAction(action)
+        self.recent_menu.addSeparator()
+        self.recent_menu.addAction(self.clear_recent_action)

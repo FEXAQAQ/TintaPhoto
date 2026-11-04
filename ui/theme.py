@@ -749,6 +749,16 @@ QPushButton[role="group"] > QPushButton[role="icon"]:pressed {{
     background-color: {TRACK_PRESSED};
 }}
 
+/* The same for the remove button on a recent folder of the welcome screen:
+   the row under it is BG_RAISED whenever the button can be seen. */
+QPushButton[role="recent_row"] > QPushButton[role="icon"]:hover {{
+    background-color: {TRACK_HOVER};
+}}
+
+QPushButton[role="recent_row"] > QPushButton[role="icon"]:pressed {{
+    background-color: {TRACK_PRESSED};
+}}
+
 /* A group title while a slider of that group is moving (PLAN.md 3.6). */
 QLabel[role="faded"] {{
     color: {BG_RAISED};

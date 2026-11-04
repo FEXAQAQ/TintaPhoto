@@ -28,6 +28,7 @@ from pathlib import Path
 
 from PySide6.QtCore import (
     QEasingCurve,
+    QEvent,
     QPoint,
     QPointF,
     QRect,
@@ -42,6 +43,7 @@ from PySide6.QtGui import (
     QFont,
     QFontMetricsF,
     QIcon,
+    QKeySequence,
     QPainter,
     QPen,
 )
@@ -57,7 +59,7 @@ from PySide6.QtWidgets import (
 from app.i18n import tr
 from app.settings import RecentFolder
 from ui import icons, native, theme
-from ui.widgets.buttons import ROLE_HERO, tooltip
+from ui.widgets.buttons import ROLE_HERO, IconButton, tooltip
 from ui.widgets.hover import HoverFade, mix, paint_border, paint_fill, shade
 from ui.widgets.ink import paint_ink_drop
 from ui.widgets.region import styled_background
@@ -391,8 +393,22 @@ def recent_count(count: int) -> str:
     return tr("welcome.recent.count", count=count)
 
 
+#: Marks a recent folder's row, so the stylesheet can light the remove button
+#: on it a step further than an icon button elsewhere.
+ROLE_RECENT_ROW = "recent_row"
+
+
 class RecentFolderRow(QPushButton):
-    """One folder opened lately: its name over its path, its count over its day."""
+    """One folder opened lately: its name over its path, its count over its day.
+
+    While the pointer is over the row, or the row has the keyboard focus, the
+    count and the day make way for a button that takes the folder off the
+    list; Delete does the same from the keyboard. Only the record goes: the
+    folder and its photos are not touched.
+    """
+
+    #: The folder is to be taken off the recent list.
+    remove_requested = Signal()
 
     def __init__(
         self,
@@ -411,6 +427,17 @@ class RecentFolderRow(QPushButton):
         self.setAccessibleName(self.name)
         self._hover = HoverFade(self)
         self._hover.changed.connect(lambda _value: self.update())
+        self.setProperty("role", ROLE_RECENT_ROW)
+        # Kept from the enter and leave events. Passing onto the remove
+        # button does not leave the row, since the button is part of it.
+        self._pointer_over = False
+        self.remove_button = IconButton(
+            icons.ICON_X, "welcome.recent.remove", "shortcut.recent_remove", self
+        )
+        # The row keeps the focus; Delete on it does what the button does.
+        self.remove_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.remove_button.clicked.connect(self.remove_requested)
+        self.remove_button.hide()
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt naming
         """Report the row's own height: a button's stylesheet height would win."""
@@ -432,15 +459,59 @@ class RecentFolderRow(QPushButton):
 
     def retranslate(self) -> None:
         """Say the count and the day again in the language just chosen (U-02)."""
+        self.remove_button.retranslate()
         self.update()
+
+    @property
+    def offers_removal(self) -> bool:
+        """Return whether the remove button is showing in place of the count."""
+        return not self.remove_button.isHidden()
+
+    def _refresh_removal(self) -> None:
+        shown = self.isEnabled() and (self._pointer_over or self.hasFocus())
+        if shown != self.offers_removal:
+            self.remove_button.setVisible(shown)
+            self.update()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        """Keep the remove button at the row's right end, centred on it."""
+        super().resizeEvent(event)
+        size = theme.ICON_BUTTON_SIZE
+        self.remove_button.move(
+            self.width() - theme.SPACE_SM - size, (self.height() - size) // 2
+        )
 
     def enterEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().enterEvent(event)
+        self._pointer_over = True
         self._hover.set_hovered(True)
+        self._refresh_removal()
 
     def leaveEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().leaveEvent(event)
+        self._pointer_over = False
         self._hover.set_hovered(False)
+        self._refresh_removal()
+
+    def focusInEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().focusInEvent(event)
+        self._refresh_removal()
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().focusOutEvent(event)
+        self._refresh_removal()
+
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.EnabledChange:
+            self._refresh_removal()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        """Delete takes the folder off the list, as the button does."""
+        if event.matches(QKeySequence.StandardKey.Delete) and self.isEnabled():
+            self.remove_requested.emit()
+            return
+        super().keyPressEvent(event)
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
         """Draw the row by hand; the stylesheet's button would frame it."""
@@ -484,7 +555,10 @@ class RecentFolderRow(QPushButton):
             QFontMetricsF(small_font).horizontalAdvance(day),
         )
         text_left = pad + size + theme.SPACE_MD
-        room = max(0.0, right - side - theme.SPACE_MD - text_left)
+        # The name keeps the same room whether the count or the remove
+        # button is showing, so it does not jump as the pointer comes over.
+        end = min(right - side - theme.SPACE_MD, self.remove_button.x() - theme.SPACE_SM)
+        room = max(0.0, end - text_left)
         primary = theme.TEXT_PRIMARY if enabled else theme.TEXT_TERTIARY
         secondary = theme.TEXT_SECONDARY if enabled else theme.TEXT_TERTIARY
 
@@ -506,7 +580,7 @@ class RecentFolderRow(QPushButton):
               Qt.TextElideMode.ElideRight, room)
         write(self.folder, small_font, theme.TEXT_TERTIARY, text_left,
               lower + small_metrics.ascent(), Qt.TextElideMode.ElideMiddle, room)
-        if count:
+        if count and not self.offers_removal:
             count_metrics = QFontMetricsF(count_font)
             write(count, count_font, secondary, right, upper - count_metrics.descent(),
                   flush_right=True)
@@ -597,6 +671,8 @@ class WelcomeView(QWidget):
     """The empty state of the preview area."""
 
     folder_requested = Signal(str)
+    #: A folder is to be taken off the recent list (its record only).
+    folder_removed = Signal(str)
     open_folder_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -723,6 +799,7 @@ class WelcomeView(QWidget):
         for folder in shown:
             row = RecentFolderRow(folder, details.get(folder), day, self._recent_list)
             row.clicked.connect(lambda _checked=False, path=folder: self.folder_requested.emit(path))
+            row.remove_requested.connect(lambda path=folder: self.folder_removed.emit(path))
             row.setEnabled(self._opening_enabled and self._shown_by_opening)
             effect = self._rise(row)
             if self._opening is not None:
