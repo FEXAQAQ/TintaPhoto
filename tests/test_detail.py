@@ -12,6 +12,7 @@ from core.edit_state import (
     RAW_COLOUR_NOISE_DEFAULT,
     RAW_SHARPENING_DEFAULT,
     SHARPENING_MAX,
+    SHARPENING_MIN,
     EditState,
 )
 from tests.test_pipeline import CAMERA_RGB_XYZ_MATRIX
@@ -227,6 +228,70 @@ def test_masking_still_lets_a_strong_edge_be_sharpened() -> None:
     assert result[:, middle].mean() > image[:, middle].mean()
 
 
+# -- softening, below zero ------------------------------------------------
+
+
+def test_softening_flattens_an_edge() -> None:
+    image = _edge()
+    state = JPEG.with_value("sharpening", -100.0)
+
+    result = pipeline.apply_detail(image, state, 1.0, False)
+
+    middle = image.shape[1] // 2
+    assert result[:, middle - 1].mean() > image[:, middle - 1].mean()
+    assert result[:, middle].mean() < image[:, middle].mean()
+    # A blur adds nothing: what comes out stays between the two halves.
+    assert result.min() >= image.min() - 1e-5
+    assert result.max() <= image.max() + 1e-5
+
+
+def test_softening_grows_with_the_slider() -> None:
+    image = _noisy(spread=0.01)
+
+    def grain(amount: float) -> float:
+        state = JPEG.with_value("sharpening", amount)
+        return float(_brightness(pipeline.apply_detail(image, state, 1.0, False)).std())
+
+    assert grain(-100.0) < grain(-40.0) < float(_brightness(image).std())
+
+
+def test_softening_keeps_the_colour_of_a_neutral_edge() -> None:
+    image = _edge()
+    state = JPEG.with_value("sharpening", SHARPENING_MIN)
+
+    result = pipeline.apply_detail(image, state, 1.0, False)
+
+    assert np.abs(result - result.mean(axis=-1, keepdims=True)).max() < 1e-5
+
+
+def test_softening_leaves_a_flat_area_alone() -> None:
+    image = _edge()
+    state = JPEG.with_value("sharpening", SHARPENING_MIN)
+
+    result = pipeline.apply_detail(image, state, 1.0, False)
+
+    assert np.abs(result[:, :20] - image[:, :20]).max() < 1e-5
+
+
+def test_the_masking_takes_no_part_in_softening() -> None:
+    image = _noisy(spread=0.01)
+    plain = JPEG.with_value("sharpening", -60.0)
+    masked = plain.with_value("sharpen_masking", 100.0)
+
+    assert np.array_equal(
+        pipeline.apply_detail(image, plain, 1.0, False),
+        pipeline.apply_detail(image, masked, 1.0, False),
+    )
+
+
+def test_a_softened_window_reaches_as_far_as_its_blur() -> None:
+    state = JPEG.with_value("sharpening", -50.0)
+
+    assert pipeline.detail_reach(state) >= np.ceil(
+        pipeline.BLUR_REACH_SIGMAS * pipeline.SOFTEN_SIGMA
+    )
+
+
 # -- sizes are pixels of the full size photo -------------------------------
 
 
@@ -285,6 +350,7 @@ def test_a_window_with_detail_comes_out_as_the_whole_photo_would_have() -> None:
 
     for state in (
         EditState(is_raw=True).with_value("sharpening", 80.0).with_value("sharpen_masking", 30.0),
+        EditState(is_raw=True).with_value("sharpening", -100.0),
         EditState(is_raw=True).with_value("luminance_noise", 80.0),
         EditState(is_raw=True).with_value("colour_noise", 80.0),
     ):
@@ -329,6 +395,7 @@ def test_a_jpeg_with_detail_is_no_longer_passed_through() -> None:
 
     assert pipeline.is_passthrough(photo, JPEG)
     assert not pipeline.is_passthrough(photo, JPEG.with_value("sharpening", 10.0))
+    assert not pipeline.is_passthrough(photo, JPEG.with_value("sharpening", -10.0))
     assert not pipeline.is_passthrough(photo, JPEG.with_value("colour_noise", 10.0))
     # The masking alone masks nothing, so the photo is still untouched.
     assert pipeline.is_passthrough(photo, JPEG.with_value("sharpen_masking", 50.0))
@@ -364,12 +431,18 @@ def test_the_masking_does_not_count_without_sharpening() -> None:
     rest = EditState.for_photo(False)
 
     assert rest.with_value("sharpen_masking", 70.0).is_untouched(rest)
+    softened = rest.with_value("sharpening", -30.0)
+    assert softened.with_value("sharpen_masking", 70.0).detail_is_untouched(
+        softened.with_value("sharpen_masking", 0.0)
+    )
 
 
 def test_the_detail_sliders_stay_in_their_ranges() -> None:
     state = EditState.for_photo(False)
 
     assert state.with_value("sharpening", 400.0).sharpening == SHARPENING_MAX
+    assert state.with_value("sharpening", -400.0).sharpening == SHARPENING_MIN
+    assert state.with_value("sharpening", -40.0).sharpening == -40.0
     assert state.with_value("luminance_noise", -5.0).luminance_noise == 0.0
     assert state.with_value("colour_noise", 140.0).colour_noise == 100.0
 

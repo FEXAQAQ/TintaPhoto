@@ -556,4 +556,31 @@ def test_a_jpeg_rests_its_detail_at_zero(tab: AdjustTab) -> None:
     for name in edit_state.DETAIL_NAMES:
         assert rows[name].spec.default == 0.0
         assert rows[name].value == 0.0
-        assert not rows[name].spec.signed
+        assert rows[name].spec.signed == (name == "sharpening")
+
+
+def test_sharpening_goes_below_zero_and_fills_from_zero(tab: AdjustTab) -> None:
+    for state, shot in ((EditState(is_raw=False), (0.0, 0.0)), (EditState.for_photo(True, *SHOT), SHOT)):
+        tab.set_photo(state, shot)
+        spec = tab.rows()["sharpening"].spec
+
+        assert spec.minimum == edit_state.SHARPENING_MIN < 0.0
+        assert spec.maximum == edit_state.SHARPENING_MAX
+        assert spec.fill_from == 0.0
+        assert spec.signed
+
+
+def test_the_masking_is_off_while_there_is_no_sharpening(tab: AdjustTab) -> None:
+    tab.set_photo(EditState(is_raw=False))
+    rows = tab.rows()
+    assert not rows["sharpen_masking"].isEnabled()
+
+    rows["sharpening"].set_value(30.0, announce=True)
+    assert rows["sharpen_masking"].isEnabled()
+
+    rows["sharpening"].set_value(-30.0, announce=True)
+    assert tab.state.sharpening == -30.0
+    assert not rows["sharpen_masking"].isEnabled()
+
+    tab.set_state(EditState.for_photo(True, *SHOT))
+    assert rows["sharpen_masking"].isEnabled()

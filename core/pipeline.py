@@ -310,6 +310,11 @@ SHARPEN_MASK_EDGE: Final[float] = 0.02
 #: How far around a pixel the masking looks to decide whether it is an edge,
 #: as a multiple of the sharpening radius.
 SHARPEN_MASK_REACH: Final[float] = 2.0
+#: The radius of the softening that sharpening below zero gives, as the
+#: sigma of the blur the brightness is taken towards: at -100 it is that
+#: blur. Wide enough to take the crispness off at 100 per cent, narrow
+#: enough that the photo is softened rather than out of focus.
+SOFTEN_SIGMA: Final[float] = 1.5
 
 # -- skin: smoothing and tone (PLAN.md section 6 steps 2.6 and 10) --------
 #: Every size here is a multiple of the face it is applied to - S, the
@@ -678,8 +683,10 @@ def detail_reach(state: EditState, scale: float = 1.0) -> int:
         sigma = max(sigma, max(LUMINANCE_NOISE_SIGMAS) * scale)
     if state.colour_noise != 0.0:
         sigma = max(sigma, max(COLOUR_NOISE_SIGMAS) * scale)
-    if state.sharpening != 0.0:
+    if state.sharpening > 0.0:
         sigma = max(sigma, SHARPEN_SIGMA * SHARPEN_MASK_REACH * 2.0 * scale)
+    elif state.sharpening < 0.0:
+        sigma = max(sigma, SOFTEN_SIGMA * scale)
     if sigma <= 0.0:
         return 0
     return int(np.ceil(BLUR_REACH_SIGMAS * max(1.0, sigma)))
@@ -813,8 +820,11 @@ def sharpen(
     and adding more of it back is what sharpening is. The change is rolled
     off towards SHARPEN_HALO_LIMIT, so that a hard edge is crisper without a
     glowing line beside it; with *masking* raised only edges are sharpened,
-    so that smooth skin and sky keep their grain to themselves.
+    so that smooth skin and sky keep their grain to themselves. Below zero
+    the photo is softened instead (:func:`soften`), and *masking* is not used.
     """
+    if amount < 0.0:
+        return soften(brightness, -amount, scale)
     sigma = SHARPEN_SIGMA * scale
     if amount == 0.0 or sigma < SHARPEN_LEAST_SIGMA:
         return brightness
@@ -850,6 +860,30 @@ def sharpen(
         result[rows] = brightness[rows] + change
 
     _by_rows(push_edges, brightness)
+    return result
+
+
+def soften(
+    brightness: NDArray[np.float32], amount: float, scale: float
+) -> NDArray[np.float32]:
+    """Soften *brightness* by *amount* per cent, the other way from sharpening.
+
+    The brightness is taken *amount* per cent of the way towards a blur of
+    SOFTEN_SIGMA pixels of the full size photo. A blur adds no detail, so
+    there is no halo to hold back.
+    """
+    sigma = SOFTEN_SIGMA * scale
+    if amount <= 0.0 or sigma < SHARPEN_LEAST_SIGMA:
+        return brightness
+    soft = cv2.GaussianBlur(brightness, (0, 0), sigma)
+    share = np.float32(min(amount, 100.0) / 100.0)
+    result = np.empty_like(brightness)
+
+    def blend(rows: slice) -> None:
+        """Soften one band."""
+        result[rows] = brightness[rows] + (soft[rows] - brightness[rows]) * share
+
+    _by_rows(blend, brightness)
     return result
 
 

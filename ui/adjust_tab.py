@@ -72,6 +72,23 @@ def _amount(
     )
 
 
+def _sharpening(default: float = 0.0) -> SliderSpec:
+    """Return the sharpening slider: softens below zero, sharpens above.
+
+    It reads with a sign like the bipolar sliders, and its track fills from
+    zero rather than from where a RAW photo rests, so that which way it
+    points - sharper or softer - is what the fill shows.
+    """
+    return SliderSpec(
+        name="sharpening",
+        label_key="adjust.sharpening",
+        minimum=edit_state.SHARPENING_MIN,
+        maximum=edit_state.SHARPENING_MAX,
+        default=default,
+        fill_from=0.0,
+    )
+
+
 def _relative(name: str, label_key: str) -> SliderSpec:
     return SliderSpec(
         name=name,
@@ -132,7 +149,7 @@ JPEG_SPECS: Final[dict[str, SliderSpec]] = {
     "grain": _amount("grain", "adjust.grain", edit_state.GRAIN_MAX),
     "skin": _amount("skin", "adjust.skin", edit_state.SKIN_MAX),
     "whiten": _amount("whiten", "adjust.whiten", edit_state.WHITEN_MAX),
-    "sharpening": _amount("sharpening", "adjust.sharpening", edit_state.SHARPENING_MAX),
+    "sharpening": _sharpening(),
     "sharpen_masking": _amount("sharpen_masking", "adjust.sharpen_masking"),
     "luminance_noise": _amount("luminance_noise", "adjust.luminance_noise"),
     "colour_noise": _amount("colour_noise", "adjust.colour_noise"),
@@ -178,12 +195,7 @@ def raw_specs(
     )
     # A RAW rests with some sharpening and some colour noise taken out, so a
     # double click on either puts it back there rather than at zero.
-    specs["sharpening"] = _amount(
-        "sharpening",
-        "adjust.sharpening",
-        edit_state.SHARPENING_MAX,
-        edit_state.RAW_SHARPENING_DEFAULT,
-    )
+    specs["sharpening"] = _sharpening(edit_state.RAW_SHARPENING_DEFAULT)
     specs["colour_noise"] = _amount(
         "colour_noise",
         "adjust.colour_noise",
@@ -333,6 +345,7 @@ class AdjustTab(QWidget):
             row.blockSignals(True)
             row.set_value(self._shown(name, getattr(self._state, name)))
             row.blockSignals(False)
+        self._update_masking()
 
     def set_state(self, state: EditState) -> None:
         """Show *state* without announcing it, as undo and presets do."""
@@ -341,6 +354,15 @@ class AdjustTab(QWidget):
             row.blockSignals(True)
             row.set_value(self._shown(name, getattr(state, name)))
             row.blockSignals(False)
+        self._update_masking()
+
+    def _update_masking(self) -> None:
+        """Let the masking be moved only while there is sharpening to mask.
+
+        At zero there is nothing to keep off the flat areas, and below zero
+        the photo is softened, which the masking does not take part in.
+        """
+        self._rows["sharpen_masking"].setEnabled(self._state.sharpening > 0.0)
 
     def _shown(self, name: str, value: float) -> float:
         """Return what the slider for *name* should show for *value*."""
@@ -414,6 +436,8 @@ class AdjustTab(QWidget):
     def _on_row_changed(self, name: str, value: float, dragging: bool) -> None:
         held = self._held(name, value)
         self._state = self._state.with_value(name, held)
+        if name == "sharpening":
+            self._update_masking()
 
         self._set_titles_dimmed(dragging)
         self.value_set.emit(name, held, dragging)

@@ -53,9 +53,11 @@ STRENGTH_MIN: Final[float] = 0.0
 STRENGTH_MAX: Final[float] = 100.0
 STRENGTH_DEFAULT: Final[float] = 100.0
 
-#: The detail sliders (PLAN.md 2.2) are amounts with nothing below zero.
+#: The detail sliders (PLAN.md 2.2) are amounts with nothing below zero,
+#: except sharpening, which goes below zero to soften the photo instead.
 #: Sharpening reaches past 100 the way it does in other editors, because a
 #: soft lens or a photo meant for a small screen can take more.
+SHARPENING_MIN: Final[float] = -100.0
 SHARPENING_MAX: Final[float] = 150.0
 DETAIL_MIN: Final[float] = 0.0
 DETAIL_MAX: Final[float] = 100.0
@@ -123,9 +125,9 @@ class EditState:
     #: How much of that look is applied, as a percentage.
     filter_strength: float = STRENGTH_DEFAULT
     #: The detail group (PLAN.md 2.2 and section 6 step 2.5): how much the
-    #: finest detail is sharpened, how much of the photo the sharpening is
-    #: kept off - only edges are sharpened at 100 - and how much noise is
-    #: taken out of the brightness and out of the colour.
+    #: finest detail is sharpened - below zero, softened - how much of the
+    #: photo the sharpening is kept off - only edges are sharpened at 100 -
+    #: and how much noise is taken out of the brightness and out of the colour.
     sharpening: float = 0.0
     sharpen_masking: float = 0.0
     luminance_noise: float = 0.0
@@ -214,13 +216,14 @@ class EditState:
         A RAW photo rests with some sharpening and some colour noise taken
         out, so this is a comparison and not a test against zero. The masking
         only counts while there is sharpening for it to mask, for the same
-        reason as the vignette's midpoint (PLAN.md 2.2).
+        reason as the vignette's midpoint (PLAN.md 2.2); softening, below
+        zero, has no edges to keep to and does not use it.
         """
         return (
             self.sharpening == reference.sharpening
             and self.luminance_noise == reference.luminance_noise
             and self.colour_noise == reference.colour_noise
-            and (self.sharpening == 0.0 or self.sharpen_masking == reference.sharpen_masking)
+            and (self.sharpening <= 0.0 or self.sharpen_masking == reference.sharpen_masking)
         )
 
     def temperature_range(self) -> tuple[float, float]:
@@ -265,7 +268,7 @@ class EditState:
         if name == "whiten":
             return WHITEN_MIN, WHITEN_MAX
         if name == "sharpening":
-            return DETAIL_MIN, SHARPENING_MAX
+            return SHARPENING_MIN, SHARPENING_MAX
         if name in DETAIL_NAMES:
             return DETAIL_MIN, DETAIL_MAX
         if name in _TONE_NAMES:
