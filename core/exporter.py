@@ -44,7 +44,7 @@ from numpy.typing import NDArray
 from PIL import Image
 
 from core import color_management as cm
-from core import decoder, face_detector, metadata, pipeline
+from core import decoder, face_detector, metadata, pipeline, watermark
 from core import geometry as geometry_module
 from core.decoder import DecodedPhoto, DecodeError
 from core.edit_state import EditState
@@ -52,6 +52,7 @@ from core.faces import Face
 from core.filters import Look
 from core.geometry import Geometry
 from core.metadata import PhotoMetadata
+from core.watermark import WatermarkSpec
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,8 @@ class ExportOptions:
     keep_metadata: bool = True
     #: Leave the location out, which is the default, for the user's privacy.
     remove_gps: bool = True
+    #: The watermark laid over the photo (X-10, PLAN.md 2.9), or ``None``.
+    watermark: WatermarkSpec | None = None
 
     @property
     def extension(self) -> str:
@@ -153,12 +156,16 @@ class ExportOptions:
         long_edge = self.long_edge
         if long_edge is not None:
             long_edge = int(min(LONG_EDGE_MAX, max(LONG_EDGE_MIN, long_edge)))
+        # A watermark with nothing to draw is no watermark: it must not stop
+        # an untouched JPEG from being copied (X-08).
+        mark = self.watermark.sane() if self.watermark is not None else None
         return replace(
             self,
             format=self.format if self.format in FORMATS else FORMAT_JPEG,
             quality=int(min(QUALITY_MAX, max(QUALITY_MIN, self.quality))),
             bits=self.bits if self.bits in BIT_DEPTHS else pipeline.EIGHT_BIT,
             long_edge=long_edge,
+            watermark=None if mark is None or mark.is_empty else mark,
         )
 
 
@@ -221,6 +228,10 @@ def can_copy_original(
     copy keeps the file's own profile with it (X-04).
     """
     if options.format != FORMAT_JPEG or options.long_edge is not None:
+        return False
+    if options.watermark is not None:
+        # The watermark changes the pixels, so the file has to be written
+        # again (W-12).
         return False
     if source.suffix.lower() not in decoder.JPEG_EXTENSIONS:
         return False
@@ -324,7 +335,7 @@ def export_pixels(
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         path = unique_path(target.with_suffix(options.extension))
-        _write_pixels(image, path, options, None)
+        _write_pixels(_watermarked(image, options), path, options, None)
     except (OSError, ValueError, MemoryError) as error:
         raise ExportError(f"{target.name} could not be written: {error}") from error
     return ExportResult(path=path, copied=False)
@@ -357,7 +368,19 @@ def _develop(
         bits=depth,
         look=look,
     )
-    return _scaled(image, options.long_edge)
+    return _watermarked(_scaled(image, options.long_edge), options)
+
+
+def _watermarked(image: NDArray[Any], options: ExportOptions) -> NDArray[Any]:
+    """Return *image* with the watermark *options* ask for (PLAN.md 2.9).
+
+    Laid over the finished pixels at the size they are written, so it is the
+    same share of the photo whatever size is asked for; only the pixels under
+    it are touched.
+    """
+    return watermark.apply(
+        image, options.watermark, dither=options.depth == pipeline.EIGHT_BIT
+    )
 
 
 def _scaled(image: NDArray[Any], long_edge: int | None) -> NDArray[Any]:

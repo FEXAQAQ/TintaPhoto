@@ -24,11 +24,12 @@ import pytest
 import tifffile
 from PIL import Image
 
-from core import exporter, metadata, pipeline
+from core import exporter, metadata, pipeline, watermark
 from core.edit_state import EditState
 from core.exporter import ExportOptions
 from core.geometry import Geometry, Rect
 from core.metadata import PhotoMetadata
+from core.watermark import WatermarkSpec
 
 SAMPLES = Path(__file__).resolve().parent / "samples"
 
@@ -653,3 +654,109 @@ def test_a_photo_to_develop_without_its_pixels_is_an_export_error(tmp_path: Path
         exporter.export_decoded(
             None, source, tmp_path / "out" / "photo_edit.jpg", EditState(exposure=0.5)
         )
+
+# --------------------------------------------------------------------------
+# The watermark (X-10, PLAN.md 2.9)
+# --------------------------------------------------------------------------
+
+_MARK = WatermarkSpec(text="© 2026", size=10.0, opacity=100)
+
+
+def _outside(frame: tuple[int, int], spec: WatermarkSpec = _MARK) -> np.ndarray:
+    """Return a mask of the pixels the watermark does not cover on *frame*."""
+    sprite = watermark.rasterise(spec, frame, watermark.load_fonts())
+    assert sprite is not None
+    x, y = (round(value) for value in watermark.layout(spec, frame, sprite.size))
+    mask = np.ones((frame[1], frame[0]), dtype=bool)
+    mask[y : y + sprite.size[1], x : x + sprite.size[0]] = False
+    return mask
+
+
+def test_a_watermark_stops_the_copy(tmp_path: Path) -> None:
+    source = _write_jpeg(tmp_path / "photo.jpg")
+    assert not exporter.can_copy_original(
+        source, EditState(), None, ExportOptions(watermark=_MARK).sane()
+    )
+
+
+def test_a_watermark_with_no_text_is_no_watermark(tmp_path: Path) -> None:
+    source = _write_jpeg(tmp_path / "photo.jpg")
+    options = ExportOptions(watermark=WatermarkSpec(text="  ")).sane()
+    assert options.watermark is None
+    assert exporter.can_copy_original(source, EditState(), None, options)
+
+
+def test_an_untouched_jpeg_with_a_watermark_is_written_again(tmp_path: Path) -> None:
+    source = _write_jpeg(tmp_path / "photo.jpg", size=(400, 300))
+    before = _fingerprint(source)
+    result = exporter.export(
+        source, tmp_path / "photo_edit.jpg", options=ExportOptions(watermark=_MARK)
+    )
+    assert not result.copied
+    assert result.path.read_bytes() != source.read_bytes()
+    assert _fingerprint(source) == before
+
+
+def test_the_watermark_touches_only_the_pixels_under_it(tmp_path: Path) -> None:
+    """An untouched 8 bit PNG passes through, so every other pixel is the
+    original's own, dither or not."""
+    pixels = np.random.default_rng(5).integers(0, 256, (300, 400, 3), dtype=np.uint8)
+    source = tmp_path / "photo.png"
+    Image.fromarray(pixels).save(source, "PNG")
+
+    result = exporter.export(
+        source,
+        tmp_path / "out.png",
+        options=ExportOptions(format=exporter.FORMAT_PNG, watermark=_MARK),
+    )
+
+    with Image.open(result.path) as opened:
+        written = np.asarray(opened.convert("RGB"))
+    outside = _outside((400, 300))
+    np.testing.assert_array_equal(written[outside], pixels[outside])
+    assert not np.array_equal(written[~outside], pixels[~outside])
+
+
+def test_a_sixteen_bit_file_gets_the_watermark_at_sixteen_bits(tmp_path: Path) -> None:
+    source = tmp_path / "flat.png"
+    Image.new("RGB", (400, 300), (0, 0, 0)).save(source, "PNG")
+    result = exporter.export(
+        source,
+        tmp_path / "out.png",
+        options=ExportOptions(
+            format=exporter.FORMAT_PNG, bits=pipeline.SIXTEEN_BIT, watermark=_MARK
+        ),
+    )
+    written = cv2.imdecode(np.fromfile(result.path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    assert written.dtype == np.uint16
+    assert int(written.max()) == 65535
+    assert int(written[_outside((400, 300))].max()) == 0
+
+
+def test_the_watermark_is_drawn_at_the_size_written(tmp_path: Path) -> None:
+    source = tmp_path / "flat.png"
+    Image.new("RGB", (800, 600), (0, 0, 0)).save(source, "PNG")
+    result = exporter.export(
+        source,
+        tmp_path / "out.png",
+        options=ExportOptions(format=exporter.FORMAT_PNG, long_edge=400, watermark=_MARK),
+    )
+    with Image.open(result.path) as opened:
+        written = np.asarray(opened.convert("L"))
+    assert written.shape == (300, 400)
+    rows = np.nonzero(written.max(axis=1) > 0)[0]
+    # A line 10 % of the short edge of 300: the ink is well under 30 px tall.
+    assert 10 <= rows[-1] - rows[0] + 1 <= 30
+
+
+def test_finished_pixels_such_as_a_collage_get_the_watermark(tmp_path: Path) -> None:
+    canvas = np.zeros((300, 400, 3), dtype=np.uint8)
+    result = exporter.export_pixels(
+        canvas,
+        tmp_path / "collage.png",
+        ExportOptions(format=exporter.FORMAT_PNG, watermark=_MARK),
+    )
+    with Image.open(result.path) as opened:
+        written = np.asarray(opened.convert("RGB"))
+    assert int(written.max()) == 255
+    assert int(written[_outside((400, 300))].max()) == 0

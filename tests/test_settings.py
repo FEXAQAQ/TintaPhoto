@@ -14,8 +14,10 @@ from app.settings import (
     STARTUP_LAST_FOLDER,
     STARTUP_WELCOME,
     Settings,
+    WatermarkSettings,
     WindowState,
 )
+from core.watermark import WatermarkSpec
 
 
 def test_defaults_are_used_when_the_file_is_missing(tmp_path: Path) -> None:
@@ -288,3 +290,45 @@ def test_clearing_the_recent_list_forgets_where_dialogs_start() -> None:
     settings.remember_browse_folder("B")
     settings.clear_recent()
     assert settings.browse_folder is None
+
+
+# -- the watermark (PLAN.md 2.9, 7.3) ----------------------------------------
+
+
+def test_a_file_without_a_watermark_has_it_off(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"version": 1}), encoding="utf-8")
+    settings = Settings.load(path)
+    assert not settings.watermark.enabled
+    assert settings.watermark.active is None
+
+
+def test_the_watermark_survives_a_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    settings = Settings()
+    settings.watermark = WatermarkSettings(
+        enabled=True,
+        spec=WatermarkSpec(
+            text="© 2026 王小明", bold=True, italic=True,
+            size=4.5, anchor="top-left", offset=(0.05, 0.0), margin=5,
+        ),
+    )
+    assert settings.save(path)
+    loaded = Settings.load(path)
+    assert loaded.watermark == settings.watermark
+    assert loaded.watermark.active == settings.watermark.spec
+
+
+def test_a_watermark_with_no_text_is_not_carried(tmp_path: Path) -> None:
+    assert WatermarkSettings(enabled=True, spec=WatermarkSpec(text="")).active is None
+    assert WatermarkSettings(enabled=False, spec=WatermarkSpec(text="me")).active is None
+
+
+def test_a_damaged_watermark_falls_back_to_the_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"watermark": {"enabled": "yes", "size": "huge", "anchor": 3}}),
+        encoding="utf-8",
+    )
+    loaded = Settings.load(path)
+    assert loaded.watermark == WatermarkSettings()

@@ -19,6 +19,7 @@ from app.batch_export import BatchExportResult, BatchItem, batch_target, run_bat
 from core.decoder import DecodedPhoto
 from core.edit_state import Edit, EditState
 from core.exporter import FORMAT_PNG, ExportOptions
+from core.watermark import WatermarkSpec
 
 
 def _photo(path: Path, grey: int = 120) -> Path:
@@ -124,6 +125,22 @@ def test_an_untouched_jpeg_is_copied_as_it_is(photos: list[Path], tmp_path: Path
     result = _run([BatchItem(photos[0], Edit(EditState()))], tmp_path / "out", _Calls())
 
     assert result.written[0].read_bytes() == photos[0].read_bytes()
+
+
+def test_every_photo_carries_the_watermark(photos: list[Path], tmp_path: Path) -> None:
+    """The photos are grey, so anything white is the watermark (PLAN.md 2.9)."""
+    mark = WatermarkSpec(text="I", size=20.0, opacity=100, anchor="centre")
+    items = [BatchItem(path, Edit(EditState())) for path in photos]
+
+    result = _run(
+        items, tmp_path / "out", _Calls(), options=ExportOptions(format=FORMAT_PNG, watermark=mark)
+    )
+
+    # The photos are only 32 x 24, so the white letter covers no whole pixel;
+    # it shows as pixels well above each photo's own grey.
+    for index, written in enumerate(result.written):
+        with Image.open(written) as opened:
+            assert int(np.asarray(opened.convert("L")).max()) > 60 + 40 * index + 20
 
 
 def test_a_photo_that_fails_does_not_stop_the_others(

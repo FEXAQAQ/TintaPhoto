@@ -22,6 +22,7 @@ from app.paths import ensure_dir, settings_file
 from core import collage, exporter
 from core.cache import CACHE_LIMITS_BYTES, DEFAULT_CACHE_LIMIT_BYTES
 from core.exporter import ExportOptions
+from core.watermark import WatermarkSpec
 
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,37 @@ class ExportSettings:
         settings.suffix = str(suffix) if isinstance(suffix, str) else settings.suffix
         settings.reveal_after = bool(data.get("reveal_after", False))
         return settings
+
+
+@dataclass
+class WatermarkSettings:
+    """The watermark and whether exports carry it (PLAN.md 2.9, 7.3).
+
+    One for every photo: it belongs to where a photo is going, not to the
+    photo, so it lives here rather than in any parameter file (W-11).
+    """
+
+    #: Lay it over exported photos (W-09); off until the user turns it on.
+    enabled: bool = False
+    spec: WatermarkSpec = field(default_factory=WatermarkSpec)
+
+    @property
+    def active(self) -> WatermarkSpec | None:
+        """Return the watermark exports carry now, or ``None`` for none."""
+        if not self.enabled or self.spec.is_empty:
+            return None
+        return self.spec
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the watermark as a JSON compatible dictionary."""
+        return {"enabled": self.enabled, **self.spec.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "WatermarkSettings":
+        """Build the watermark from stored data; a file without one has it off."""
+        if not isinstance(data, dict):
+            return cls()
+        return cls(enabled=data.get("enabled") is True, spec=WatermarkSpec.from_dict(data))
 
 
 @dataclass
@@ -312,6 +344,8 @@ class Settings:
     export: ExportSettings = field(default_factory=ExportSettings)
     #: The collage's last layout (PLAN.md 2.8).
     collage: CollageSettings = field(default_factory=CollageSettings)
+    #: The watermark on exported photos (PLAN.md 2.9).
+    watermark: WatermarkSettings = field(default_factory=WatermarkSettings)
     #: Fields written by other versions, kept so they survive a round trip.
     extra: dict[str, Any] = field(default_factory=dict, repr=False)
 
@@ -348,6 +382,7 @@ class Settings:
                 },
                 "export": self.export.to_dict(),
                 "collage": self.collage.to_dict(),
+                "watermark": self.watermark.to_dict(),
             }
         )
         return data
@@ -375,6 +410,7 @@ class Settings:
             "recent_details",
             "export",
             "collage",
+            "watermark",
         }
         panels = data.get("panels")
         panels = panels if isinstance(panels, dict) else {}
@@ -429,6 +465,7 @@ class Settings:
             recent_details=details,
             export=ExportSettings.from_dict(data.get("export", {})),
             collage=CollageSettings.from_dict(data.get("collage")),
+            watermark=WatermarkSettings.from_dict(data.get("watermark")),
             extra={key: value for key, value in data.items() if key not in known},
         )
 
