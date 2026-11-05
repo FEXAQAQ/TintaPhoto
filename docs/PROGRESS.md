@@ -15,7 +15,8 @@
   **PLAN.md 已補上濾鏡**（2.2、3.1、6、7.1.5、8、13.3 節），文件也不再出現相機廠牌。
   F1 完成：三個濾鏡已從素材擬合出來，同相機 ΔE 0.78 ～ 0.92、
   跨相機 1.56 ～ 1.73。見「濾鏡功能 F1」、「濾鏡功能 F2」
-- **最後更新**：2026-11-05（最後一項工作：開啟檔案只開選的那幾張 —— 使用者回報「在起始頁面拖單一個檔案或開啟檔案時，它會自動讀取路徑底下所有圖檔」，同意建議後改，0.32.1。原本照 PLAN F-02 會列出同一層的照片，並把資料夾記進最近開啟。`Controller.open_paths(paths)`：第一個是資料夾就 `open_folder`，是檔案就 `open_files`（只取存在的檔案）；`open_files` 去掉不支援的與重複的，依 `_sort_key` 排序，顯示第一個選的，沒有任何照片時以第一個檔名報 `error.unsupported`；`open()`／`open_file()` 都改走這裡。列資料夾與開檔共用新的 `_deliver_photos(find, path, then)`（背景交付、只交最新一次，所以開檔會取代還在列的資料夾，反之亦然）。`_set_photos(folder | None, photos)`：沒有資料夾時不呼叫 `remember_folder`，改呼叫新的 `Settings.remember_browse_folder()`。`Settings.browse_folder`（開檔／開資料夾視窗與拼貼選檔的起點）：`remember_folder` 也會更新它，`forget_folder`／`clear_recent` 一併清掉，舊設定檔沒有時取 `last_folder`。`MainWindow.open_file_dialog` 改用 `getOpenFileNames` 多選，`dropEvent` 把所有拖進來的路徑交給 `open_paths`（原本只開第一個）。決定：同時拖資料夾和檔案時以第一個為準，不混在一起開。測試：test_controller 換掉「開檔列同一層」「開檔選到第 3 張」兩項，加只開那張、不進最近開啟、多張依名排序、略過非照片、資料夾在前開整個、開檔取代列到一半的資料夾；test_settings 加 4 項；test_main_window 加拖多張、開檔視窗多選與起點。PLAN 第 2.1 節（F-01、F-02）、第 3.7 節（拖曳開啟）、第 7.3 節已同步。
+- **最後更新**：2026-11-05（最後一項工作：規劃浮水印功能，新增階段 17，只改文件、還沒寫程式、不加版號。見文末「浮水印（階段 17）規劃」。**下一步：W1 `core/watermark.py`；W3 介面動工前先做模擬圖給使用者看**）
+  在此之前：開啟檔案只開選的那幾張 —— 使用者回報「在起始頁面拖單一個檔案或開啟檔案時，它會自動讀取路徑底下所有圖檔」，同意建議後改，0.32.1。原本照 PLAN F-02 會列出同一層的照片，並把資料夾記進最近開啟。`Controller.open_paths(paths)`：第一個是資料夾就 `open_folder`，是檔案就 `open_files`（只取存在的檔案）；`open_files` 去掉不支援的與重複的，依 `_sort_key` 排序，顯示第一個選的，沒有任何照片時以第一個檔名報 `error.unsupported`；`open()`／`open_file()` 都改走這裡。列資料夾與開檔共用新的 `_deliver_photos(find, path, then)`（背景交付、只交最新一次，所以開檔會取代還在列的資料夾，反之亦然）。`_set_photos(folder | None, photos)`：沒有資料夾時不呼叫 `remember_folder`，改呼叫新的 `Settings.remember_browse_folder()`。`Settings.browse_folder`（開檔／開資料夾視窗與拼貼選檔的起點）：`remember_folder` 也會更新它，`forget_folder`／`clear_recent` 一併清掉，舊設定檔沒有時取 `last_folder`。`MainWindow.open_file_dialog` 改用 `getOpenFileNames` 多選，`dropEvent` 把所有拖進來的路徑交給 `open_paths`（原本只開第一個）。決定：同時拖資料夾和檔案時以第一個為準，不混在一起開。測試：test_controller 換掉「開檔列同一層」「開檔選到第 3 張」兩項，加只開那張、不進最近開啟、多張依名排序、略過非照片、資料夾在前開整個、開檔取代列到一半的資料夾；test_settings 加 4 項；test_main_window 加拖多張、開檔視窗多選與起點。PLAN 第 2.1 節（F-01、F-02）、第 3.7 節（拖曳開啟）、第 7.3 節已同步。
   在此之前：歡迎畫面加上「開啟檔案」按鈕 —— 使用者要求「多一個開啟檔案放在左邊，右邊是資料夾」，看過三種排法（快捷鍵寫在名稱下面／不寫快捷鍵／整欄加寬）後先選了寫在名稱下面，做出來後改選不寫快捷鍵，0.32.0（還沒發行，所以兩次改動共用這個版號）。`OpenFolderButton` 改為通用的 `WelcomeButton(icon_name, label_key, shortcut_key)`：圖示與名稱一起置中（`content_layout()` 回傳起點與截斷後的名稱，名稱過長以「…」截斷），快捷鍵只在工具提示；`WelcomeView.open_file_button`（新圖示 `resources/icons/image.svg`、`icons.ICON_IMAGE`，自繪）與 `open_folder_button` 放在 `QHBoxLayout` 裡並排，新訊號 `open_file_requested` 接到 `MainWindow.open_file_dialog`；`buttons()` 回傳兩顆，啟用、開場浮現（同時於 `OPENING_BUTTON_AT_MS`）都對兩顆一起做。`theme.py` 新增 `WELCOME_BUTTON_GAP`（= `SPACE_MD` 12）與 `WELCOME_BUTTON_WIDTH`（(340 − 12) / 2 = 164，取 12 px 間距是為了讓按鈕寬是 4 的倍數）；欄寬維持 340。翻譯加 `welcome.open_file`。測試：test_welcome_view 加並排位置、各自發出訊號、圖示與名稱置中；test_main_window、test_language_switch、test_theme 同步。PLAN 第 3.6、3.7 節已同步。
   在此之前：最近開啟可以移除紀錄 —— 使用者要求「最近開啟那邊要有移除紀錄的按鈕」，看過以真實歡迎畫面畫的四格模擬圖後說「照這樣做」，0.31.0。歡迎畫面每一列（`RecentFolderRow`）在滑鼠移上或有焦點時，右側張數／日子換成 28 px 的 × `IconButton`（新圖示 `resources/icons/x.svg`、`icons.ICON_X`，距右緣 `SPACE_SM`），按下或按 Delete 發出 `remove_requested` → `WelcomeView.folder_removed(str)`；列加上 role `recent_row`，`theme.py` 讓列上的圖示按鈕懸停／按下用 `TRACK_HOVER`／`TRACK_PRESSED`（列本身已是 `BG_RAISED`）；名稱截斷寬度固定，不因換成按鈕而跳動。滑鼠狀態以 enter/leave 事件記在 `_pointer_over`，不用 `underMouse()`，測試才能送事件模擬。選單 `AppMenu.recent_menu` 最下面加分隔線與 `clear_recent_action`「清除紀錄」→ `recent_cleared`。`Settings.forget_folder()`／`clear_recent()`：同時刪 `recent_details`，移除的若是 `last_folder` 也清掉（決定：避免「啟動時開啟上次資料夾」又把剛移除的資料夾開回來）。`MainWindow._show_recent_folders()` 取代兩處重複的刷新程式；移除與清除後立即 `save()`。快捷鍵表加「歡迎畫面：把選取的資料夾從最近開啟移除 Delete」。只刪紀錄，不碰資料夾與照片。PLAN 第 3.1、3.7、7.3、8 節已同步。
   在此之前：裁切分頁「工具」群組改名「方向」並拿掉四顆按鈕的工具提示 —— 使用者覺得「工具」名稱怪、那欄說明也不需要，從建議中選了「方向」，並選擇保留拉直的操作說明，0.30.2。`crop.group.tools` 改為 `crop.group.orientation`（方向／Orientation），`_build_tools` 改名 `_build_orientation`；左轉、右轉、左右翻轉、上下翻轉不再設工具提示，刪掉 `_set_mirror_tooltips()`；拉直保留「沿著地平線畫一條線」。測試改為檢查只有拉直有提示。PLAN 第 3.2 節已同步。
@@ -5428,3 +5429,20 @@ app 樣式表的通用 `QPushButton` 最小高度會把標籤撐成 27 px，所�
 - 參考影像比對：參考影像都用 ≥ 0 的銳利化，演算法在 ≥ 0 時完全沒變，顏色不變
 - PLAN 第 2.2 節（A-20 範圍、細節群組說明）、第 6 節步驟 2.5（柔化）、第 9 節階段 9 驗收已同步
 - 待實機確認：100% 下 −100 的柔化程度是否合適（σ 1.5 是估的，可再調）
+
+## 浮水印（階段 17）規劃（2026-11-05，只改文件）
+
+使用者：「如果我想要增加浮水印功能，可以幫我規劃一份開發計畫書嗎?」先寫了「匯出對話框裡開浮水印對話框」的草案；使用者看完說原本打算放在工具列，要能輸入文字、粗體、斜體、大小、調整位置，改寫成 v2，五個問題使用者都照建議回答。
+
+- 決定（使用者 2026-11-05）：
+  - 入口是工具列「雙圖拼貼」右邊的浮水印按鈕（Lucide `stamp`）與 T，做法同雙圖拼貼：預覽區與右側面板換成浮水印模式
+  - 位置所有照片共用，記成「最近的九宮格＋偏移（短邊比例）」，橫式、直式在同一個相對位置
+  - 斜體：英文用 Inter 官方斜體（多附 `Inter-Italic.ttf`、`Inter-SemiBoldItalic.ttf`，同為 SIL OFL 1.1、沒有保留字型名稱，可以隨程式散布）；中文用微軟正黑體傾斜 12°
+  - 設定存在 `settings.json` 的 `watermark`，不寫參數檔、不進復原紀錄、預設集與複製貼上
+  - 這一版只做文字，圖片浮水印列在第 12 節；格式先留 `kind`
+  - 沒調整過的 JPG 開著浮水印時不再直接複製原檔，改用原始像素加浮水印後重新編碼、保留原檔色彩空間；CLAUDE.md 第 4 節那一句已一起改
+  - 合成在 sRGB 編碼值上、縮放之後、量化（抖動）之前；浮水印關閉時匯出走原本的路，逐位元不變
+  - 使用者要求 W3 介面動工前先以真實介面元件做模擬圖給他看
+- PLAN 已改：第 1 節、2.6（X-08、X-10）、2.9（新增 W-01 ～ W-13）、3.1（工具列）、3.11（第 7 列）、3.13（拼貼匯出、按鈕停用）、3.14（新增浮水印模式）、5、6（原圖直通、浮水印）、7.3、8（T）、9（階段 17）、12、13.2
+- 草案 `docs/WATERMARK_PLAN.md` 內容已併入 PLAN.md 後刪除
+- 不需要新套件：文字用 Pillow（FreeType），斜切用 OpenCV
