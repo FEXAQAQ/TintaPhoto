@@ -159,7 +159,6 @@ def test_each_button_names_its_shortcut(welcome: WelcomeView) -> None:
         (welcome.open_folder_button, "welcome.open_folder", "shortcut.open_folder"),
     ):
         assert button.label == tr(label)
-        assert button.keys == tr(keys)
         assert tr(keys) in button.toolTip()
         assert button.height() == theme.WELCOME_BUTTON_HEIGHT
         assert button.width() == theme.WELCOME_BUTTON_WIDTH
@@ -186,17 +185,21 @@ def test_each_button_asks_for_its_own_dialog(welcome: WelcomeView) -> None:
     assert asked == ["file", "folder"]
 
 
-def test_the_two_lines_of_a_button_both_show(welcome: WelcomeView) -> None:
-    """The name sits over the shortcut; both are drawn, neither cut off."""
+def test_a_button_centres_its_icon_and_whole_name(welcome: WelcomeView) -> None:
+    """The shortcut is in the tooltip only, so the icon and the name sit
+    in the middle of the button, the name not cut short."""
     welcome._stop_opening()
     screen = _screen(welcome)
     for button in welcome.buttons():
+        left, name = button.content_layout()
+        assert name == button.label
+        assert left >= theme.SPACE_LG
         x, y, w, h = _of(welcome, button)
-        text_x = x + theme.SPACE_LG + theme.ICON_SIZE
-        upper = _ink(_area(welcome, screen, text_x, y + 4, w - text_x + x - 4, h / 2 - 4))
-        lower = _ink(_area(welcome, screen, text_x, y + h / 2, w - text_x + x - 4, h / 2 - 4))
-        assert upper > 1e3, "no name"
-        assert lower > 1e2, "no shortcut"
+        inside = _area(welcome, screen, x + 4, y + 4, w - 8, h - 8)
+        lit = np.nonzero(np.clip(inside.mean(axis=2) - 60, 0, None).sum(axis=0))[0]
+        margin_left = lit[0]
+        margin_right = inside.shape[1] - 1 - lit[-1]
+        assert abs(margin_left - margin_right) <= 4 * screen.shape[1] / welcome.width()
 
 
 def test_a_recent_folder_says_its_name_path_count_and_day(welcome: WelcomeView) -> None:

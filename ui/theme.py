@@ -270,7 +270,7 @@ WELCOME_SECTION_GAP: Final[int] = 44
 #: The two buttons of the welcome screen, "open file" and "open folder", side
 #: by side across the column. Taller than a button in a panel, because on an
 #: otherwise empty screen they are the things to reach for; each has its
-#: name over its shortcut, since half the column cannot hold both on a line.
+#: icon and name centred, and its shortcut only in its tooltip.
 WELCOME_BUTTON_HEIGHT: Final[int] = 48
 WELCOME_BUTTON_GAP: Final[int] = SPACE_MD
 WELCOME_BUTTON_WIDTH: Final[int] = (WELCOME_CONTENT_WIDTH - WELCOME_BUTTON_GAP) // 2

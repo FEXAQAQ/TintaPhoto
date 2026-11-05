@@ -308,7 +308,11 @@ class RiseEffect(QGraphicsEffect):
 
 
 class WelcomeButton(QPushButton):
-    """One of the two actions: outlined, its icon at the left, its name over its shortcut."""
+    """One of the two actions: outlined, its icon and name centred on it.
+
+    Its shortcut is in the tooltip only: half the column has no room to
+    write it beside the name, and under it made the button busier.
+    """
 
     def __init__(
         self,
@@ -331,11 +335,6 @@ class WelcomeButton(QPushButton):
     def label(self) -> str:
         """Return the button's name."""
         return tr(self._label_key)
-
-    @property
-    def keys(self) -> str:
-        """Return the shortcut written under the name."""
-        return tr(self._shortcut_key)
 
     def retranslate(self) -> None:
         """Read the name and the tooltip again after a language change (U-02)."""
@@ -362,33 +361,36 @@ class WelcomeButton(QPushButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         middle = self.height() / 2
-        left = theme.SPACE_LG
         size = theme.ICON_SIZE
+        left, name = self.content_layout()
         icon = icons.load_icon(self._icon_name)
         mode = QIcon.Mode.Normal if enabled else QIcon.Mode.Disabled
-        icon.paint(painter, QRect(left, round(middle - size / 2), size, size), mode=mode)
-        text_left = left + size + theme.SPACE_MD
-        room = max(0.0, self.width() - text_left - theme.SPACE_MD)
-        # Two lines around the middle, as a recent folder's row has them.
-        upper = middle - theme.SPACE_XS / 2
-        lower = middle + theme.SPACE_XS / 2
+        icon.paint(painter, QRect(round(left), round(middle - size / 2), size, size), mode=mode)
         name_font = _font(theme.FONT_SIZE_TITLE, theme.FONT_WEIGHT_TITLE)
         name_metrics = QFontMetricsF(name_font)
         painter.setFont(name_font)
         painter.setPen(QColor(theme.TEXT_PRIMARY if enabled else theme.TEXT_TERTIARY))
         painter.drawText(
-            QPointF(text_left, upper - name_metrics.descent()),
-            name_metrics.elidedText(self.label, Qt.TextElideMode.ElideRight, room),
-        )
-        keys_font = _font(theme.FONT_SIZE_LABEL, theme.FONT_WEIGHT_NORMAL)
-        keys_metrics = QFontMetricsF(keys_font)
-        painter.setFont(keys_font)
-        painter.setPen(QColor(theme.TEXT_TERTIARY))
-        painter.drawText(
-            QPointF(text_left, lower + keys_metrics.ascent()),
-            keys_metrics.elidedText(self.keys, Qt.TextElideMode.ElideRight, room),
+            QPointF(
+                left + size + theme.SPACE_SM,
+                middle + (name_metrics.ascent() - name_metrics.descent()) / 2,
+            ),
+            name,
         )
         painter.end()
+
+    def content_layout(self) -> tuple[float, str]:
+        """Return where the icon starts and the name as drawn, so the two sit centred.
+
+        The name is cut short with "…" if a language makes it too long for
+        the button.
+        """
+        metrics = QFontMetricsF(_font(theme.FONT_SIZE_TITLE, theme.FONT_WEIGHT_TITLE))
+        size = theme.ICON_SIZE
+        room = max(0.0, self.width() - 2 * theme.SPACE_LG - size - theme.SPACE_SM)
+        name = metrics.elidedText(self.label, Qt.TextElideMode.ElideRight, room)
+        content = size + theme.SPACE_SM + metrics.horizontalAdvance(name)
+        return (self.width() - content) / 2, name
 
 
 def recent_day(opened: date, today: date) -> str:
