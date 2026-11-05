@@ -255,3 +255,36 @@ def test_the_histogram_mode_survives_a_save_and_a_load(tmp_path: Path) -> None:
 
 def test_an_unknown_histogram_mode_falls_back_to_three_channels() -> None:
     assert Settings.from_dict({"histogram_mode": "waveform"}).histogram_mode == HISTOGRAM_RGB
+
+
+def test_where_dialogs_start_survives_a_save_and_a_load(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    settings = Settings()
+    settings.remember_browse_folder("D:/照片/單張")
+    settings.save(path)
+    loaded = Settings.load(path)
+    assert loaded.browse_folder == "D:/照片/單張"
+    # A photo opened by itself is not a recent folder.
+    assert loaded.recent_folders == []
+    assert loaded.last_folder is None
+
+
+def test_an_older_file_starts_dialogs_in_the_last_folder(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"last_folder": "D:/Photos"}), encoding="utf-8")
+    assert Settings.load(path).browse_folder == "D:/Photos"
+
+
+def test_opening_a_folder_also_starts_dialogs_there() -> None:
+    settings = Settings()
+    settings.remember_browse_folder("D:/Single")
+    settings.remember_folder("D:/Folder", 3)
+    assert settings.browse_folder == "D:/Folder"
+
+
+def test_clearing_the_recent_list_forgets_where_dialogs_start() -> None:
+    settings = Settings()
+    settings.remember_folder("A", 3)
+    settings.remember_browse_folder("B")
+    settings.clear_recent()
+    assert settings.browse_folder is None

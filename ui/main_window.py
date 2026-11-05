@@ -372,21 +372,21 @@ class MainWindow(QMainWindow):
     # -- opening photos --------------------------------------------------
 
     def open_file_dialog(self) -> None:
-        """Ask for a photo and open it (F-01)."""
+        """Ask for one or more photos and open just those (F-01)."""
         patterns = " ".join(f"*{suffix}" for suffix in sorted(_supported_suffixes()))
-        chosen, _filter = QFileDialog.getOpenFileName(
+        chosen, _filter = QFileDialog.getOpenFileNames(
             self,
             tr("dialog.open_file"),
-            self._settings.last_folder or "",
+            self._settings.browse_folder or "",
             f"{tr('dialog.photo_filter')} ({patterns});;{tr('dialog.all_files')} (*)",
         )
         if chosen:
-            self._open_path(Path(chosen))
+            self.controller.open_paths([Path(path) for path in chosen])
 
     def open_folder_dialog(self) -> None:
         """Ask for a folder and open every photo in it (F-02)."""
         chosen = QFileDialog.getExistingDirectory(
-            self, tr("dialog.open_folder"), self._settings.last_folder or ""
+            self, tr("dialog.open_folder"), self._settings.browse_folder or ""
         )
         if chosen:
             self._open_path(Path(chosen))
@@ -784,7 +784,7 @@ class MainWindow(QMainWindow):
         """Ask for the photo to put in one half of the collage."""
         patterns = " ".join(f"*{suffix}" for suffix in sorted(_supported_suffixes()))
         folder = self.collage.default_folder()
-        start = str(folder) if folder is not None else (self._settings.last_folder or "")
+        start = str(folder) if folder is not None else (self._settings.browse_folder or "")
         chosen, _filter = QFileDialog.getOpenFileName(
             self,
             tr("collage.choose_title"),
@@ -1315,11 +1315,11 @@ class MainWindow(QMainWindow):
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """Open what was dropped."""
+        """Open what was dropped: a folder whole, or just the photos dropped."""
         self._set_drop_target(False)
         paths = _dropped_paths(event)
         if paths:
-            self._open_path(paths[0])
+            self.controller.open_paths(paths)
             event.acceptProposedAction()
 
     def _set_drop_target(self, active: bool) -> None:

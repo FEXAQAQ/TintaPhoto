@@ -953,7 +953,7 @@ class Controller(QObject):
 
     @property
     def photos(self) -> list[Path]:
-        """Return the photos of the open folder, in the order they are shown."""
+        """Return the photos in the filmstrip, in the order they are shown."""
         return list(self._photos)
 
     @property
@@ -972,27 +972,49 @@ class Controller(QObject):
 
     def open(self, path: Path) -> None:
         """Open a file or a folder, whichever *path* is (F-01, F-02)."""
-        if path.is_dir():
-            self.open_folder(path)
-        elif path.is_file():
-            self.open_file(path)
+        self.open_paths([path])
+
+    def open_paths(self, paths: Sequence[Path]) -> None:
+        """Open what was chosen or dropped (F-01, F-02).
+
+        The first path decides: a folder opens with every photo in it, and
+        files open by themselves, the folders they sit in left alone.
+        """
+        if not paths:
+            return
+        first = paths[0]
+        if first.is_dir():
+            self.open_folder(first)
+        elif first.is_file():
+            self.open_files([path for path in paths if path.is_file()])
         else:
-            self.error.emit(tr("error.not_found", name=path.name))
+            self.error.emit(tr("error.not_found", name=first.name))
 
     def open_file(self, path: Path) -> None:
-        """Open one photo, listing its folder so the filmstrip has context."""
-        if not decoder.is_supported(path):
-            self.error.emit(tr("error.unsupported", name=path.name))
+        """Open one photo by itself (F-01)."""
+        self.open_files([path])
+
+    def open_files(self, paths: Sequence[Path]) -> None:
+        """Open just these photos, in name order, showing the first one chosen (F-01).
+
+        Files that are not photos are passed over; if none is a photo, the
+        first one is named in the message.
+        """
+        chosen = list(dict.fromkeys(path for path in paths if decoder.is_supported(path)))
+        if not chosen:
+            if paths:
+                self.error.emit(tr("error.unsupported", name=paths[0].name))
             return
+        photos = sorted(chosen, key=_sort_key)
+        shown = photos.index(chosen[0])
 
-        def opened(photos: list[Path]) -> None:
-            if path not in photos:
-                photos = sorted([*photos, path], key=_sort_key)
-            self._set_photos(path.parent, photos)
-            self.select(photos.index(path))
+        def opened(_photos: list[Path]) -> None:
+            self._set_photos(None, photos)
+            self.select(shown)
 
-        # One photo brings its own folder along, not the folders below it.
-        self._list_folder(path.parent, False, opened)
+        # Handed over the way a listed folder is, so a folder still being
+        # listed cannot take the place of these photos once they are open.
+        self._deliver_photos(lambda _wanted: photos, photos[0], opened)
 
     def open_folder(self, folder: Path) -> None:
         """Open every supported photo in *folder* and the folders below it (F-02)."""
@@ -1014,28 +1036,49 @@ class Controller(QObject):
         A folder of folders can hold tens of thousands of files, so the walk
         stays off the interface thread; a newer request makes it stop.
         """
+        self._deliver_photos(
+            lambda wanted: list_photos(folder, recursive, wanted), folder, then
+        )
+
+    def _deliver_photos(
+        self,
+        find: Callable[[Callable[[], bool]], list[Path]],
+        path: Path,
+        then: Callable[[list[Path]], None],
+    ) -> None:
+        """Find photos in the background and hand them to *then*.
+
+        Only the newest request is handed over; *find* is given a function
+        saying whether it is still wanted, so a long walk can stop early.
+        """
         self._listing += 1
         listing = self._listing
 
         def wanted() -> bool:
             return listing == self._listing
 
-        def deliver(_folder: Path, photos: list[Path]) -> None:
+        def deliver(_path: Path, photos: list[Path]) -> None:
             if wanted():
                 then(photos)
 
-        self._submit(
-            partial(list_photos, folder, recursive, wanted), None, deliver, folder
-        )
+        self._submit(partial(find, wanted), None, deliver, path)
 
-    def _set_photos(self, folder: Path, photos: list[Path]) -> None:
+    def _set_photos(self, folder: Path | None, photos: list[Path]) -> None:
+        """Make *photos* the ones in the filmstrip.
+
+        A *folder* goes on the recent list; photos opened by themselves only
+        leave their folder as the place the open dialogs start in.
+        """
         self._write_pending()
         self._photos = photos
         self._index = -1
         self._decoded.clear()
         self._carried.clear()
         self._history.forget_all_but(set(photos))
-        self._settings.remember_folder(str(folder), len(photos))
+        if folder is not None:
+            self._settings.remember_folder(str(folder), len(photos))
+        else:
+            self._settings.remember_browse_folder(str(photos[0].parent))
         self.folder_opened.emit(list(photos))
         self._request_edited_marks(photos)
 

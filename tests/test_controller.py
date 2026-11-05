@@ -118,14 +118,6 @@ def test_opening_a_folder_selects_the_first_photo(controller: Controller, folder
     assert controller.current.name == "a.jpg"
 
 
-def test_opening_a_file_selects_it_within_its_folder(
-    controller: Controller, folder: Path
-) -> None:
-    open_and_wait(controller, folder / "c.jpg")
-    assert controller.index == 2
-    assert len(controller.photos) == 3
-
-
 def test_opening_a_folder_finds_the_photos_in_its_subfolders(
     controller: Controller, tmp_path: Path
 ) -> None:
@@ -169,13 +161,72 @@ def test_hidden_and_system_folders_are_skipped(
     assert [path.name for path in controller.photos] == ["a.jpg", "b.jpg", "c.jpg"]
 
 
-def test_opening_a_file_lists_only_its_own_folder(
+def test_opening_a_file_opens_only_that_photo(
     controller: Controller, folder: Path
 ) -> None:
-    (folder / "sub").mkdir()
-    _write_jpeg(folder / "sub" / "d.jpg")
+    """F-01: the rest of its folder is not brought along."""
+    open_and_wait(controller, folder / "b.jpg")
+    assert controller.photos == [folder / "b.jpg"]
+    assert controller.current == folder / "b.jpg"
+
+
+def test_a_photo_opened_by_itself_is_not_a_recent_folder(
+    controller: Controller, folder: Path
+) -> None:
+    """Only its folder is kept, as the place the open dialogs start in."""
+    settings = controller.settings
+    settings.remember_folder("D:/Earlier", 5)
     open_and_wait(controller, folder / "a.jpg")
+    assert settings.recent_folders == ["D:/Earlier"]
+    assert settings.last_folder == "D:/Earlier"
+    assert settings.browse_folder == str(folder)
+
+
+def test_several_files_open_by_themselves_in_name_order(
+    controller: Controller, folder: Path
+) -> None:
+    controller.open_paths([folder / "c.jpg", folder / "a.jpg"])
+    wait_for(controller.folder_opened)
+    assert controller.photos == [folder / "a.jpg", folder / "c.jpg"]
+    # The first one chosen is the one shown.
+    assert controller.current == folder / "c.jpg"
+
+
+def test_files_that_are_not_photos_are_left_out_of_a_choice(
+    controller: Controller, folder: Path
+) -> None:
+    notes = folder / "notes.txt"
+    notes.write_text("hello", encoding="utf-8")
+    controller.open_paths([notes, folder / "a.jpg", folder / "a.jpg"])
+    wait_for(controller.folder_opened)
+    assert controller.photos == [folder / "a.jpg"]
+
+
+def test_a_folder_dropped_first_opens_whole(
+    controller: Controller, folder: Path, tmp_path: Path
+) -> None:
+    """The first path decides; the photo dropped with the folder is not added."""
+    loose = tmp_path / "loose.jpg"
+    _write_jpeg(loose)
+    controller.open_paths([folder, loose])
+    wait_for(controller.folder_opened)
     assert [path.name for path in controller.photos] == ["a.jpg", "b.jpg", "c.jpg"]
+    assert controller.settings.recent_folders == [str(folder)]
+
+
+def test_photos_opened_replace_a_folder_still_being_listed(
+    controller: Controller, folder: Path, tmp_path: Path
+) -> None:
+    loose = tmp_path / "loose.jpg"
+    _write_jpeg(loose)
+    opened: list[list[Path]] = []
+    controller.folder_opened.connect(opened.append)
+    controller.open(folder)
+    controller.open(loose)
+    wait_for(controller.folder_opened)
+    wait_for(controller.preview_ready)
+    assert opened == [[loose]]
+    assert controller.photos == [loose]
 
 
 def test_a_newer_folder_replaces_one_still_being_listed(

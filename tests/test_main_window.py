@@ -544,6 +544,55 @@ def test_dropping_something_that_is_not_a_photo_is_ignored(
     assert _dropped_paths(_Event(_drop_event([other]))) == []
 
 
+def test_dropping_several_photos_opens_all_of_them(
+    window: MainWindow, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F-01: every photo dropped is opened, not just the first."""
+    first = tmp_path / "a.jpg"  # type: ignore[operator]
+    second = tmp_path / "b.jpg"  # type: ignore[operator]
+    first.write_bytes(b"")
+    second.write_bytes(b"")
+    opened: list[list[Path]] = []
+    monkeypatch.setattr(window.controller, "open_paths", lambda paths: opened.append(list(paths)))
+
+    class _Event:
+        def __init__(self, data):
+            self._data = data
+
+        def mimeData(self):  # noqa: N802 - matches Qt
+            return self._data
+
+        def acceptProposedAction(self) -> None:  # noqa: N802 - matches Qt
+            pass
+
+    window.dropEvent(_Event(_drop_event([first, second])))
+    assert opened == [[first, second]]
+
+
+def test_the_open_dialog_takes_several_photos(
+    window: MainWindow, tmp_path: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dialog offers more than one photo and starts where the last one was."""
+    from PySide6.QtWidgets import QFileDialog
+
+    window._settings.remember_browse_folder(str(tmp_path))
+    asked: list[str] = []
+    chosen = [str(tmp_path / "a.jpg"), str(tmp_path / "b.jpg")]  # type: ignore[operator]
+
+    def get_open_file_names(_parent, _title, start, _filter):
+        asked.append(start)
+        return chosen, ""
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileNames", staticmethod(get_open_file_names))
+    opened: list[list[Path]] = []
+    monkeypatch.setattr(window.controller, "open_paths", lambda paths: opened.append(list(paths)))
+
+    window.open_file_dialog()
+
+    assert asked == [str(tmp_path)]
+    assert opened == [[Path(path) for path in chosen]]
+
+
 def test_opening_a_folder_fills_the_window(window: MainWindow, tmp_path: object, qt_app: object) -> None:
     """The toolbar, the filmstrip and the preview all follow the controller."""
     from PIL import Image

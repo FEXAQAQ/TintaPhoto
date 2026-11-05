@@ -301,6 +301,9 @@ class Settings:
     #: How much room the thumbnail cache may take (PLAN.md 3.10).
     cache_limit_bytes: int = DEFAULT_CACHE_LIMIT_BYTES
     last_folder: str | None = None
+    #: Where the open dialogs start: the folder of whatever was opened last,
+    #: a whole folder or photos opened by themselves (F-01).
+    browse_folder: str | None = None
     recent_folders: list[str] = field(default_factory=list)
     #: How many photos each recent folder held and when it was last opened,
     #: by its path. A folder remembered by an older version has no entry.
@@ -336,6 +339,7 @@ class Settings:
                 "histogram_mode": self.histogram_mode,
                 "cache_limit_bytes": self.cache_limit_bytes,
                 "last_folder": self.last_folder,
+                "browse_folder": self.browse_folder,
                 "recent_folders": self.recent_folders,
                 "recent_details": {
                     folder: detail.to_dict()
@@ -366,6 +370,7 @@ class Settings:
             "histogram_mode",
             "cache_limit_bytes",
             "last_folder",
+            "browse_folder",
             "recent_folders",
             "recent_details",
             "export",
@@ -388,6 +393,9 @@ class Settings:
         language = str(data.get("language", DEFAULT_LANGUAGE))
         startup = str(data.get("startup_action", STARTUP_WELCOME))
         last_folder = data.get("last_folder")
+        # A file from before photos could be opened by themselves has only
+        # the last folder, which is where the dialogs started then.
+        browse_folder = data.get("browse_folder", last_folder)
 
         return cls(
             language=language if language in AVAILABLE_LANGUAGES else DEFAULT_LANGUAGE,
@@ -416,6 +424,7 @@ class Settings:
                 DEFAULT_CACHE_LIMIT_BYTES,
             ),
             last_folder=str(last_folder) if last_folder else None,
+            browse_folder=str(browse_folder) if browse_folder else None,
             recent_folders=recent,
             recent_details=details,
             export=ExportSettings.from_dict(data.get("export", {})),
@@ -473,6 +482,7 @@ class Settings:
         say so and when it was opened (PLAN.md 3.7).
         """
         self.last_folder = folder
+        self.browse_folder = folder
         remaining = [item for item in self.recent_folders if item != folder]
         self.recent_folders = [folder, *remaining][:MAX_RECENT_FOLDERS]
         if count is not None:
@@ -484,6 +494,14 @@ class Settings:
             if item in self.recent_folders
         }
 
+    def remember_browse_folder(self, folder: str) -> None:
+        """Start the open dialogs in *folder* next time.
+
+        Photos opened by themselves leave only this behind: their folder is
+        not put on the recent list, nor opened again at start-up (F-01).
+        """
+        self.browse_folder = folder
+
     def forget_folder(self, folder: str) -> None:
         """Take *folder* off the recent list; the folder itself is not touched.
 
@@ -494,12 +512,15 @@ class Settings:
         self.recent_details.pop(folder, None)
         if self.last_folder == folder:
             self.last_folder = None
+        if self.browse_folder == folder:
+            self.browse_folder = None
 
     def clear_recent(self) -> None:
-        """Empty the recent list, and with it the last folder (PLAN.md 3.1)."""
+        """Empty the recent list, the last folder and where dialogs start (PLAN.md 3.1)."""
         self.recent_folders = []
         self.recent_details = {}
         self.last_folder = None
+        self.browse_folder = None
 
 
 def _one_of(value: Any, allowed: tuple[Any, ...], default: Any) -> Any:
