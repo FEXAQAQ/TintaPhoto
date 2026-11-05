@@ -385,6 +385,15 @@ class Sprite:
         return int(width), int(height)
 
 
+def to_rgba(sprite: Sprite) -> NDArray[np.uint8]:
+    """Return *sprite* as 8 bit RGBA, its colour in every pixel, for the screen."""
+    height, width = sprite.coverage.shape[:2]
+    rgba = np.empty((height, width, 4), dtype=np.uint8)
+    rgba[:, :, :3] = round(sprite.level * 255)
+    rgba[:, :, 3] = np.rint(sprite.coverage * 255.0).astype(np.uint8)
+    return rgba
+
+
 def line_height(spec: WatermarkSpec, frame: tuple[int, int]) -> float:
     """Return the height of one line on *frame*, in its pixels (W-05)."""
     return min(frame) * spec.size / 100.0

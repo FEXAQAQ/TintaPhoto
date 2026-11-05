@@ -15,7 +15,8 @@
   **PLAN.md 已補上濾鏡**（2.2、3.1、6、7.1.5、8、13.3 節），文件也不再出現相機廠牌。
   F1 完成：三個濾鏡已從素材擬合出來，同相機 ΔE 0.78 ～ 0.92、
   跨相機 1.56 ～ 1.73。見「濾鏡功能 F1」、「濾鏡功能 F2」
-- **最後更新**：2026-11-05（最後一項工作：規劃浮水印功能，新增階段 17，只改文件、還沒寫程式、不加版號。見文末「浮水印（階段 17）規劃」。**下一步：W1 `core/watermark.py`；W3 介面動工前先做模擬圖給使用者看**）
+- **最後更新**：2026-11-06（最後一項工作：浮水印（階段 17），0.33.0。使用者看過模擬圖後說「照這樣做」。工具列印章按鈕／T 進入浮水印模式，面板輸入文字、粗體、斜體、大小、顏色、不透明度，照片上拖曳與吸附，匯出時加上。見文末「浮水印（階段 17）實作」。**待辦：Inter 斜體字型檔要使用者同意下載才放進來；實機確認拖曳手感、天空色階、10 張多張匯出**）
+  在此之前：規劃浮水印功能，新增階段 17，只改文件。見文末「浮水印（階段 17）規劃」。
   在此之前：開啟檔案只開選的那幾張 —— 使用者回報「在起始頁面拖單一個檔案或開啟檔案時，它會自動讀取路徑底下所有圖檔」，同意建議後改，0.32.1。原本照 PLAN F-02 會列出同一層的照片，並把資料夾記進最近開啟。`Controller.open_paths(paths)`：第一個是資料夾就 `open_folder`，是檔案就 `open_files`（只取存在的檔案）；`open_files` 去掉不支援的與重複的，依 `_sort_key` 排序，顯示第一個選的，沒有任何照片時以第一個檔名報 `error.unsupported`；`open()`／`open_file()` 都改走這裡。列資料夾與開檔共用新的 `_deliver_photos(find, path, then)`（背景交付、只交最新一次，所以開檔會取代還在列的資料夾，反之亦然）。`_set_photos(folder | None, photos)`：沒有資料夾時不呼叫 `remember_folder`，改呼叫新的 `Settings.remember_browse_folder()`。`Settings.browse_folder`（開檔／開資料夾視窗與拼貼選檔的起點）：`remember_folder` 也會更新它，`forget_folder`／`clear_recent` 一併清掉，舊設定檔沒有時取 `last_folder`。`MainWindow.open_file_dialog` 改用 `getOpenFileNames` 多選，`dropEvent` 把所有拖進來的路徑交給 `open_paths`（原本只開第一個）。決定：同時拖資料夾和檔案時以第一個為準，不混在一起開。測試：test_controller 換掉「開檔列同一層」「開檔選到第 3 張」兩項，加只開那張、不進最近開啟、多張依名排序、略過非照片、資料夾在前開整個、開檔取代列到一半的資料夾；test_settings 加 4 項；test_main_window 加拖多張、開檔視窗多選與起點。PLAN 第 2.1 節（F-01、F-02）、第 3.7 節（拖曳開啟）、第 7.3 節已同步。
   在此之前：歡迎畫面加上「開啟檔案」按鈕 —— 使用者要求「多一個開啟檔案放在左邊，右邊是資料夾」，看過三種排法（快捷鍵寫在名稱下面／不寫快捷鍵／整欄加寬）後先選了寫在名稱下面，做出來後改選不寫快捷鍵，0.32.0（還沒發行，所以兩次改動共用這個版號）。`OpenFolderButton` 改為通用的 `WelcomeButton(icon_name, label_key, shortcut_key)`：圖示與名稱一起置中（`content_layout()` 回傳起點與截斷後的名稱，名稱過長以「…」截斷），快捷鍵只在工具提示；`WelcomeView.open_file_button`（新圖示 `resources/icons/image.svg`、`icons.ICON_IMAGE`，自繪）與 `open_folder_button` 放在 `QHBoxLayout` 裡並排，新訊號 `open_file_requested` 接到 `MainWindow.open_file_dialog`；`buttons()` 回傳兩顆，啟用、開場浮現（同時於 `OPENING_BUTTON_AT_MS`）都對兩顆一起做。`theme.py` 新增 `WELCOME_BUTTON_GAP`（= `SPACE_MD` 12）與 `WELCOME_BUTTON_WIDTH`（(340 − 12) / 2 = 164，取 12 px 間距是為了讓按鈕寬是 4 的倍數）；欄寬維持 340。翻譯加 `welcome.open_file`。測試：test_welcome_view 加並排位置、各自發出訊號、圖示與名稱置中；test_main_window、test_language_switch、test_theme 同步。PLAN 第 3.6、3.7 節已同步。
   在此之前：最近開啟可以移除紀錄 —— 使用者要求「最近開啟那邊要有移除紀錄的按鈕」，看過以真實歡迎畫面畫的四格模擬圖後說「照這樣做」，0.31.0。歡迎畫面每一列（`RecentFolderRow`）在滑鼠移上或有焦點時，右側張數／日子換成 28 px 的 × `IconButton`（新圖示 `resources/icons/x.svg`、`icons.ICON_X`，距右緣 `SPACE_SM`），按下或按 Delete 發出 `remove_requested` → `WelcomeView.folder_removed(str)`；列加上 role `recent_row`，`theme.py` 讓列上的圖示按鈕懸停／按下用 `TRACK_HOVER`／`TRACK_PRESSED`（列本身已是 `BG_RAISED`）；名稱截斷寬度固定，不因換成按鈕而跳動。滑鼠狀態以 enter/leave 事件記在 `_pointer_over`，不用 `underMouse()`，測試才能送事件模擬。選單 `AppMenu.recent_menu` 最下面加分隔線與 `clear_recent_action`「清除紀錄」→ `recent_cleared`。`Settings.forget_folder()`／`clear_recent()`：同時刪 `recent_details`，移除的若是 `last_folder` 也清掉（決定：避免「啟動時開啟上次資料夾」又把剛移除的資料夾開回來）。`MainWindow._show_recent_folders()` 取代兩處重複的刷新程式；移除與清除後立即 `save()`。快捷鍵表加「歡迎畫面：把選取的資料夾從最近開啟移除 Delete」。只刪紀錄，不碰資料夾與照片。PLAN 第 3.1、3.7、7.3、8 節已同步。
@@ -5446,3 +5447,33 @@ app 樣式表的通用 `QPushButton` 最小高度會把標籤撐成 27 px，所�
 - PLAN 已改：第 1 節、2.6（X-08、X-10）、2.9（新增 W-01 ～ W-13）、3.1（工具列）、3.11（第 7 列）、3.13（拼貼匯出、按鈕停用）、3.14（新增浮水印模式）、5、6（原圖直通、浮水印）、7.3、8（T）、9（階段 17）、12、13.2
 - 草案 `docs/WATERMARK_PLAN.md` 內容已併入 PLAN.md 後刪除
 - 不需要新套件：文字用 Pillow（FreeType），斜切用 OpenCV
+
+## 浮水印（階段 17）實作（0.33.0，2026-11-06）
+
+使用者看過以真實主視窗做的五張模擬圖（進入模式、拖曳對齊、直式中文粗斜體、英文粗斜體左上、匯出對話框）後說「照這樣做」。
+
+- `core/watermark.py`（新）：`WatermarkSpec`（kind、text、bold、italic、colour、opacity、size、anchor、offset、margin；`sane()`、`to_dict()`／`from_dict()`、`with_anchor()`、`with_style_reset()`）；`load_fonts()`／`choose_font()`（Inter；含 ≥ U+2E80 的字整行用 `msjh.ttc`／`msjhbd.ttc`；沒有斜體字型檔就傾斜 12°）；`rasterise()` 以 Pillow FreeType 在目標大小畫字（行高 = 短邊 × size%，超過寬度 90% 縮小重畫），`_slanted()` 以 `cv2.warpAffine` 斜切；`layout()`（九宮格 + 邊距 + 偏移，夾在畫面內）、`from_drop()`（最近的九宮格 + 偏移，`snap` 內清為 0）、`guides()`、`anchor_of()`；`compose()` 只把外框範圍轉回編碼值混合再量化（uint8 用 `pipeline.quantise_srgb8` 加抖動、uint16 用 `quantise_srgb16`、float 直接混），範圍外逐位元不變；`apply()`、`to_rgba()`
+- `core/exporter.py`：`ExportOptions.watermark`（`sane()` 把沒有字的浮水印變成 `None`）；`can_copy_original()` 有浮水印就不複製；`_develop()` 縮放後經 `_watermarked()`；`export_pixels()`（拼貼、輪播單張）也經過它。多張匯出走 `export_decoded()`，自動帶到
+- `app/settings.py`：`WatermarkSettings`（enabled、spec、`active`），存在 `settings.json` 的 `watermark`
+- `app/controller.py`：`watermark_picture(spec, frame)` 依代理圖大小（長邊 ≤ `PROXY_LONG_EDGE`）畫小圖，回傳 `WatermarkPicture`（rgba、scale、missing_glyphs）；字型第一次用時才找
+- `ui/watermark_panel.py`（新）：開關、文字群組（輸入框、B／I `StyleToggle`、白／黑、大小、不透明度、缺中文字型提示）、位置群組（`AnchorPicker`、說明、邊距）、重設／離開浮水印
+- `ui/widgets/anchor_picker.py`（新）：3 × 3、20 px、間距 4 px，選中 ACCENT，懸停 BG_RAISED、按下 TRACK_PRESSED、停用 TRACK；方向鍵移動；每格工具提示是位置名稱
+- `ui/watermark_overlay.py`（新）：同 `spot_overlay` 的做法由畫布轉交繪圖與滑鼠；位置以原尺寸畫面算（`layout()`），螢幕上只縮放；按在浮水印上拖曳（吸附距離 `SNAP_DISTANCE` 8 螢幕 px 換算成畫面 px，Alt 不吸附），雙擊回右下；虛線外框與停在浮水印前的對齊線
+- `ui/preview_view.py`：`PhotoCanvas.watermark`、`frame_size`；按下、移動、放開、雙擊、離開、游標（浮水印上是四向箭頭）
+- `ui/main_window.py`：`toggle/enter/leave_watermark()`、`in_watermark`、`_draw_watermark()`（以 (spec, frame) 去重）、`_on_watermark_spec()`（從空白打字時自動打開開關）、`_on_watermark_enabled()`、`_on_watermark_moved()`、`_remember_export()`（三種匯出對話框共用，回寫開關）；`_WATERMARK_SHORTCUTS`；Esc 先離開浮水印；模式中前後對比、復原重做、拼貼按鈕停用，Tab 回到一般焦點移動；開新資料夾先離開浮水印
+- `ui/export_dialog.py`：第 7 列「浮水印」（摘要 + 開關，沒有字時停用並寫「在工具列的浮水印中設定」），摘要在 `showEvent` 依實際字型以「…」截斷；`watermark_summary()`；`options` 帶入 spec
+- `ui/toolbar.py`：`watermark_button`（雙圖拼貼右邊）；`ui/shortcuts.py`：T；`ui/theme.py`：`WATERMARK_*`、`ANCHOR_*`、`#WatermarkPanel`；`ui/icons.py`：`ICON_STAMP`，`resources/icons/stamp.svg` 專案自繪（原本照 Lucide 的路徑畫，發現第三方聲明寫圖示都是自繪、不含 Lucide 檔案，改成自己畫的印章）
+- 翻譯：`toolbar.watermark`、`shortcut.watermark`、`watermark.*`（含九個位置名稱與 custom）、`export.watermark*`
+- 測試：新 `test_watermark.py`（42 項）、`test_anchor_picker.py`、`test_watermark_overlay.py`、`test_watermark_panel.py`；`test_exporter.py`、`test_settings.py`、`test_batch_export.py`、`test_export_dialog.py`、`test_main_window.py` 各加
+- 實機（離線視窗、使用者的 `各相片測試` 照片，只讀）：100%／125%／150%、英文介面截圖；模擬拖曳到下方中間吸附成功；直式照片長邊 2048 實際匯出，粗斜體中文在下方中間；2400 萬像素加浮水印 0.046 秒
+- 決定：
+  - 合成改成只重新量化浮水印範圍（原計畫整張 16 位元再量化），範圍外完全不動，JPG 直通的像素也不受抖動影響
+  - 平移不改成空白鍵：按在浮水印上才拖它，其他地方照常平移
+  - 浮水印小圖依代理圖大小畫，拖曳只移動小圖
+  - Inter 斜體字型檔沒有在電腦上找到，下載要使用者同意；沒有之前英文斜體以傾斜代替，放進 `resources/fonts` 後程式自動改用
+- 已知問題：
+  - 完整 pytest 曾兩次中途當掉（Windows access violation，背景執行緒列資料夾、主執行緒在 `test_controller` 等訊號時），一次在加介面測試之前。另外發現新加的匯出對話框測試把強制回應的對話框留著沒關，擋住之後所有視窗的按鍵與滑鼠，造成 5 項快捷鍵與懸停測試失敗——已改成測試結束就關掉。修正後連跑兩次完整 pytest 都全過；加浮水印之前的版本也連跑兩次全過。當掉的原因沒有找到，和第 3 節記的「Qt 收尾時當掉」可能是同一類，再出現時要查
+  - 原本 `test_controller.py` 單獨連跑 4 次、加上它前面的測試連跑 3 次都沒有重現
+  - 既有的不一致（不是這次造成的）：PLAN 第 6 節「JPG 原圖直通」寫「其他情況…保留原檔的色彩空間」，但程式只對 sRGB 的 JPG 直通，Adobe RGB 等 JPG 重新編碼時會轉成 sRGB
+  - 切換語言時，浮水印模式中的工具列標題要等離開再進入才換語言（雙圖拼貼同樣如此）
+- PLAN 改了：第 2.9 節（W-04 斜體字型檔、W-12）、3.14（圖示、平移）、第 6 節（原圖直通、浮水印合成方式、預覽小圖）、第 9 節（階段 17 的 W3、W4 與驗收勾選）、13.2；CLAUDE.md 第 4 節那一句的措辭

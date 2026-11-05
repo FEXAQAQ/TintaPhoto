@@ -55,6 +55,7 @@ from core import (
     presets,
     sidecar,
     thumbnails,
+    watermark,
 )
 from core.auto_light import AUTO_NAMES
 from core.auto_light import auto_light as find_auto_light
@@ -70,6 +71,7 @@ from core.cache import ThumbnailCache
 from core.decoder import DecodedPhoto, DecodeError
 from core.metadata import PhotoMetadata
 from core.presets import Preset
+from core.watermark import WatermarkSpec
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +265,19 @@ class Preview:
     backdrop: bool = False
 
 
+@dataclass(frozen=True)
+class WatermarkPicture:
+    """The watermark drawn for the screen (PLAN.md 3.14)."""
+
+    #: 8 bit RGBA, the watermark's colour in every pixel and its coverage in
+    #: the alpha.
+    rgba: NDArray[np.uint8]
+    #: Pixels of the picture per pixel of the photo's full size frame.
+    scale: float
+    #: There was Chinese text and no Chinese font to draw it with.
+    missing_glyphs: bool
+
+
 class Controller(QObject):
     """Owns the open folder, the current photo and everything in flight."""
 
@@ -397,6 +412,8 @@ class Controller(QObject):
         self._shot_white_balance: tuple[float, float] = (0.0, 0.0)
         self._preview_long_edge = decoder.PROXY_LONG_EDGE
         self._sized: dict[tuple[Path, int], DecodedPhoto] = {}
+        #: The fonts the watermark is drawn in, found the first time it is.
+        self._watermark_fonts: watermark.Fonts | None = None
 
         #: How many screen pixels one pixel of the photo takes up, and which
         #: part of the frame is on screen, in fractions of it (PLAN.md 3.3).
@@ -2331,6 +2348,33 @@ class Controller(QObject):
 
     def _on_export_estimate(self, _path: Path, size: int) -> None:
         self.export_estimate_ready.emit(int(size))
+
+    # -- the watermark (PLAN.md 2.9, 3.14) -------------------------------
+
+    def watermark_picture(
+        self, spec: WatermarkSpec, frame: tuple[int, int]
+    ) -> WatermarkPicture | None:
+        """Draw *spec* for the photo on screen, whose full size is *frame*.
+
+        Drawn for the frame shrunk to the preview's size, as the photo on
+        screen is, rather than at full size: a few milliseconds, so it is
+        done at once, and the overlay only moves the result while it is
+        dragged. ``None`` when there is nothing to draw.
+        """
+        if min(frame) <= 0:
+            return None
+        if self._watermark_fonts is None:
+            self._watermark_fonts = watermark.load_fonts()
+        scale = min(1.0, decoder.PROXY_LONG_EDGE / max(frame))
+        shown = (max(1, round(frame[0] * scale)), max(1, round(frame[1] * scale)))
+        sprite = watermark.rasterise(spec, shown, self._watermark_fonts)
+        if sprite is None:
+            return None
+        return WatermarkPicture(
+            rgba=watermark.to_rgba(sprite),
+            scale=shown[0] / frame[0],
+            missing_glyphs=sprite.missing_glyphs,
+        )
 
 
     # -- thumbnails ------------------------------------------------------

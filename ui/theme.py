@@ -220,6 +220,17 @@ COLLAGE_SEAM_GRAB: Final[int] = 8
 #: How see-through the second photo is while it is aligned over the first:
 #: half, so that both can be read at once (PLAN.md 3.13).
 COLLAGE_ALIGN_OPACITY: Final[float] = 0.50
+#: The watermark over the photo (PLAN.md 3.14): a dashed outline round it
+#: while the pointer is over it or it is dragged, held SPACE_XS clear of the
+#: text, and 1 px accent guides where it has snapped, stopping SPACE_SM short
+#: of it so they never cross the text.
+WATERMARK_OUTLINE_WIDTH: Final[int] = 1
+WATERMARK_OUTLINE_GAP: Final[int] = 4
+WATERMARK_GUIDE_WIDTH: Final[int] = 1
+WATERMARK_GUIDE_GAP: Final[int] = 8
+#: The position picker (PLAN.md 3.14): three by three squares.
+ANCHOR_CELL: Final[int] = 20
+ANCHOR_GAP: Final[int] = 4
 
 HISTOGRAM_HEIGHT: Final[int] = 160
 #: The band above the plot that holds its name and the two triangles.
@@ -613,7 +624,7 @@ QToolTip {{
     padding: {SPACE_XS}px {SPACE_SM}px;
 }}
 
-#Inspector, #CollagePanel {{
+#Inspector, #CollagePanel, #WatermarkPanel {{
     background-color: {BG_PANEL};
     border-left: {BORDER_WIDTH}px solid {BORDER};
 }}

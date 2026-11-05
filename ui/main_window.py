@@ -56,6 +56,7 @@ from ui.filmstrip import Filmstrip, FilmstripTab
 from ui.histogram_widget import clipping_overlay
 from ui.about_dialog import AboutDialog
 from ui.collage_panel import CollagePanel
+from ui.watermark_panel import WatermarkPanel
 from ui.collage_view import CollageCanvas
 from ui.devlog_dialog import DevlogDialog
 from ui.export_dialog import ExportDialog
@@ -105,6 +106,11 @@ class MainWindow(QMainWindow):
         self._batch_total = 0
         #: Whether the collage has the middle of the window (PLAN.md 3.13).
         self._collage_mode = False
+        #: Whether the watermark is being placed (PLAN.md 3.14).
+        self._watermark_mode = False
+        #: What the watermark on screen was last drawn for, so that a new
+        #: preview of the same photo does not draw it again.
+        self._watermark_drawn: tuple[object, tuple[int, int]] | None = None
         self._developed = None
         #: Where the pixels on screen belong: the size of the whole photo and
         #: the part of it they cover, so that redrawing them with the clipping
@@ -168,6 +174,10 @@ class MainWindow(QMainWindow):
         middle_layout.addWidget(self.collage_panel)
         self.collage_canvas.hide()
         self.collage_panel.hide()
+        #: In the inspector's place while the watermark is open (PLAN.md 3.14).
+        self.watermark_panel = WatermarkPanel(middle)
+        middle_layout.addWidget(self.watermark_panel)
+        self.watermark_panel.hide()
 
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -261,6 +271,16 @@ class MainWindow(QMainWindow):
         self._connect_presets()
         self._connect_filters()
         self._connect_collage()
+        self._connect_watermark()
+
+    def _connect_watermark(self) -> None:
+        """Join the watermark's panel and overlay to the settings (PLAN.md 3.14)."""
+        panel = self.watermark_panel
+        panel.spec_changed.connect(self._on_watermark_spec)
+        panel.enabled_changed.connect(self._on_watermark_enabled)
+        panel.leave_requested.connect(self.leave_watermark)
+        self.preview.canvas.watermark.moved.connect(self._on_watermark_moved)
+        self.toolbar.watermark_button.clicked.connect(self.toggle_watermark)
 
     def _connect_collage(self) -> None:
         """Join the collage's panel and canvas to its controller (PLAN.md 3.13)."""
@@ -414,6 +434,9 @@ class MainWindow(QMainWindow):
 
     def _on_folder_opened(self, photos: list[Path]) -> None:
         """Fill the filmstrip and start making its thumbnails."""
+        # Another folder starts in the editor, where the panels are set up
+        # for what was opened.
+        self.leave_watermark()
         self.filmstrip.set_photos(photos)
         self.controller.request_thumbnails(photos)
         self._show_recent_folders()
@@ -433,7 +456,8 @@ class MainWindow(QMainWindow):
             # The collage keeps the toolbar until it is left.
             return
         current = self.controller.current
-        if current is not None:
+        if current is not None and not self._watermark_mode:
+            # The watermark keeps its title while photos are stepped through.
             self.toolbar.set_title(current.parent.name, current.name)
         self._enable_export()
 
@@ -460,7 +484,9 @@ class MainWindow(QMainWindow):
         if photo is None or self.controller.exporting:
             return
 
-        dialog = ExportDialog(photo, self._settings.export, self)
+        dialog = ExportDialog(
+            photo, self._settings.export, self, watermark=self._settings.watermark
+        )
         dialog.options_changed.connect(self._on_export_options)
         self.controller.export_estimate_ready.connect(dialog.set_estimate)
         self._dialog = dialog
@@ -475,13 +501,26 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
 
-        self._settings.export = dialog.chosen_settings
+        self._remember_export(dialog)
         button = self.toolbar.export_button
         button.start(self.flight.remaining_ms())
         if self.controller.export(dialog.target, dialog.options):
             button.setEnabled(False)
         else:
             self._call_off_export()
+
+    def _remember_export(self, dialog: ExportDialog) -> None:
+        """Keep what an accepted export dialog chose, for next time (PLAN.md 3.11).
+
+        Its watermark switch is the panel's switch too (W-09), unless there
+        was no text to switch on.
+        """
+        self._settings.export = dialog.chosen_settings
+        if not self._settings.watermark.spec.is_empty:
+            self._settings.watermark.enabled = dialog.watermark_enabled
+            self.watermark_panel.set_state(
+                dialog.watermark_enabled, self._settings.watermark.spec
+            )
 
     def _on_export_options(self, options: object) -> None:
         """Tell the dialog what its settings would come to (PLAN.md 3.11)."""
@@ -542,7 +581,13 @@ class MainWindow(QMainWindow):
         paths = self.filmstrip.checked_photos()
         if not paths or self.controller.exporting or self.collage.exporting:
             return
-        dialog = ExportDialog(paths[0], self._settings.export, self, batch=len(paths))
+        dialog = ExportDialog(
+            paths[0],
+            self._settings.export,
+            self,
+            batch=len(paths),
+            watermark=self._settings.watermark,
+        )
         self._batch_sending = paths
         try:
             accepted = self._run_dialog(dialog, send_off=True)
@@ -551,7 +596,7 @@ class MainWindow(QMainWindow):
         if not accepted:
             return
 
-        self._settings.export = dialog.chosen_settings
+        self._remember_export(dialog)
         # The photos are on their way, so what was ticked has done its job.
         self.filmstrip.stop_choosing()
         self._batch_total = len(paths)
@@ -710,6 +755,115 @@ class MainWindow(QMainWindow):
 
     # -- the collage (PLAN.md 2.8, 3.13) ---------------------------------
 
+    # -- the watermark (PLAN.md 2.9, 3.14) -------------------------------
+
+    def toggle_watermark(self) -> None:
+        """Open the watermark, or go back to editing if it is open (T)."""
+        if self._watermark_mode:
+            self.leave_watermark()
+        else:
+            self.enter_watermark()
+
+    def enter_watermark(self) -> None:
+        """Place the watermark over the photo, its panel in the inspector's place.
+
+        The photo on screen is the photo as it will be exported - adjusted
+        and cropped - so a crop in progress is finished first, and the tools
+        that take the click on the photo are put down.
+        """
+        if self._watermark_mode or self._collage_mode or self.controller.current is None:
+            self.toolbar.watermark_button.setChecked(self._watermark_mode)
+            return
+        if self.controller.cropping:
+            self.finish_crop()
+        self.set_spot_tool(False)
+        self.set_picking_white_balance(False)
+        self.controller.set_comparing(False)
+        self._watermark_mode = True
+        self.toolbar.watermark_button.setChecked(True)
+        self.toolbar.collage_button.setEnabled(False)
+        self.toolbar.set_title(None, tr("watermark.title"))
+        self.toolbar.undo_button.setEnabled(False)
+        self.toolbar.redo_button.setEnabled(False)
+        self.preview.view_bar.compare_button.setEnabled(False)
+        stored = self._settings.watermark
+        self.watermark_panel.set_state(stored.enabled, stored.spec)
+        self.inspector.hide()
+        self.watermark_panel.show()
+        self.preview.canvas.watermark.set_active(True)
+        self._watermark_drawn = None
+        self._draw_watermark()
+        self.preview.canvas.setFocus()
+
+    def leave_watermark(self) -> None:
+        """Go back to editing; the watermark stays set for the next export."""
+        if not self._watermark_mode:
+            return
+        self._watermark_mode = False
+        canvas = self.preview.canvas
+        canvas.watermark.set_active(False)
+        canvas.update()
+        self.toolbar.watermark_button.setChecked(False)
+        self.toolbar.collage_button.setEnabled(True)
+        self.preview.view_bar.compare_button.setEnabled(True)
+        self.watermark_panel.hide()
+        if not self.is_inspector_collapsed():
+            self.inspector.show()
+        current = self.controller.current
+        if current is not None:
+            self.toolbar.set_title(current.parent.name, current.name)
+        self._on_history_changed(self.controller.can_undo, self.controller.can_redo)
+        self.preview.setFocus()
+
+    @property
+    def in_watermark(self) -> bool:
+        """Return whether the watermark is being placed."""
+        return self._watermark_mode
+
+    def _draw_watermark(self) -> None:
+        """Draw the watermark for the photo on screen, unless it already is."""
+        if not self._watermark_mode:
+            return
+        canvas = self.preview.canvas
+        spec = self._settings.watermark.spec
+        frame = canvas.frame_size
+        if self._watermark_drawn == (spec, frame):
+            return
+        self._watermark_drawn = (spec, frame)
+        picture = self.controller.watermark_picture(spec, frame)
+        if picture is None:
+            canvas.watermark.set_picture(spec, None, 1.0)
+            self.watermark_panel.set_missing_font(False)
+        else:
+            canvas.watermark.set_picture(spec, picture.rgba, picture.scale)
+            self.watermark_panel.set_missing_font(picture.missing_glyphs)
+        canvas.update()
+
+    def _on_watermark_spec(self, spec: object) -> None:
+        """Take on what the panel says the watermark is now.
+
+        Text typed into an empty watermark turns it on for exports, since a
+        watermark being written is one that is wanted (W-09).
+        """
+        stored = self._settings.watermark
+        if stored.spec.is_empty and not spec.is_empty and not stored.enabled:
+            stored.enabled = True
+            self.watermark_panel.set_state(True, spec)
+        stored.spec = spec
+        self._draw_watermark()
+
+    def _on_watermark_enabled(self, enabled: bool) -> None:
+        """Remember whether exported photos carry the watermark (W-09)."""
+        self._settings.watermark.enabled = enabled
+
+    def _on_watermark_moved(self, spec: object, settled: bool) -> None:
+        """Take on where the watermark was dragged; the picker follows."""
+        self._settings.watermark.spec = spec
+        self._watermark_drawn = (spec, self.preview.canvas.frame_size)
+        self.watermark_panel.set_spec(spec)
+        if settled:
+            self.preview.canvas.update()
+
     def toggle_collage(self) -> None:
         """Open the collage, or go back to editing if it is open."""
         if self._collage_mode:
@@ -740,6 +894,7 @@ class MainWindow(QMainWindow):
         # The card is about the photo being edited, which the collage covers.
         self.set_info_shown(False)
         self.toolbar.info_button.setEnabled(False)
+        self.toolbar.watermark_button.setEnabled(False)
         self._show_toolbar_for_welcome()
         self.toolbar.collage_button.setChecked(True)
         self.preview.hide()
@@ -761,6 +916,7 @@ class MainWindow(QMainWindow):
         self.filmstrip.set_choosing_allowed(True)
         self._show_toolbar_for_welcome()
         self.toolbar.info_button.setEnabled(True)
+        self.toolbar.watermark_button.setEnabled(True)
         self.toolbar.collage_button.setChecked(False)
         self.collage_canvas.hide()
         self.collage_panel.hide()
@@ -819,6 +975,7 @@ class MainWindow(QMainWindow):
             collage_name=self.collage.default_name(),
             collage_size=self.collage.output_size(),
             carousel=self._settings.collage.carousel,
+            watermark=self._settings.watermark,
         )
         dialog.options_changed.connect(self._on_export_options)
         self.collage.export_estimate_ready.connect(dialog.set_estimate)
@@ -831,7 +988,7 @@ class MainWindow(QMainWindow):
             self._dialog = None
         if not accepted:
             return
-        self._settings.export = dialog.chosen_settings
+        self._remember_export(dialog)
         self._settings.collage.carousel = dialog.carousel
         self.toolbar.export_button.start(self.flight.remaining_ms())
         if self.collage.export(dialog.target, dialog.options, dialog.carousel):
@@ -878,6 +1035,9 @@ class MainWindow(QMainWindow):
             region=preview.region,
             blend=blend,
         )
+        # Another photo, or another crop, may be another shape: the watermark
+        # is drawn again for it (PLAN.md 3.14).
+        self._draw_watermark()
         if not preview.provisional and preview.path == self.controller.current:
             self._developed_path = preview.path
             self._stop_developing()
@@ -926,7 +1086,8 @@ class MainWindow(QMainWindow):
 
     def _on_history_changed(self, can_undo: bool, can_redo: bool) -> None:
         """Enable undo and redo according to the current photo's history."""
-        if self._collage_mode:
+        if self._collage_mode or self._watermark_mode:
+            # Neither the collage nor the watermark is in the photo's history.
             return
         self.toolbar.undo_button.setEnabled(can_undo)
         self.toolbar.redo_button.setEnabled(can_redo)
@@ -1532,6 +1693,7 @@ class MainWindow(QMainWindow):
             "shortcut.check_all": self.check_all_photos,
             "shortcut.check_none": self.check_no_photos,
             "shortcut.collage": self.toggle_collage,
+            "shortcut.watermark": self.toggle_watermark,
             "shortcut.settings": self.open_settings,
             "shortcut.fullscreen": self.toggle_full_screen,
             "shortcut.zoom_in": canvas.zoom_in,
@@ -1561,8 +1723,10 @@ class MainWindow(QMainWindow):
             )
 
     def _on_shortcut(self, key: str, handler: Callable[[], None]) -> None:
-        """Run a shortcut, unless it acts on the editor the collage covers."""
+        """Run a shortcut, unless it acts on what the collage or the watermark covers."""
         if self._collage_mode and key not in _COLLAGE_SHORTCUTS:
+            return
+        if self._watermark_mode and key not in _WATERMARK_SHORTCUTS:
             return
         handler()
 
@@ -1589,7 +1753,9 @@ class MainWindow(QMainWindow):
         over the photo; then full screen, the only other thing Esc leaves
         (PLAN.md section 8).
         """
-        if self._collage_mode and self.collage_canvas.aligning:
+        if self._watermark_mode:
+            self.leave_watermark()
+        elif self._collage_mode and self.collage_canvas.aligning:
             # Esc ends the nearer thing first: aligning, then the collage.
             self.collage_panel.set_aligning(False)
         elif self._collage_mode:
@@ -1669,6 +1835,7 @@ class MainWindow(QMainWindow):
             event.key() == self._compare_key()
             and not event.isAutoRepeat()
             and not self._collage_mode
+            and not self._watermark_mode
         ):
             self.controller.set_comparing(True)
             event.accept()
@@ -1704,6 +1871,10 @@ class MainWindow(QMainWindow):
         if not isinstance(watched, QWidget) or watched.window() is not self:
             return False
         if event.key() not in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+            return False
+        if self._watermark_mode:
+            # The watermark's panel is not the inspector the key folds away,
+            # so Tab moves between its controls as usual.
             return False
         self.toggle_focus_mode()
         return True
@@ -1838,6 +2009,26 @@ _COLLAGE_SHORTCUTS: frozenset[str] = frozenset(
         "shortcut.settings",
         "shortcut.fullscreen",
         "shortcut.crop_cancel",
+    }
+)
+
+#: What still works while the watermark is being placed (PLAN.md 3.14):
+#: leaving it, stepping through the photos it is checked against, looking
+#: closer, and exporting. The rest acts on the editing panel it covers.
+_WATERMARK_SHORTCUTS: frozenset[str] = frozenset(
+    {
+        "shortcut.watermark",
+        "shortcut.crop_cancel",
+        "shortcut.toggle_filmstrip",
+        "shortcut.open_file",
+        "shortcut.open_folder",
+        "shortcut.export",
+        "shortcut.settings",
+        "shortcut.info",
+        "shortcut.zoom_in",
+        "shortcut.zoom_in_alternative",
+        "shortcut.zoom_out",
+        "shortcut.zoom_fit",
     }
 )
 

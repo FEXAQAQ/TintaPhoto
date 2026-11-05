@@ -2219,3 +2219,80 @@ def test_painting_with_the_spot_tool_mends_it_without_selecting_it(
     assert window.preview.canvas.spots.selected == -1 and window.spot_tool_on
     window.preview.canvas.spot_deleted.emit(0)
     assert window.controller.geometry.spots == ()
+
+
+# -- the watermark (PLAN.md 2.9, 3.14) --------------------------------------
+
+
+def _wait_for_photo(window: MainWindow, qt_app: object) -> None:
+    import time
+
+    deadline = time.perf_counter() + 10.0
+    while not window.preview.canvas.has_photo and time.perf_counter() < deadline:
+        qt_app.processEvents()  # type: ignore[attr-defined]
+
+
+def test_the_watermark_needs_a_photo(window: MainWindow) -> None:
+    window.toggle_watermark()
+    assert not window.in_watermark
+    assert not window.toolbar.watermark_button.isChecked()
+
+
+def test_the_watermark_takes_the_inspectors_place(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.toggle_watermark()
+    qt_app.processEvents()  # type: ignore[attr-defined]
+    assert window.in_watermark
+    assert window.toolbar.watermark_button.isChecked()
+    assert window.watermark_panel.isVisible() and not window.inspector.isVisible()
+    assert window.toolbar.title_label.text() == tr("watermark.title")
+    assert not window.toolbar.undo_button.isEnabled()
+    assert not window.toolbar.collage_button.isEnabled()
+    assert window.preview.canvas.watermark.active
+
+    window.on_escape()
+    qt_app.processEvents()  # type: ignore[attr-defined]
+    assert not window.in_watermark
+    assert window.inspector.isVisible() and not window.watermark_panel.isVisible()
+    assert window.toolbar.title_label.text().endswith("a.jpg")
+    assert window.toolbar.collage_button.isEnabled()
+    assert not window.preview.canvas.watermark.active
+
+
+def test_typing_the_first_text_turns_the_watermark_on(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    from core.watermark import WatermarkSpec
+
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.enter_watermark()
+    assert not window._settings.watermark.enabled
+    window.watermark_panel.spec_changed.emit(WatermarkSpec(text="© me"))
+    assert window._settings.watermark.enabled
+    assert window.watermark_panel.enabled
+    assert window._settings.watermark.active == WatermarkSpec(text="© me")
+    # Drawn over the photo, the size of the photo on screen.
+    overlay = window.preview.canvas.watermark
+    assert not overlay.screen_rect(window.preview.canvas.photo_rect()).isEmpty()
+
+
+def test_the_collage_and_the_watermark_keep_out_of_each_other(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.enter_collage()
+    assert not window.toolbar.watermark_button.isEnabled()
+    window.enter_watermark()
+    assert not window.in_watermark
+    window.leave_collage()
+    assert window.toolbar.watermark_button.isEnabled()
+
+
+def test_the_watermark_shortcut_is_t(window: MainWindow) -> None:
+    assert window.shortcut_handlers()["shortcut.watermark"] == window.toggle_watermark
+    assert tr("shortcut.watermark") == "T"

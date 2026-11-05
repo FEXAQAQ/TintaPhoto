@@ -1,6 +1,7 @@
 """The 44 px toolbar across the top of the window (PLAN.md 3.1).
 
-Left: application menu, undo, redo, the info card and the collage. Centre: folder name and file name of the
+Left: application menu, undo, redo, the info card, the collage and the
+watermark. Centre: folder name and file name of the
 current photo. Right: the export button, the only filled button in the whole
 interface.
 """
@@ -44,6 +45,12 @@ class Toolbar(QWidget):
             icons.ICON_COLLAGE, "toolbar.collage", "shortcut.collage", self
         )
         self.collage_button.setCheckable(True)
+        #: Opens the watermark (PLAN.md 3.14); checked while it is open, like
+        #: the collage.
+        self.watermark_button = IconButton(
+            icons.ICON_STAMP, "toolbar.watermark", "shortcut.watermark", self
+        )
+        self.watermark_button.setCheckable(True)
         #: Brings the info card up over the photo (PLAN.md 3.9); marked while
         #: the card is up, the way the eyedropper is while it is held.
         self.info_button = IconButton(icons.ICON_INFO, "toolbar.info", "shortcut.info", self)
@@ -70,6 +77,7 @@ class Toolbar(QWidget):
         layout.addSpacing(theme.SPACE_XS)
         layout.addWidget(self.info_button)
         layout.addWidget(self.collage_button)
+        layout.addWidget(self.watermark_button)
         layout.addStretch(1)
         layout.addWidget(self.title_label)
         layout.addStretch(1)
@@ -100,6 +108,7 @@ class Toolbar(QWidget):
             self.undo_button,
             self.redo_button,
             self.collage_button,
+            self.watermark_button,
             self.info_button,
             self.title_label,
             self.export_button,

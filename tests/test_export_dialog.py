@@ -307,3 +307,56 @@ def test_nonsense_in_the_settings_file_falls_back_to_what_works() -> None:
     assert export.quality == exporter.QUALITY_DEFAULT
     assert export.bits == 8
     assert export.long_edge == exporter.LONG_EDGE_MIN
+
+
+# -- the watermark (X-10, PLAN.md 2.9) ----------------------------------------
+
+
+def test_with_no_watermark_text_the_switch_cannot_be_turned_on(qt_app: object) -> None:
+    from app.settings import WatermarkSettings
+
+    dialog = ExportDialog(PHOTO, ExportSettings(), watermark=WatermarkSettings(enabled=True))
+    assert not dialog.watermark_switch.isEnabled()
+    assert dialog.watermark_label.text() == tr("export.watermark_unset")
+    assert dialog.options.watermark is None
+
+
+def test_the_watermark_row_says_what_will_be_added(qt_app: object) -> None:
+    from app.settings import WatermarkSettings
+    from core.watermark import WatermarkSpec
+
+    spec = WatermarkSpec(text="© me", bold=True)
+    dialog = ExportDialog(
+        PHOTO, ExportSettings(), watermark=WatermarkSettings(enabled=True, spec=spec)
+    )
+    assert dialog.watermark_switch.isChecked()
+    join = tr("export.watermark_join")
+    assert dialog.watermark_label.text() == join.join(
+        ["© me", tr("watermark.bold"), tr("watermark.anchor.bottom-right")]
+    )
+    assert dialog.options.watermark == spec
+    dialog.watermark_switch.setChecked(False)
+    assert dialog.options.watermark is None
+    assert not dialog.watermark_enabled
+
+
+def test_a_collage_offers_the_watermark_too(qt_app: object) -> None:
+    from app.settings import WatermarkSettings
+    from core.watermark import WatermarkSpec
+
+    dialog = ExportDialog(
+        PHOTO,
+        ExportSettings(),
+        collage_name="a_b_collage",
+        collage_size=(1920, 1080),
+        watermark=WatermarkSettings(enabled=True, spec=WatermarkSpec(text="me")),
+    )
+    # Left open, the modal dialog would keep every later window from getting
+    # its keys and its pointer.
+    dialog.show()
+    try:
+        assert dialog.watermark_switch.isVisible()
+        assert dialog.options.watermark is not None
+    finally:
+        dialog.hide()
+        dialog.deleteLater()

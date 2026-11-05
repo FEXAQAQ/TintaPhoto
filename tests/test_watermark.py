@@ -324,3 +324,13 @@ def test_no_watermark_returns_the_photo_itself(fonts: Fonts) -> None:
     image = _photo(np.uint8)
     assert watermark.apply(image, None, fonts) is image
     assert watermark.apply(image, WatermarkSpec(text=""), fonts) is image
+
+
+def test_the_screen_copy_carries_the_colour_and_the_coverage(fonts: Fonts) -> None:
+    spec = WatermarkSpec(text="I", size=20.0, opacity=50, colour="black")
+    sprite = watermark.rasterise(spec, FRAME, fonts)
+    assert sprite is not None
+    rgba = watermark.to_rgba(sprite)
+    assert rgba.shape == (sprite.size[1], sprite.size[0], 4)
+    assert int(rgba[:, :, :3].max()) == 0
+    assert int(rgba[:, :, 3].max()) == 128

@@ -49,6 +49,7 @@ from app.i18n import tr
 from ui import native, theme
 from ui.crop_overlay import CropOverlay
 from ui.spot_overlay import SpotOverlay
+from ui.watermark_overlay import WatermarkOverlay
 from ui.welcome_view import WelcomeView
 from ui.widgets.buttons import TextButton, tooltip
 from ui.widgets.ink import paint_ink_drop
@@ -144,6 +145,14 @@ class PhotoCanvas(QWidget):
         #: Like the eyedropper it takes the click, and panning goes to the
         #: space bar.
         self.spots = SpotOverlay(self)
+        #: The watermark, drawn over the photo while it is being placed
+        #: (PLAN.md 3.14). A press on it drags it; anywhere else still pans.
+        self.watermark = WatermarkOverlay(self)
+
+    @property
+    def frame_size(self) -> tuple[int, int]:
+        """Return the size of the photo on screen, at full resolution."""
+        return self._frame.width(), self._frame.height()
 
     # -- the eyedropper --------------------------------------------------
 
@@ -244,6 +253,7 @@ class PhotoCanvas(QWidget):
         same_photo = self._pixmap is not None and self._frame == whole
         self._pixmap = _to_pixmap(image)
         self._frame = whole
+        self.watermark.set_frame((whole.width(), whole.height()))
         self._source = _source_rect(whole, region)
         if region is None:
             # The whole photo: what every window of it is drawn on top of.
@@ -641,6 +651,7 @@ class PhotoCanvas(QWidget):
         painter.setOpacity(1.0)
         self.crop.paint(painter, photo)
         self.spots.paint(painter, photo)
+        self.watermark.paint(painter, photo)
 
     def _draw_edge(self, painter: QPainter, photo: QRectF) -> None:
         """Draw the hairline that separates the photo from the background.
@@ -692,6 +703,10 @@ class PhotoCanvas(QWidget):
         if self._picking and not self._space_held:
             self._pick_at(event.position())
             return
+        if self.watermark.active and self.watermark.press(event.position(), self.photo_rect()):
+            self._update_cursor(event.position())
+            self.update()
+            return
         if self._spots_have_the_click():
             if self.spots.press(event.position(), self.photo_rect()):
                 self._update_cursor(event.position())
@@ -713,6 +728,10 @@ class PhotoCanvas(QWidget):
                 # The brush circle follows the pointer, or the spot does.
                 self.spots.move(event.position(), self.photo_rect())
                 self.update()
+            if self.watermark.active:
+                free = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+                if self.watermark.move(event.position(), self.photo_rect(), free):
+                    self.update()
             self._update_cursor(event.position())
             return
         position = event.position().toPoint()
@@ -735,6 +754,10 @@ class PhotoCanvas(QWidget):
             event.position(), self.photo_rect()
         ):
             self.update()
+        if self._panning_from is None and self.watermark.release(
+            event.position(), self.photo_rect()
+        ):
+            self.update()
         self._panning_from = None
         self._update_cursor(event.position())
         if was_panning:
@@ -743,6 +766,11 @@ class PhotoCanvas(QWidget):
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt naming
         """Switch between fitting the window and actual pixels."""
         if self.crop.active or self._picking or self.spots.active:
+            return
+        if self.watermark.active and self.watermark.double_click(
+            event.position(), self.photo_rect()
+        ):
+            self.update()
             return
         if self._pixmap is not None:
             self.toggle_actual_size(event.position().toPoint())
@@ -806,6 +834,9 @@ class PhotoCanvas(QWidget):
         if self.spots.active:
             self.spots.set_pointer(None)
             self.update()
+        if self.watermark.active:
+            self.watermark.leave()
+            self.update()
 
     def _update_cursor(self, point: QPointF | None = None) -> None:
         """Show what the pointer would do where it is."""
@@ -827,6 +858,12 @@ class PhotoCanvas(QWidget):
                 if over or self.spots.dragging
                 else Qt.CursorShape.CrossCursor
             )
+            return
+        if self.watermark.active and (
+            self.watermark.dragging
+            or (point is not None and self.watermark.over(point, self.photo_rect()))
+        ):
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
             return
         can_pan = self._pixmap is not None and not self._fitting
         self.setCursor(

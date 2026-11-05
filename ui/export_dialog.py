@@ -3,7 +3,8 @@
 Six rows, each with its label in a column of its own so that every control
 starts at the same place: the format, the quality or the bit depth, the size,
 the name, the folder and what to do with the details of the shot - or, for a
-collage, whether its photos are also written one by one for a carousel.
+collage, whether its photos are also written one by one for a carousel - and
+whether the watermark set up in the toolbar is added (X-10).
 Along the bottom, roughly how large the file will be, and the two buttons.
 
 The dialog only decides; it exports nothing and develops nothing. Anything it
@@ -17,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -27,9 +29,10 @@ from PySide6.QtWidgets import (
 )
 
 from app.i18n import tr
-from app.settings import ExportSettings
-from core import exporter
+from app.settings import ExportSettings, WatermarkSettings
+from core import exporter, watermark
 from core.exporter import ExportOptions
+from core.watermark import WatermarkSpec
 from ui import theme
 from ui.widgets.buttons import PrimaryButton, TextButton
 from ui.widgets.dialog import Dialog
@@ -45,6 +48,18 @@ _BYTES_PER_MB = 1024 * 1024
 
 _SIZE_ORIGINAL = "original"
 _SIZE_CUSTOM = "custom"
+
+
+def watermark_summary(spec: WatermarkSpec) -> str:
+    """Return the watermark in a line: its text, its style and where it is."""
+    parts = [spec.text.strip()]
+    if spec.bold:
+        parts.append(tr("watermark.bold"))
+    if spec.italic:
+        parts.append(tr("watermark.italic"))
+    anchor = watermark.anchor_of(spec)
+    parts.append(tr(f"watermark.anchor.{anchor}" if anchor else "watermark.anchor.custom"))
+    return tr("export.watermark_join").join(parts)
 
 
 def quality_spec() -> SliderSpec:
@@ -78,6 +93,7 @@ class ExportDialog(Dialog):
         collage_size: tuple[int, int] | None = None,
         carousel: bool = False,
         batch: int | None = None,
+        watermark: WatermarkSettings | None = None,
     ) -> None:
         """Ask about exporting *source*, or a collage beside it.
 
@@ -91,6 +107,9 @@ class ExportDialog(Dialog):
         dialog writes all of them (X-09): each keeps its own name and only
         what is added to it is asked for, the size of each is its own, and
         *source* is the first of them, whose folder is offered.
+
+        *watermark* is the watermark set up in the toolbar's watermark mode;
+        the dialog only turns it on or off for this export (X-10).
         """
         super().__init__(parent)
         self._source = source
@@ -99,6 +118,7 @@ class ExportDialog(Dialog):
         self._stem = collage_name if collage_name is not None else source.stem
         self._settings = ExportSettings(**vars(settings))
         self._folder = Path(self._settings.folder) if self._settings.folder else source.parent
+        self._watermark = watermark if watermark is not None else WatermarkSettings()
 
         self.setWindowTitle(tr("export.title"))
         self.setModal(True)
@@ -130,6 +150,7 @@ class ExportDialog(Dialog):
         self._build_name(layout)
         self._build_location(layout)
         self._build_metadata(layout)
+        self._build_watermark(layout)
         self._build_carousel(layout)
         layout.addStretch(1)
         self._build_footer(layout)
@@ -276,6 +297,48 @@ class ExportDialog(Dialog):
         gps_row.addWidget(self.remove_gps_switch)
         self._metadata_rows = (row, gps_row)
 
+    def _build_watermark(self, layout: QVBoxLayout) -> None:
+        """Whether this export carries the watermark, and what it is (X-10).
+
+        Only switched here: the text and its place are set in the toolbar's
+        watermark mode, which the summary points to while there is no text.
+        """
+        row = self._row(layout, "export.watermark")
+        self.watermark_label = QLabel("", self)
+        self.watermark_label.setProperty("role", "secondary")
+        row.addWidget(self.watermark_label, 1)
+        self.watermark_switch = Switch(self)
+        row.addWidget(self.watermark_switch)
+        spec = self._watermark.spec
+        empty = spec.is_empty
+        self.watermark_switch.setChecked(self._watermark.enabled and not empty)
+        self.watermark_switch.setEnabled(not empty)
+        self.watermark_switch.toggled.connect(lambda _on: self._changed())
+        self._watermark_summary = (
+            tr("export.watermark_unset") if empty else watermark_summary(spec)
+        )
+        self.watermark_label.setToolTip(self._watermark_summary)
+        self._show_watermark()
+
+    def _show_watermark(self) -> None:
+        """Show the watermark's summary, cut short at the end if it is long.
+
+        Measured again once the dialog is shown, when the label has the
+        stylesheet's font, as the folder is.
+        """
+        width = (
+            theme.DIALOG_WIDTH_EXPORT
+            - 2 * theme.PANEL_PADDING
+            - theme.DIALOG_LABEL_WIDTH
+            - 2 * theme.SPACE_SM
+            - theme.SWITCH_WIDTH
+        )
+        self.watermark_label.ensurePolished()
+        metrics = QFontMetrics(self.watermark_label.font())
+        self.watermark_label.setText(
+            metrics.elidedText(self._watermark_summary, Qt.TextElideMode.ElideRight, width)
+        )
+
     def _build_carousel(self, layout: QVBoxLayout) -> None:
         """A collage's photos, one by one beside it, for a carousel (K-13)."""
         self._carousel_row = self._row(layout, "export.carousel")
@@ -336,7 +399,13 @@ class ExportDialog(Dialog):
             long_edge=self._long_edge() if custom else None,
             keep_metadata=self.keep_metadata_switch.isChecked(),
             remove_gps=self.remove_gps_switch.isChecked(),
+            watermark=self._watermark.spec if self.watermark_enabled else None,
         ).sane()
+
+    @property
+    def watermark_enabled(self) -> bool:
+        """Return whether this export carries the watermark (X-10)."""
+        return self.watermark_switch.isEnabled() and self.watermark_switch.isChecked()
 
     @property
     def carousel(self) -> bool:
@@ -483,6 +552,7 @@ class ExportDialog(Dialog):
         """Measure the folder row again once the dialog has its real sizes."""
         super().showEvent(event)
         self._show_folder()
+        self._show_watermark()
 
 
     def _changed(self) -> None:

@@ -70,6 +70,8 @@ ICON_WAND: Final[str] = "wand"
 #: The spot removal tool, on the spot group's header (A-32): a blemish
 #: fading out, drawn dashed, with a spark where it was.
 ICON_SPOT: Final[str] = "spot"
+#: A rubber stamp: the toolbar button that opens the watermark (PLAN.md 3.14).
+ICON_STAMP: Final[str] = "stamp"
 
 
 def icons_dir() -> Path:
