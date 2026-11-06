@@ -681,24 +681,47 @@ def body_likeness(
     blue: NDArray[np.float32],
     brightness: NDArray[np.float32],
     tones: list[SkinTone],
+    reach: tuple[float, float] = BODY_COLOUR_REACH,
+    darker: tuple[float, float] = DARKER_REACH,
+    least_spread: float = COLOUR_LEAST_SPREAD,
 ) -> NDArray[np.float32]:
     """Return how much each pixel is the colour of any of *tones*, from 0 to 1.
 
     *red*, *blue* and *brightness* are :func:`colour_features` of the photo.
     The colour may be as far from the tone as an arm's is from the cheeks
-    (BODY_COLOUR_REACH), the brightness as far as for the face's own mask.
+    (*reach*, in spreads of at least *least_spread*), and as much darker as
+    *darker* says, in stops; brighter as for the face's own mask.
     """
     like = np.zeros(red.shape, dtype=np.float32)
     for tone in tones:
-        spread = min(max(tone.spread, COLOUR_LEAST_SPREAD), COLOUR_MOST_SPREAD)
+        spread = min(max(tone.spread, least_spread), max(COLOUR_MOST_SPREAD, least_spread))
         distance = cv2.sqrt((red - tone.red) ** 2 + (blue - tone.blue) ** 2) / np.float32(spread)
-        colour = np.float32(1.0) - _smoothstep(distance.reshape(red.shape), *BODY_COLOUR_REACH)
+        colour = np.float32(1.0) - _smoothstep(distance.reshape(red.shape), *reach)
         light = brightness - np.float32(tone.brightness)
-        lit = (np.float32(1.0) - _smoothstep(-light, *DARKER_REACH)) * (
+        lit = (np.float32(1.0) - _smoothstep(-light, *darker)) * (
             np.float32(1.0) - _smoothstep(light, *BRIGHTER_REACH)
         )
         np.maximum(like, colour * lit, out=like)
     return like
+
+
+def slope_among(
+    plane: NDArray[np.float32], weight: NDArray[np.float32], total: NDArray[np.float32]
+) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+    """Return *plane* blurred over the pixels *weight* takes in, and its slope there.
+
+    *total* is *weight* blurred by BODY_EDGE_BLUR. Pixels left out lend
+    nothing to the blur, so the edge between what is taken in and what is
+    not - skin and hair, say - leaves no slope behind. The slope is in the
+    plane's units per pixel.
+    """
+    smooth = cv2.GaussianBlur(plane * weight, (0, 0), BODY_EDGE_BLUR) / np.maximum(
+        total, np.float32(_EPSILON)
+    )
+    # OpenCV's 3x3 Sobel counts a slope eight times.
+    across = cv2.Sobel(smooth, cv2.CV_32F, 1, 0, ksize=3)
+    down = cv2.Sobel(smooth, cv2.CV_32F, 0, 1, ksize=3)
+    return smooth, cv2.sqrt(across * across + down * down) * np.float32(0.125)
 
 
 def body_size(size: tuple[int, int]) -> tuple[int, int]:
@@ -796,13 +819,8 @@ def body_mask(
         (red, BODY_EDGE_COLOUR, False),
         (blue, BODY_EDGE_COLOUR, False),
     ):
-        smooth = cv2.GaussianBlur(plane * weight, (0, 0), BODY_EDGE_BLUR) / np.maximum(
-            total, np.float32(_EPSILON)
-        )
-        # OpenCV's 3x3 Sobel counts a slope eight times.
-        across = cv2.Sobel(smooth, cv2.CV_32F, 1, 0, ksize=3)
-        down = cv2.Sobel(smooth, cv2.CV_32F, 0, 1, ksize=3)
-        steep = cv2.sqrt(across * across + down * down) > np.float32(8.0 * step)
+        smooth, slope = slope_among(plane, weight, total)
+        steep = slope > np.float32(step)
         if is_brightness:
             too_bright = smooth > np.float32(lit_level + BODY_LIT_MARGIN)
             # The bright side of the edge lies within a couple of pixels.

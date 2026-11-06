@@ -57,6 +57,48 @@ PAINTED_SPREAD: Final[float] = faces_module.COLOUR_MOST_SPREAD
 #: Dips in that likeness narrower than this share of the radius - a
 #: freckle, a hair - are filled, so a stroke does not come out speckled.
 SNAP_HOLE_FILL: Final[float] = 0.3
+#: Skin in shade is lit by the sky or by leaves, and comes out bluer or
+#: greener than the cheeks by 0.1 to 0.3 stops - outside the colour the skin
+#: beside the face may have when the cheeks vary little. Where a stroke
+#: keeps to skin, shade gets this looser colour (spreads of at least
+#: SNAP_SHADE_SPREAD, fully within the first reach and not at all beyond the
+#: second) and may be this much darker, in stops (measured on the user's
+#: portraits in dappled light, 2026-11-07). White and grey cloth comes as
+#: near in colour, so the looser colour only counts in shade - darker than
+#: the faces by SNAP_SHADE_FROM stops, fully so SNAP_SHADE_FULL stops
+#: further - and only where it joins skin of the close colour without an
+#: edge of colour (SNAP_EDGE_COLOUR) between.
+SNAP_SHADE_SPREAD: Final[float] = 0.15
+SNAP_SHADE_REACH: Final[tuple[float, float]] = (3.0, 5.0)
+SNAP_SHADE_DARKER: Final[tuple[float, float]] = (3.0, 5.0)
+SNAP_SHADE_FROM: Final[float] = 0.0
+SNAP_SHADE_FULL: Final[float] = 0.5
+#: An edge of colour, in stops of red or blue against green per pixel of the
+#: small copy, after the same blur as for the skin beside the face. Steeper
+#: than there: the edge of a shadow cast by the sun turns skin bluer at once
+#: (0.2 stops in two or three pixels), the edge of a sleeve or a strap
+#: changes the colour by a stop or more.
+SNAP_EDGE_COLOUR: Final[float] = 0.08
+#: Shade counts only where it joins a patch of skin at least this many
+#: pixels of the small copy across, so that the specks of gravel or a
+#: pavement that happen to be the colour of skin do not bring the rest in.
+SNAP_SKIN_SOLID: Final[int] = 7
+#: And only this far from such a patch, fully within half of it: a shadow
+#: on the body lies beside lit skin, a pavement in shade beside the legs goes
+#: on far beyond it. In S, the size of the largest face (:mod:`core.faces`),
+#: since how wide a shadow on a body can be goes with how large the body is;
+#: as a share of the long edge where no face was found. Half a face kept the
+#: beige pavement beside an arm in shade down to a few pixels on the user's
+#: portraits, where a twenty-fifth of the frame let in a band a face wide.
+SNAP_SHADE_NEAR: Final[float] = 0.5
+SNAP_SHADE_NEAR_FRAME: Final[float] = 0.025
+#: And only where it keeps this share of the faces' warmth - red against
+#: green less blue against green - none at the first, all at the second.
+#: Skin in green or blue shade measured 0.4 to 1.6 of it; grey, white and
+#: black under the same light keep next to none. A face with less warmth
+#: than SNAP_WARMTH_LEAST stops is not held to it.
+SNAP_SHADE_WARMTH: Final[tuple[float, float]] = (0.15, 0.35)
+SNAP_WARMTH_LEAST: Final[float] = 0.1
 
 #: The planes of :func:`field`.
 FOUND: Final[int] = 0
@@ -255,7 +297,11 @@ def field(
     features = faces_module.colour_features(small)
     tones = [face.tone for face in faces or () if faces_module.is_coloured(face.tone)]
     # With faces to take the colour from, every stroke keeps to the same.
-    shared = faces_module.body_likeness(*features, tones) if tones else None
+    if tones:
+        largest = max(faces_module.face_size(face, size) for face in faces or ())
+        shared = snap_likeness(features, tones, SNAP_SHADE_NEAR * largest)
+    else:
+        shared = None
     kept = np.ones(small.shape[:2], dtype=np.float32)
     added = np.zeros(small.shape[:2], dtype=np.float32)
     # From the last stroke back: what a stroke adds is then cut by every
@@ -334,8 +380,71 @@ def _likeness(
         )
         if not faces_module.is_coloured(tone):
             return np.ones(red.shape, dtype=np.float32)
-        like = faces_module.body_likeness(red, blue, brightness, [tone])
+        like = snap_likeness(features, [tone], SNAP_SHADE_NEAR_FRAME * max(red.shape))
     return faces_module.fill_holes(like, SNAP_HOLE_FILL * radius)
+
+
+def snap_likeness(
+    features: tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]],
+    tones: list[SkinTone],
+    reach: float,
+) -> NDArray[np.float32]:
+    """Return how much each pixel is skin of *tones*, shade included, from 0 to 1.
+
+    The skin beside the face's colour (:func:`core.faces.body_likeness`),
+    and, in shade joined to it with no edge of colour between and no more
+    than *reach* pixels from it, the looser colour of SNAP_SHADE_SPREAD and
+    SNAP_SHADE_REACH.
+    """
+    red, blue, brightness = features
+    close = faces_module.body_likeness(red, blue, brightness, tones)
+    loose = faces_module.body_likeness(
+        red,
+        blue,
+        brightness,
+        tones,
+        reach=SNAP_SHADE_REACH,
+        darker=SNAP_SHADE_DARKER,
+        least_spread=SNAP_SHADE_SPREAD,
+    )
+    ground = loose > 0.5
+    weight = ground.astype(np.float32)
+    total = cv2.GaussianBlur(weight, (0, 0), faces_module.BODY_EDGE_BLUR)
+    edge = np.zeros(red.shape, dtype=bool)
+    for plane in (red, blue):
+        _smooth, slope = faces_module.slope_among(plane, weight, total)
+        edge |= slope > np.float32(SNAP_EDGE_COLOUR)
+    count, labels = cv2.connectedComponents((ground & ~edge).astype(np.uint8), connectivity=4)
+    joined = np.zeros(count, dtype=bool)
+    # Shade joins skin, not a stray pebble or speck the colour of skin.
+    solid = cv2.erode(
+        (close > 0.5).astype(np.uint8), np.ones((SNAP_SKIN_SOLID, SNAP_SKIN_SOLID), np.uint8)
+    )
+    joined[np.unique(labels[solid > 0])] = True
+    joined[0] = False
+    lit = max(tone.brightness for tone in tones)
+    shade = _smoothstep(
+        np.float32(lit) - brightness, SNAP_SHADE_FROM, SNAP_SHADE_FROM + SNAP_SHADE_FULL
+    )
+    # A shadow on the body lies beside lit skin; a pavement in shade beside
+    # the legs goes on far beyond it.
+    away = cv2.distanceTransform((solid == 0).astype(np.uint8), cv2.DIST_L2, 5)
+    near = np.float32(1.0) - _smoothstep(away, 0.5 * reach, reach)
+    # Skin in shade keeps some of its warmth, red over blue; a grey pavement
+    # or a white sleeve in shade has none.
+    warmth = max(tone.red - tone.blue for tone in tones)
+    if warmth > SNAP_WARMTH_LEAST:
+        near = near * _smoothstep((red - blue) / np.float32(warmth), *SNAP_SHADE_WARMTH)
+    shaded = loose * shade * near
+    return np.where(joined[labels], np.maximum(close, shaded), close).astype(np.float32)
+
+
+def _smoothstep(values: NDArray[np.float32], low: float, high: float) -> NDArray[np.float32]:
+    """Return 0 below *low*, 1 above *high*, and a smooth step in between."""
+    position = np.clip((values - np.float32(low)) / np.float32(high - low), 0.0, 1.0)
+    return (position * position * (np.float32(3.0) - np.float32(2.0) * position)).astype(
+        np.float32
+    )
 
 
 def _as_float(value: Any) -> float | None:
@@ -365,6 +474,7 @@ __all__ = [
     "combined",
     "field",
     "reaches_nothing",
+    "snap_likeness",
     "stroke_mask",
     "thinned",
 ]

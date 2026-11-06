@@ -176,3 +176,42 @@ def test_thinned_paths_keep_their_ends() -> None:
     assert kept[-1] == points[-1]
     assert len(kept) < 20
 
+
+
+def _shaded_photo():
+    """The test person with a band of shade across the chest: darker, bluer, greener."""
+    from tests.test_whiten import _person_area
+
+    photo = _photo()
+    image = photo.image.copy()
+    shade = np.zeros(image.shape[:2], dtype=bool)
+    shade[490:520] = True  # about a third of the face's size (S = 80 px)
+    shade &= _person_area()
+    image[shade] *= np.array([0.30, 0.35, 0.40], dtype=np.float32)
+    # A grey slab in the same shade, against the shaded skin.
+    image[490:520, 330:400] = np.float32(0.05)
+    return replace(photo, image=image)
+
+
+def test_a_stroke_that_keeps_to_skin_takes_in_skin_in_shade() -> None:
+    """2026-11-07: shade turned skin too blue for the brush, which left it out."""
+    from core import faces
+
+    photo = _shaded_photo()
+    x, y = 150, 505
+    # The colour of the cheeks alone does not take it in.
+    tones = [face.tone for face in photo.faces]
+    strict = faces.body_likeness(*faces.colour_features(photo.image), tones)
+    assert strict[y, x] < 0.5
+
+    stroke = SkinStroke(points=(_at(x, y),), radius=0.03, adding=True, snap=True)
+    skin = _skin(photo, SkinRange(auto=False, strokes=(stroke,)))
+    assert skin[y, x] > 0.9
+
+
+def test_grey_in_the_same_shade_is_still_left_out() -> None:
+    photo = _shaded_photo()
+    stroke = SkinStroke(points=(_at(330, 505),), radius=0.05, adding=True, snap=True)
+    skin = _skin(photo, SkinRange(auto=False, strokes=(stroke,)))
+    assert skin[505, 345] < 0.1  # the grey slab
+    assert skin[505, 310] > 0.9  # the shaded skin beside it
