@@ -614,10 +614,13 @@ def measure_tone(
 # Whitening is strong enough that skin left out beside skin brightened shows
 # as a seam - a pale face over a darker neck and chest. So it reaches every
 # piece of skin joined to a face: the pixels of that person's colour,
-# grown out from the face and stopped wherever a clear edge of brightness or
-# colour lies across the way, which is what keeps a wall or a sweater the
-# colour of skin out. It is worked out over the whole frame on a small copy,
-# since it is soft anyway, and a zoomed in window takes its part of it.
+# grown out from the face and stopped wherever a clear edge of colour, or a
+# step up to something brighter than the face is ever lit, lies between it
+# and something else the colour of skin, which is what keeps a wall or a
+# sweater the colour of skin out. The edges of shadows on the skin do not
+# stop it, and gaps as narrow as a lock of hair are stepped over. It is
+# worked out over the whole frame on a small copy, since it is soft anyway,
+# and a zoomed in window takes its part of it.
 
 #: The long edge of the copy the skin beyond the face is found on.
 BODY_LONG_EDGE: Final[int] = 768
@@ -627,10 +630,25 @@ BODY_COLOUR_REACH: Final[tuple[float, float]] = (2.0, 3.5)
 #: Where the skin may be told apart from what joins it: an edge is a slope
 #: of this many stops of brightness, or of colour, per pixel of the copy,
 #: measured after a blur of BODY_EDGE_BLUR pixels so that a soft edge counts
-#: as much as a sharp one and noise does not.
+#: as much as a sharp one and noise does not. The colour's is loose enough
+#: that the edge of a shadow on skin, which turns it a little bluer, does
+#: not count (measured on dappled light under trees).
 BODY_EDGE_BRIGHTNESS: Final[float] = 0.08
-BODY_EDGE_COLOUR: Final[float] = 0.025
+BODY_EDGE_COLOUR: Final[float] = 0.035
 BODY_EDGE_BLUR: Final[float] = 1.5
+#: A shadow only ever darkens skin, so an edge of brightness counts only
+#: where its bright side is brighter than the face's brightest lit skin (the
+#: BODY_LIT_SHARE percentile of it) by more than BODY_LIT_MARGIN stops: that
+#: is a wall or a cloth, not the same skin out of a shadow.
+BODY_LIT_SHARE: Final[float] = 95.0
+BODY_LIT_MARGIN: Final[float] = 0.3
+#: Gaps narrower than this many S - a lock of hair over a shoulder, a
+#: string, the line of a shadow - do not cut the skin beyond them off.
+BODY_BRIDGE: Final[float] = 0.2
+#: Within the skin found, dips in the likeness narrower than this many S -
+#: a shadow a little too blue, a freckle - are filled, so that it is
+#: whitened evenly rather than in patches.
+BODY_HOLE_FILL: Final[float] = 0.12
 #: The skin beyond the face leaves it below the chin, through the neck:
 #: beside and above the face lie hair and background, so nothing may set
 #: out from there. This is the head, as a share of the face's region, from
@@ -696,18 +714,12 @@ def body_mask(
         )
         np.maximum(like, colour * lit, out=like)
 
-    # Edges: where brightness or colour slope steeply.
-    edge = np.zeros(red.shape, dtype=bool)
-    for plane, step in (
-        (brightness, BODY_EDGE_BRIGHTNESS),
-        (red, BODY_EDGE_COLOUR),
-        (blue, BODY_EDGE_COLOUR),
-    ):
-        smooth = cv2.GaussianBlur(plane, (0, 0), BODY_EDGE_BLUR)
-        # OpenCV's 3x3 Sobel counts a slope eight times.
-        across = cv2.Sobel(smooth, cv2.CV_32F, 1, 0, ksize=3)
-        down = cv2.Sobel(smooth, cv2.CV_32F, 0, 1, ksize=3)
-        edge |= cv2.sqrt(across * across + down * down) > np.float32(8.0 * step)
+    # The brightest the faces' own skin is lit: anything brighter beyond an
+    # edge is not that skin coming out of a shadow.
+    lit_skin = brightness[mask > 0.5]
+    lit_level = (
+        float(np.percentile(lit_skin, BODY_LIT_SHARE)) if lit_skin.size else float("inf")
+    )
 
     # Where the skin may reach: around each face, mostly below it.
     reach = np.zeros(red.shape, dtype=np.uint8)
@@ -741,7 +753,45 @@ def body_mask(
         )
         closed |= head & ~under
         opening |= head & under
-    candidate = ((like > 0.5) & ~edge & (reach > 0) & ~closed).astype(np.uint8)
+    ground = (like > 0.5) & (reach > 0) & ~closed
+
+    # Edges: where brightness or colour slope steeply between pixels that
+    # are both the colour of skin. Where skin meets hair or a cloth the
+    # colour already tells them apart; an edge matters only between skin
+    # and something else the colour of skin. So the slopes are measured on
+    # a blur that takes in skin coloured pixels alone, and a lock of hair
+    # across the skin leaves none behind.
+    weight = (like > 0.5).astype(np.float32)
+    total = cv2.GaussianBlur(weight, (0, 0), BODY_EDGE_BLUR)
+    edge = np.zeros(red.shape, dtype=bool)
+    too_bright = np.zeros(red.shape, dtype=bool)
+    for plane, step, is_brightness in (
+        (brightness, BODY_EDGE_BRIGHTNESS, True),
+        (red, BODY_EDGE_COLOUR, False),
+        (blue, BODY_EDGE_COLOUR, False),
+    ):
+        smooth = cv2.GaussianBlur(plane * weight, (0, 0), BODY_EDGE_BLUR) / np.maximum(
+            total, np.float32(_EPSILON)
+        )
+        # OpenCV's 3x3 Sobel counts a slope eight times.
+        across = cv2.Sobel(smooth, cv2.CV_32F, 1, 0, ksize=3)
+        down = cv2.Sobel(smooth, cv2.CV_32F, 0, 1, ksize=3)
+        steep = cv2.sqrt(across * across + down * down) > np.float32(8.0 * step)
+        if is_brightness:
+            too_bright = smooth > np.float32(lit_level + BODY_LIT_MARGIN)
+            # The bright side of the edge lies within a couple of pixels.
+            steep &= cv2.dilate(too_bright.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        edge |= steep
+    barrier = edge & ground
+    least = min(p.size for p in coloured)
+    radius = max(1, int(round(BODY_BRIDGE * least / 2.0)))
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
+    bridged = cv2.morphologyEx(ground.astype(np.uint8), cv2.MORPH_CLOSE, disc) > 0
+    # A gap is not bridged next to something brighter than the skin is lit,
+    # or the corner between a shoulder and a skin coloured wall would be.
+    bright_ground = (ground & too_bright).astype(np.uint8)
+    bridged &= ground | (cv2.dilate(bright_ground, disc) == 0)
+    candidate = (bridged & ~barrier & (reach > 0) & ~closed).astype(np.uint8)
     seed = (mask > 0.5) & opening & (candidate > 0)
     count, labels = cv2.connectedComponents(candidate, connectivity=4)
     if count <= 1 or not seed.any():
@@ -752,7 +802,6 @@ def body_mask(
     body = joined[labels]
     # Edge pixels lying along the skin belong to it; their colour decides.
     body = cv2.dilate(body.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
-    beyond = np.where(body, like, np.float32(0.0)).astype(np.float32)
-    sigma = BODY_SOFTEN * min(p.size for p in coloured)
-    beyond = soften(beyond, sigma)
+    beyond = np.where(body, fill_holes(like, BODY_HOLE_FILL * least), np.float32(0.0))
+    beyond = soften(beyond.astype(np.float32), BODY_SOFTEN * least)
     return np.maximum(mask, beyond)

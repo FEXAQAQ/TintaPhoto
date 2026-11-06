@@ -165,6 +165,40 @@ def test_a_clear_edge_keeps_a_skin_coloured_wall_out() -> None:
     assert body[520, 390] < 0.05
 
 
+def _person_area() -> np.ndarray:
+    """Return where the person's neck, shoulders and chest are."""
+    width, height = SIZE
+    person = np.zeros((height, width), dtype=np.uint8)
+    cv2.rectangle(person, (165, 300), (235, 400), 1, -1)
+    cv2.ellipse(person, (200, 600), (170, 200), 0, 0, 360, 1, -1)
+    return person > 0
+
+
+def test_shadows_of_leaves_do_not_cut_the_skin_into_patches() -> None:
+    """Light through leaves: bands of shade, darker and a little bluer, across the body."""
+    photo = _photo()
+    image = photo.image.copy()
+    shade = np.zeros(image.shape[:2], dtype=bool)
+    for top in (410, 470, 530):
+        shade[top : top + 24] = True
+    shade &= _person_area()
+    image[shade] *= np.array([0.35, 0.35, 0.37], dtype=np.float32)
+    body = _body(replace(photo, image=image))
+    # Lit skin below the bands, and the shaded skin itself.
+    for x, y in ((120, 450), (280, 510), (200, 570), (120, 480)):
+        assert body[y, x] > 0.9, (x, y)
+    assert body[30, 30] == 0.0
+
+
+def test_a_lock_of_hair_across_the_shoulders_does_not_cut_the_body_off() -> None:
+    photo = _photo()
+    image = photo.image.copy()
+    cv2.line(image, (0, 412), (400, 412), (0.01, 0.01, 0.01), 6)
+    body = _body(replace(photo, image=image))
+    assert body[CHEST[1], CHEST[0]] > 0.9
+    assert body[460, 300] > 0.9
+
+
 def test_a_black_and_white_photo_whitens_only_the_face() -> None:
     body = _body(_photo(grey=True))
     assert body[CHEEK[1], CHEEK[0]] > 0.9
