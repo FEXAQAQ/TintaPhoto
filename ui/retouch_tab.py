@@ -1,20 +1,20 @@
-"""The retouch tab: spot removal, portrait and lens correction (PLAN.md 2.2, 3.1).
+"""The retouch tab: spot removal and lens correction (PLAN.md 2.2, 3.1).
 
-All three take out a flaw rather than set the look of the photo, and none is
-wanted on every photo: spots are mended where there is dust or a blemish, the
-portrait sliders only have work to do where there are faces, and the lens
-correction is set once for a lens and left. So they sit on a tab of their own
-rather than lengthening the adjust tab, whose groups are the ones every photo
-goes through.
+Both take out a flaw rather than set the look of the photo, and neither is
+wanted on every photo: spots are mended where there is dust or a blemish,
+and the lens correction is set once for a lens and left. So they sit on a
+tab of their own rather than lengthening the adjust tab, whose groups are
+the ones every photo goes through. The portrait sliders were here too until
+they got a mode of their own, with the brush that shapes the skin they work
+on (PLAN.md 3.15).
 
 The spot removal group (A-32) holds the tool's button on its header, the
 size of the brush, a line saying how many spots are mended and a button
 that clears them. The tool itself works on the photo, which is the window's.
 
-The portrait group (A-29, A-30) is two sliders and a line saying how many
-faces were found. The lens correction group (A-26 to A-28) is not part of
-the adjustments: it belongs to the geometry, because it changes the frame
-the crop is measured against, so it travels on a signal of its own.
+The lens correction group (A-26 to A-28) is not part of the adjustments: it
+belongs to the geometry, because it changes the frame the crop is measured
+against, so it travels on a signal of its own.
 """
 
 from __future__ import annotations
@@ -27,10 +27,9 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from app.i18n import tr
 from core import healing, lens
-from core.edit_state import PORTRAIT_NAMES, EditState
+from core.edit_state import EditState
 from core.lens import LensProfile, LensSettings
 from ui import icons, theme
-from ui.adjust_tab import JPEG_SPECS
 from ui.widgets.buttons import IconButton, TextButton
 from ui.widgets.group import ControlGroup
 from ui.widgets.slider_row import SliderRow, SliderSpec
@@ -73,11 +72,8 @@ SPOT_SIZE_SPEC: Final[SliderSpec] = SliderSpec(
 
 
 class RetouchTab(QWidget):
-    """Spot removal, the portrait sliders and the lens correction."""
+    """Spot removal and the lens correction."""
 
-    #: One portrait slider moved: the adjustment, its value, and whether a
-    #: drag is still going on, the same as the adjust tab's sliders.
-    value_set = Signal(str, float, bool)
     #: The lens correction changed (PLAN.md 2.2): the new
     #: :class:`core.lens.LensSettings` and whether a drag is still going on.
     lens_set = Signal(object, bool)
@@ -89,15 +85,10 @@ class RetouchTab(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._state = EditState()
-        self._rows: dict[str, SliderRow] = {}
         self._group_widgets: list[ControlGroup] = []
         self._lens = LensSettings()
         self._lens_profile: LensProfile | None = None
         self._lens_raw = False
-        #: How many faces the photo holds, or ``None`` while they are being
-        #: looked for (A-29).
-        self._faces: int | None = None
         #: How many spots are mended (A-32), and the size the slider shows.
         self._spot_count = 0
         self._spot_size = healing.RADIUS_DEFAULT
@@ -112,12 +103,10 @@ class RetouchTab(QWidget):
         groups_layout.setSpacing(0)
         groups_layout.addSpacing(theme.SPACE_SM)
         groups_layout.addWidget(self._build_spot_group())
-        groups_layout.addWidget(self._build_portrait_group())
         groups_layout.addWidget(self._build_lens_group())
         layout.addWidget(self._groups)
         layout.addStretch(1)
 
-        self._show_faces()
         self._show_spots()
         self.set_photo(None)
 
@@ -148,22 +137,6 @@ class RetouchTab(QWidget):
         row.addWidget(self.clear_spots_button)
         row.addStretch(1)
         group.add_layout(row)
-        return group
-
-    def _build_portrait_group(self) -> ControlGroup:
-        """The skin and whitening sliders, and how many faces they work on."""
-        group = ControlGroup("adjust.group.portrait", parent=self._groups)
-        self._group_widgets.append(group)
-        for name in PORTRAIT_NAMES:
-            row = SliderRow(JPEG_SPECS[name])
-            row.value_changed.connect(self._on_row_changed)
-            self._rows[name] = row
-            group.add_row(row)
-        #: How many faces the skin slider has to work on (A-29).
-        self.faces_caption = QLabel("", group)
-        self.faces_caption.setProperty("role", "caption")
-        self.faces_caption.setWordWrap(True)
-        group.add_row(self.faces_caption)
         return group
 
     def _build_lens_group(self) -> ControlGroup:
@@ -199,37 +172,17 @@ class RetouchTab(QWidget):
     # -- state -----------------------------------------------------------
 
     def set_photo(self, state: EditState | None) -> None:
-        """Show the portrait values of a photo, or the empty state."""
+        """Show the groups for a photo, or the empty state."""
         self._groups.setVisible(state is not None)
-        if state is not None:
-            self.set_state(state)
-
-    def set_state(self, state: EditState) -> None:
-        """Show *state* without announcing it, as undo and reset do."""
-        self._state = state
-        for name, row in self._rows.items():
-            row.blockSignals(True)
-            row.set_value(getattr(state, name))
-            row.blockSignals(False)
 
     def retranslate(self) -> None:
         """Read the sliders again after a language change (U-02)."""
-        for name, row in self._rows.items():
-            row.set_spec(JPEG_SPECS[name])
-            row.blockSignals(True)
-            row.set_value(getattr(self._state, name))
-            row.blockSignals(False)
         self.lens_switch.setToolTip(tr("adjust.lens.enable"))
         self.spot_size_row.set_spec(SPOT_SIZE_SPEC)
         self.set_spot_size(self._spot_size)
         self.clear_spots_button.retranslate()
         self._show_lens()
-        self._show_faces()
         self._show_spots()
-
-    def rows(self) -> dict[str, SliderRow]:
-        """Return the portrait sliders by adjustment name."""
-        return dict(self._rows)
 
     def lens_rows(self) -> dict[str, SliderRow]:
         """Return the lens correction's sliders, by the setting each one sets."""
@@ -238,32 +191,6 @@ class RetouchTab(QWidget):
     def groups(self) -> tuple[ControlGroup, ...]:
         """Return the collapsible groups, in display order."""
         return tuple(self._group_widgets)
-
-    # -- faces (PLAN.md 2.2, A-29) ---------------------------------------
-
-    def set_faces(self, count: int | None) -> None:
-        """Say how many faces the photo holds, or ``None`` while looking.
-
-        The skin and whitening sliders have nothing to work on in a photo
-        without faces, so they are greyed out there, and the caption under
-        them says why.
-        """
-        self._faces = count
-        self._show_faces()
-
-    def _show_faces(self) -> None:
-        count = self._faces
-        if count is None:
-            caption = tr("adjust.faces.looking")
-        elif count == 0:
-            caption = tr("adjust.faces.none")
-        elif count == 1:
-            caption = tr("adjust.faces.one")
-        else:
-            caption = tr("adjust.faces.many", count=count)
-        self.faces_caption.setText(caption)
-        for name in PORTRAIT_NAMES:
-            self._rows[name].setEnabled(count != 0)
 
     # -- spot removal (PLAN.md 2.2, A-32) --------------------------------
 
@@ -365,11 +292,6 @@ class RetouchTab(QWidget):
         self._lens = self._lens.with_amount(name, value)
         self._set_titles_dimmed(dragging)
         self.lens_set.emit(self._lens, dragging)
-
-    def _on_row_changed(self, name: str, value: float, dragging: bool) -> None:
-        self._state = self._state.with_value(name, value)
-        self._set_titles_dimmed(dragging)
-        self.value_set.emit(name, value, dragging)
 
     def _set_titles_dimmed(self, dimmed: bool) -> None:
         """Fade the group titles while a slider is moving (PLAN.md 3.6)."""

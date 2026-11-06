@@ -72,9 +72,11 @@ def _photo(grey: bool = False, with_faces: bool = True) -> DecodedPhoto:
 
 
 def _body(photo: DecodedPhoto) -> np.ndarray:
+    """Return the skin whitening works on, over the whole photo."""
     field = pipeline.body_field(photo)
     assert field is not None
-    return Window.whole(photo.size).take(field)
+    planes = Window.whole(photo.size).take(field)
+    return np.maximum(planes[..., 0] * planes[..., 1], planes[..., 2])
 
 
 # -- the slider ------------------------------------------------------------

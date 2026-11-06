@@ -2349,3 +2349,65 @@ def test_the_photo_as_found_shows_the_blemish_again(
     controller.set_comparing(True)
     before = _wait_for_preview(controller)
     assert before.image[80, 120].mean() < 90
+
+
+# -- the portrait range (PLAN.md 2.10) ---------------------------------------
+
+
+def _skin_folder(tmp_path: Path) -> Path:
+    """A folder with one JPEG the colour of skin and no face in it."""
+    photos = tmp_path / "skin"
+    photos.mkdir()
+    _write_jpeg(photos / "arm.jpg", (205, 150, 120))
+    return photos
+
+
+def test_a_painted_stroke_is_whitened_where_no_face_was_found(
+    controller: Controller, tmp_path: Path
+) -> None:
+    photo, before = _shown(controller, _skin_folder(tmp_path))
+    controller.set_adjustments(controller.state.with_value("whiten", 100.0))
+    unchanged = _wait_for_preview(controller)
+    assert np.array_equal(unchanged.image, before.image)  # nothing to whiten yet
+
+    controller.add_skin_stroke([(0.5, 0.5)], 0.08, adding=True, snap=False)
+    after = _wait_for_preview(controller)
+    assert after.image[80, 120].astype(int).sum() > before.image[80, 120].astype(int).sum() + 6
+    assert np.array_equal(after.image[5, 5], before.image[5, 5])
+
+    controller.flush()
+    stored = sidecar.read(photo, controller.state)
+    assert stored is not None and len(stored.geometry.skin.strokes) == 1
+    controller.undo()
+    assert controller.skin.strokes == ()
+
+
+def test_the_skin_on_screen_follows_the_strokes(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _shown(controller, _skin_folder(tmp_path))
+    controller.request_skin_shown()
+    assert wait_for(controller.skin_shown)[0] is None
+
+    controller.add_skin_stroke([(0.25, 0.5)], 0.08, adding=True, snap=False)
+    controller.request_skin_shown()
+    shown = wait_for(controller.skin_shown)[0]
+    height, width = shown.shape
+    assert shown[height // 2, width // 4] > 230
+    assert shown[height // 2, 3 * width // 4] == 0
+
+
+def test_the_range_is_kept_by_both_resets_and_cleared_by_its_own(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _shown(controller, _skin_folder(tmp_path))
+    controller.add_skin_stroke([(0.5, 0.5)], 0.05, adding=False, snap=True)
+    controller.set_skin_auto(False)
+    controller.reset_crop()
+    controller.reset()
+    assert not controller.skin.auto and len(controller.skin.strokes) == 1
+
+    controller.reset_skin()
+    assert controller.skin.is_default
+    controller.undo()
+    assert not controller.skin.auto and len(controller.skin.strokes) == 1

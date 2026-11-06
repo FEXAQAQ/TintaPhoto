@@ -15,7 +15,8 @@
   **PLAN.md 已補上濾鏡**（2.2、3.1、6、7.1.5、8、13.3 節），文件也不再出現相機廠牌。
   F1 完成：三個濾鏡已從素材擬合出來，同相機 ΔE 0.78 ～ 0.92、
   跨相機 1.56 ～ 1.73。見「濾鏡功能 F1」、「濾鏡功能 F2」
-- **最後更新**：2026-11-06（最後一項工作：開資料夾閃退 —— 使用者回報「一開資料夾就閃退」（`人像皮膚測試`，5 張 JPG，其中一張有 4 筆汙點修復），0.33.2。日誌沒有任何紀錄；Windows 事件紀錄 22:23:50 的 APPCRASH 是 `python.exe`、出錯模組 `libscipy_openblas64_…dll`（numpy 2.x 附的 OpenBLAS 0.3.34，MAX_THREADS=24），0xc0000005。原因：OpenBLAS 預設每次呼叫都開 12 條執行緒，程式自己的背景執行緒（預覽、縮圖、預載、找臉）同時呼叫時互搶；開這個資料夾時好幾條執行緒同時在 `healing._laplace_direct` 跑 `np.linalg.solve`，另一條在 `color_management.apply_matrix`。重現：以真實視窗與使用者設定（設定不寫回）開資料夾 6 次，1 次 faulthandler 印出致命例外、4 次關閉時卡住；壓力測試（4 條執行緒解 50～600 階方程組＋4 條做 (N,3)@(3,3)）預設會崩潰或卡超過 200 秒，只解方程組也要 89 秒，`OPENBLAS_NUM_THREADS=1` 時 4～5 秒。修正：`main.py` 在任何匯入前 `os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")`，`tests/conftest.py`、`tests/benchmark.py` 相同；`test_architecture` 加一項檢查設定在第一個匯入之前。之後開資料夾 5 次全部正常開啟與關閉。速度（使用者的 4800×3200 JPG，含汙點、美膚）：完整解析度 3.2 → 2.3 秒、代理圖 0.75 → 0.5 秒、4 張代理圖同時 3.3 → 1.45 秒。PLAN 第 10 節架構第 6 條已同步。先前「完整 pytest 偶爾在 `test_controller` 當掉」（python312.dll 0xc0000005，11/5、11/6 各一次）可能同源，之後若再發生要重查）
+- **最後更新**：2026-11-07（最後一項工作：人像模式（階段 18），0.34.0。使用者回報一鍵美白在複雜人像上「陰影判定失誤，變成超白又超暗」，先改良自動範圍，再依使用者要求做「手動選取範圍跟自動選取範圍，然後可以自己調整」、人像獨立放到左上角工具列；使用者看過模擬圖後說「照這樣做」。見文末「人像模式（階段 18）」）
+  在此之前：開資料夾閃退 —— 使用者回報「一開資料夾就閃退」（`人像皮膚測試`，5 張 JPG，其中一張有 4 筆汙點修復），0.33.2。日誌沒有任何紀錄；Windows 事件紀錄 22:23:50 的 APPCRASH 是 `python.exe`、出錯模組 `libscipy_openblas64_…dll`（numpy 2.x 附的 OpenBLAS 0.3.34，MAX_THREADS=24），0xc0000005。原因：OpenBLAS 預設每次呼叫都開 12 條執行緒，程式自己的背景執行緒（預覽、縮圖、預載、找臉）同時呼叫時互搶；開這個資料夾時好幾條執行緒同時在 `healing._laplace_direct` 跑 `np.linalg.solve`，另一條在 `color_management.apply_matrix`。重現：以真實視窗與使用者設定（設定不寫回）開資料夾 6 次，1 次 faulthandler 印出致命例外、4 次關閉時卡住；壓力測試（4 條執行緒解 50～600 階方程組＋4 條做 (N,3)@(3,3)）預設會崩潰或卡超過 200 秒，只解方程組也要 89 秒，`OPENBLAS_NUM_THREADS=1` 時 4～5 秒。修正：`main.py` 在任何匯入前 `os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")`，`tests/conftest.py`、`tests/benchmark.py` 相同；`test_architecture` 加一項檢查設定在第一個匯入之前。之後開資料夾 5 次全部正常開啟與關閉。速度（使用者的 4800×3200 JPG，含汙點、美膚）：完整解析度 3.2 → 2.3 秒、代理圖 0.75 → 0.5 秒、4 張代理圖同時 3.3 → 1.45 秒。PLAN 第 10 節架構第 6 條已同步。先前「完整 pytest 偶爾在 `test_controller` 當掉」（python312.dll 0xc0000005，11/5、11/6 各一次）可能同源，之後若再發生要重查）
   在此之前：汙點修復補完不再留外框 —— 使用者回報「修復完畫面上都會留下一圈選擇範圍。按越多留越多，很擋視線」，0.33.1。`SpotOverlay.paint()` 只畫選取的那一筆（實線外框、來源外框與連線），沒選取的不畫；點一下修過的地方仍會選取（`_hit_any` 不看有沒有畫）。`_draw_outline()` 拿掉 `faint` 參數，`theme.SPOT_FAINT_ALPHA`／`SPOT_FAINT_HALO_ALPHA` 刪除。測試：`test_spot_overlay` 改為檢查沒選取時照片上什麼都不畫、選取後只畫那一筆。PLAN 第 2.2 節（A-32「需要時可以再改」）、第 3.6 節（汙點外框）已同步。決定：不加「滑鼠移上去才顯示外框」，連續塗抹時一樣會一直閃出來；之後若覺得找不到修過哪裡再說）
   在此之前：浮水印（階段 17），0.33.0。使用者看過模擬圖後說「照這樣做」。工具列印章按鈕／T 進入浮水印模式，面板輸入文字、粗體、斜體、大小、顏色、不透明度，照片上拖曳與吸附，匯出時加上。見文末「浮水印（階段 17）實作」。同日使用者同意下載，Inter 斜體與粗斜體字型檔已放進 `resources/fonts`（官方 4.1 版壓縮檔，與已附的 Regular 逐位元相同，確認是同一版）。**待辦：實機確認拖曳手感、天空色階、10 張多張匯出**）
   在此之前：規劃浮水印功能，新增階段 17，只改文件。見文末「浮水印（階段 17）規劃」。
@@ -5480,3 +5481,41 @@ app 樣式表的通用 `QPushButton` 最小高度會把標籤撐成 27 px，所�
   - 切換語言時，浮水印模式中的工具列標題要等離開再進入才換語言（雙圖拼貼同樣如此）
 - PLAN 改了：第 2.9 節（W-04 斜體字型檔、W-12）、3.14（圖示、平移）、第 6 節（原圖直通、浮水印合成方式、預覽小圖）、第 9 節（階段 17 的 W3、W4 與驗收勾選）、13.2；CLAUDE.md 第 4 節那一句的措辭
 - 2026-11-06 使用者同意後下載 Inter 4.1 官方壓縮檔（github.com/rsms/inter/releases/tag/v4.1，33.7 MB，放在暫存區，不進專案），只取出 `extras/ttf/Inter-Italic.ttf`、`Inter-SemiBoldItalic.ttf` 放進 `resources/fonts`；壓縮檔裡的 Regular 與專案已附的逐位元相同。`THIRD_PARTY_NOTICES.md`、`resources/fonts/README.md`、PLAN 第 2.9 節 W-04、第 9 節階段 17、第 13.2 節已同步；`test_watermark.py` 加一項確認英文粗斜體用字型檔、不再傾斜。版號沿用 0.33.0（還沒發行）
+
+## 人像模式（階段 18，0.34.0，2026-11-07）
+
+**起因**：使用者回報「一鍵美白的判定有點怪，複雜一點的人像陰影有可能判定失誤，變成超白又超暗」，提供 `C:\Users\clari\Desktop\人像皮膚測試`（5 張樹蔭、光斑下的比基尼人像，**不放進專案**；其中一張旁邊已有參數檔，所有實驗都複製到暫存區，沒有寫入那個資料夾）。
+
+**診斷**：`faces.body_mask()` 的膚色相似度大致正確，擋住的是邊界：光斑在皮膚上畫出很多條明暗線（亮度斜率門檻 0.08 stop/px），陰影偏藍又觸發顏色門檻（0.025），髮絲、綁帶、交叉的手也會切斷；只有連到下巴開口的幾塊被美白，旁邊沒處理的就顯得更暗。量到陰影每 stop 的色偏只有 0.01～0.09 stop。
+
+**P1 自動範圍（commit `fix(faces)`）**：
+- 邊界只在「兩側都是膚色」的地方算：斜率在只取 like > 0.5 像素的正規化模糊上量（`blur(plane × w) / blur(w)`），頭髮、衣服旁邊不產生邊界
+- 顏色門檻 0.025 → 0.035（`BODY_EDGE_COLOUR`）
+- 亮度邊界只在亮的一側比臉遮罩內第 95 百分位亮度再亮 0.3 stop 以上時算（`BODY_LIT_SHARE`、`BODY_LIT_MARGIN`）：陰影只會變暗
+- 0.2 S 以內的縫以形態學閉合接起來（`BODY_BRIDGE`），但不在「太亮的膚色區」旁邊接——否則 `test_a_clear_edge_keeps_a_skin_coloured_wall_out` 的牆會從肩膀與牆之間的角落漏進來（試過把邊界的「內側」條件放寬到 4 px，就是這樣漏的）
+- 範圍內的相似度以 0.12 S 補洞（`BODY_HOLE_FILL`）
+- 結果：5 張的肩膀、手臂、腰都包到；第 5 張的黃桌面在手旁沾到 0.16～0.25（美白 100 時約 +2%，對照圖上看不出），因為桌面的顏色離膚色 2.85 倍離散度、她陰影裡的大腿是 2.77，只看顏色分不開；第 3 張（趴著）的手臂和腿隔著白衣服與地板，連不過去
+- 測試：`test_whiten` 加光斑陰影、髮絲橫過肩膀兩項
+
+**P2～P4 人像模式（commit `feat(portrait)`）**：
+- `core/skin_range.py`：`SkinStroke`（points、radius、adding、snap）、`SkinRange`（auto、strokes）、`field()` 交出三層（自動、留下、加入），`combined()` = max(自動 × 留下, 加入)，由最後一筆往前算所以順序有意義；`reaches_nothing()` 判斷滑桿有沒有東西可處理；貼齊皮膚用 `faces.body_likeness()`（從 `body_mask` 抽出來共用），有臉時只算一次各筆共用，沒臉時以這一筆蓋到的中位數顏色為準
+- `Geometry.skin`（寫進參數檔 `geometry.skin`）、`DecodedPhoto.skin`（取景後的範圍）；`geometry.apply()` 用 `_frame_matrix` 換算筆跡；`geometry.framed_skin()`、`geometry.frame_key()`
+- `pipeline.has_skin/has_whiten` 改看 `reaches_nothing`；新 `needs_body()`；`body_field()` 改交三層；`develop()` 的 `_shaped()`：美白 = max(自動低解析, 臉的高解析遮罩) × 留下 與 加入取大；磨皮 = 臉遮罩 × 留下 與 加入取大（只在臉的範圍內）；`is_passthrough`、`exporter.can_copy_original` 改看 `reaches_nothing`
+- `Edit.is_untouched`：範圍不是預設就算調整過
+- 控制器：`add_skin_stroke`、`set_skin_auto`、`reset_skin`、`request_skin_shown` → `skin_shown`（uint8）；整張與局部的取景／銳利化快取鍵改用 `frame_key(shape)`，取出後 `replace(..., skin=framed_skin)`；`_body` 快取鍵加上範圍；`reset_crop` 保留範圍
+- 介面：`ui/portrait_panel.py`、`ui/skin_overlay.py`、工具列 `portrait_button`（`resources/icons/portrait.svg`，Lucide scan-face）、`MainWindow.enter/leave/toggle_portrait`、`toggle_portrait_brush`、`toggle_portrait_showing`；`_NOT_IN_PORTRAIT` 擋掉作用在調整面板的快捷鍵、`_PORTRAIT_ONLY`；Esc 先放下筆刷；進入浮水印／拼貼先離開人像；Tab 在人像模式中照常移動焦點；`[ ]` 在人像模式改人像筆刷；修正分頁拿掉人像群組；`theme.SKIN_RANGE`（#FF6B8B）等常數；翻譯新增 `portrait.*`、`toolbar.portrait`、`shortcut.portrait*`、`shortcut.name.brush_size`，刪掉不再用的 `adjust.faces.none`、`adjust.group.portrait`、`shortcut.name.spot_size`
+- 效能（2048 px 代理圖）：`body_field` 沒筆跡 72 ms、1 筆 108 ms、10 筆 173 ms、30 筆 239 ms；develop 約 0.24 秒
+- 測試：新 `test_skin_range.py`（14 項）、`test_portrait_panel.py`、`test_skin_overlay.py`；`test_controller`（3 項）、`test_main_window`（5 項）；`test_retouch_tab`、`test_inspector` 拿掉人像部分
+- 離線視窗截圖確認面板、範圍顯示與筆刷（中文在離線畫面裡顯示成方框，是離線環境沒有中文字型，不是程式問題）
+
+**決定**：
+- 「顯示範圍」的快捷鍵用 M 不用 O：O 已是裁切格線，QShortcut 衝突時兩個都不會觸發
+- 磨皮只在臉的範圍內作用：它依臉的大小決定紋理粗細、在每張臉的方框裡算；把手臂也磨皮要另外決定紋理大小，而且匯出時要處理整個身體的完整解析度。和使用者說過「美膚、美白共用同一個範圍」，實作上加入的範圍在臉與脖子以內對磨皮有效、以外只美白——**要告訴使用者**
+- 筆刷預設沒拿起來：進入人像模式只想拉滑桿時，不會不小心塗到
+- 「貼齊皮膚邊緣」記在每一筆上
+
+**未解決**：
+- 實機手感（塗抹跟不跟得上滑鼠、玫瑰色的濃淡）要使用者確認
+- 第 3 張那種趴姿，手臂與腿要靠「加入」補
+- 完整 pytest 這次第一次跑時又在中途崩潰一次（只拿到 faulthandler 的堆疊尾巴），第二次全過；和 11/5、11/6 的偶發崩潰可能同源，還沒查
+

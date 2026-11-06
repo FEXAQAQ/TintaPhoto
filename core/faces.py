@@ -671,6 +671,43 @@ BODY_CORE_SHARE: Final[float] = 0.85
 BODY_SOFTEN: Final[float] = 0.04
 
 
+def is_coloured(tone: SkinTone) -> bool:
+    """Return whether *tone* has colour enough to tell skin by (BODY_LEAST_COLOUR)."""
+    return math.hypot(tone.red, tone.blue) >= BODY_LEAST_COLOUR
+
+
+def body_likeness(
+    red: NDArray[np.float32],
+    blue: NDArray[np.float32],
+    brightness: NDArray[np.float32],
+    tones: list[SkinTone],
+) -> NDArray[np.float32]:
+    """Return how much each pixel is the colour of any of *tones*, from 0 to 1.
+
+    *red*, *blue* and *brightness* are :func:`colour_features` of the photo.
+    The colour may be as far from the tone as an arm's is from the cheeks
+    (BODY_COLOUR_REACH), the brightness as far as for the face's own mask.
+    """
+    like = np.zeros(red.shape, dtype=np.float32)
+    for tone in tones:
+        spread = min(max(tone.spread, COLOUR_LEAST_SPREAD), COLOUR_MOST_SPREAD)
+        distance = cv2.sqrt((red - tone.red) ** 2 + (blue - tone.blue) ** 2) / np.float32(spread)
+        colour = np.float32(1.0) - _smoothstep(distance.reshape(red.shape), *BODY_COLOUR_REACH)
+        light = brightness - np.float32(tone.brightness)
+        lit = (np.float32(1.0) - _smoothstep(-light, *DARKER_REACH)) * (
+            np.float32(1.0) - _smoothstep(light, *BRIGHTER_REACH)
+        )
+        np.maximum(like, colour * lit, out=like)
+    return like
+
+
+def body_size(size: tuple[int, int]) -> tuple[int, int]:
+    """Return the size of the copy the skin beyond the face is found on."""
+    width, height = size
+    factor = max(1.0, max(height, width) / BODY_LONG_EDGE)
+    return max(2, round(width / factor)), max(2, round(height / factor))
+
+
 def body_mask(
     image: NDArray[np.float32], faces: tuple[Face, ...]
 ) -> NDArray[np.float32] | None:
@@ -682,9 +719,10 @@ def body_mask(
     as well. ``None`` when no face lies in the frame.
     """
     height, width = image.shape[:2]
-    factor = max(1.0, max(height, width) / BODY_LONG_EDGE)
-    size = (max(2, round(width / factor)), max(2, round(height / factor)))
-    small = cv2.resize(image, size, interpolation=cv2.INTER_AREA) if factor > 1.0 else image
+    size = body_size((width, height))
+    small = (
+        cv2.resize(image, size, interpolation=cv2.INTER_AREA) if size != (width, height) else image
+    )
     placements = place(faces, size)
     # A face whitened in patches would show every one of them, where the
     # small brightening of the skin slider shows none: the face's own mask
@@ -694,25 +732,13 @@ def body_mask(
     mask = skin_mask(small, placements, BODY_COLOUR_REACH, BODY_CORE_SHARE)
     if mask is None:
         return None
-    coloured = [
-        p for p in placements if math.hypot(p.face.tone.red, p.face.tone.blue) >= BODY_LEAST_COLOUR
-    ]
+    coloured = [p for p in placements if is_coloured(p.face.tone)]
     if not coloured:
         return mask
 
     red, blue, brightness = colour_features(small)
     # How much each pixel is the colour of any of the faces.
-    like = np.zeros(red.shape, dtype=np.float32)
-    for placement in coloured:
-        tone = placement.face.tone
-        spread = min(max(tone.spread, COLOUR_LEAST_SPREAD), COLOUR_MOST_SPREAD)
-        distance = cv2.sqrt((red - tone.red) ** 2 + (blue - tone.blue) ** 2) / np.float32(spread)
-        colour = np.float32(1.0) - _smoothstep(distance.reshape(red.shape), *BODY_COLOUR_REACH)
-        light = brightness - np.float32(tone.brightness)
-        lit = (np.float32(1.0) - _smoothstep(-light, *DARKER_REACH)) * (
-            np.float32(1.0) - _smoothstep(light, *BRIGHTER_REACH)
-        )
-        np.maximum(like, colour * lit, out=like)
+    like = body_likeness(red, blue, brightness, [p.face.tone for p in coloured])
 
     # The brightest the faces' own skin is lit: anything brighter beyond an
     # edge is not that skin coming out of a shadow.

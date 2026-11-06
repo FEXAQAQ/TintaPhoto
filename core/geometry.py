@@ -41,6 +41,7 @@ from core.decoder import DecodedPhoto
 from core.faces import Face
 from core.healing import Spot
 from core.lens import DEFAULT_SETTINGS, LensSettings
+from core.skin_range import DEFAULT_RANGE, SkinRange
 
 #: The fixed ratios of PLAN.md C-02, with the two open choices. 9:16 is the
 #: upright full screen shape, which X reaches from 16:9 as well; it is named
@@ -233,6 +234,10 @@ class Geometry:
     #: photo, are not carried by copy and paste (P-03), and every place that
     #: frames the photo mends it on the way.
     spots: tuple[Spot, ...] = ()
+    #: The skin the portrait sliders work on (PLAN.md 2.10): whether it is
+    #: found by itself, and the brush's strokes, held like the spots and for
+    #: their reasons.
+    skin: SkinRange = DEFAULT_RANGE
 
     @property
     def is_default(self) -> bool:
@@ -241,7 +246,8 @@ class Geometry:
         The lens correction is not asked about: where it rests depends on
         the kind of photo, so it is compared with where the photo started
         instead (:meth:`core.edit_state.Edit.is_untouched`). Nor are the
-        spots, which mend the picture without changing its frame.
+        spots, which mend the picture without changing its frame, nor the
+        skin the portrait sliders work on.
         """
         return (
             self.quarter_turns == 0
@@ -296,6 +302,7 @@ class Geometry:
             "orientation": self.orientation,
             "lens": self.lens.to_dict(),
             "spots": healing.spots_to_list(self.spots),
+            "skin": self.skin.to_dict(),
         }
 
     @classmethod
@@ -318,6 +325,7 @@ class Geometry:
             ),
             lens=LensSettings.from_dict(data.get("lens")),
             spots=healing.spots_from_list(data.get("spots")),
+            skin=SkinRange.from_dict(data.get("skin")),
         )
 
 
@@ -947,6 +955,8 @@ def apply(photo: DecodedPhoto, geometry: Geometry | None, crop: bool = True) -> 
     if geometry is not None:
         photo = lens_module.correct(photo, geometry.lens)
         photo = healing.heal(photo, geometry.spots)
+        if photo.skin != _skin_or_none(geometry.skin):
+            photo = replace(photo, skin=_skin_or_none(geometry.skin))
     if geometry is None or geometry.is_default:
         return photo
     if (
@@ -1016,9 +1026,15 @@ def apply(photo: DecodedPhoto, geometry: Geometry | None, crop: bool = True) -> 
             start += count
         faces = tuple(moved_faces)
 
+    skin = photo.skin
+    if skin is not None and skin.strokes:
+        matrix, _frame = _frame_matrix(source_size, geometry, crop)
+        skin = skin.mapped(matrix, source_size, (image.shape[1], image.shape[0]))
+
     return replace(
         photo,
         faces=faces,
+        skin=skin,
         image=np.ascontiguousarray(image),
         clipped=np.ascontiguousarray(clipped),
         encoded=None if encoded is None else np.ascontiguousarray(encoded),
@@ -1034,6 +1050,39 @@ def apply(photo: DecodedPhoto, geometry: Geometry | None, crop: bool = True) -> 
             )
         ),
     )
+
+
+def framed_skin(
+    geometry: Geometry, size: tuple[int, int], crop: bool = True
+) -> SkinRange | None:
+    """Return *geometry*'s skin range as it lies on the frame :func:`apply` makes.
+
+    *size* is the photo before any turn. What :func:`apply` attaches to the
+    photo it frames, worked out without framing it: a caller that keeps
+    framed photos from one stroke of the brush to the next puts the newest
+    range on them with this instead of framing them again.
+    """
+    skin = _skin_or_none(geometry.skin)
+    if skin is None or not skin.strokes or geometry.is_default:
+        return skin
+    if not crop and geometry.quarter_turns == 0 and not geometry.mirrored and geometry.angle == 0.0:
+        return skin
+    matrix, frame = _frame_matrix(size, geometry, crop)
+    return skin.mapped(matrix, size, frame)
+
+
+def frame_key(geometry: Geometry) -> Geometry:
+    """Return *geometry* without its skin range, which does not change the frame.
+
+    What a caller keeping framed photos keys them by, so that a stroke of
+    the portrait brush does not throw away the photo it was painted on.
+    """
+    return geometry if geometry.skin.is_default else replace(geometry, skin=DEFAULT_RANGE)
+
+
+def _skin_or_none(skin: SkinRange) -> SkinRange | None:
+    """Return *skin*, or ``None`` for the default, which is what a photo carries then."""
+    return None if skin.is_default else skin
 
 
 def _turned_points(

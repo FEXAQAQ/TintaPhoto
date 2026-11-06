@@ -49,6 +49,7 @@ from app.i18n import tr
 from ui import native, theme
 from ui.crop_overlay import CropOverlay
 from ui.spot_overlay import SpotOverlay
+from ui.skin_overlay import SkinOverlay
 from ui.watermark_overlay import WatermarkOverlay
 from ui.welcome_view import WelcomeView
 from ui.widgets.buttons import TextButton, tooltip
@@ -145,6 +146,8 @@ class PhotoCanvas(QWidget):
         #: Like the eyedropper it takes the click, and panning goes to the
         #: space bar.
         self.spots = SpotOverlay(self)
+        #: The portrait brush and the skin it works on (PLAN.md 3.15).
+        self.skin = SkinOverlay(self)
         #: The watermark, drawn over the photo while it is being placed
         #: (PLAN.md 3.14). A press on it drags it; anywhere else still pans.
         self.watermark = WatermarkOverlay(self)
@@ -650,6 +653,7 @@ class PhotoCanvas(QWidget):
         self._draw_edge(painter, photo)
         painter.setOpacity(1.0)
         self.crop.paint(painter, photo)
+        self.skin.paint(painter, photo)
         self.spots.paint(painter, photo)
         self.watermark.paint(painter, photo)
 
@@ -712,6 +716,9 @@ class PhotoCanvas(QWidget):
                 self._update_cursor(event.position())
                 self.update()
                 return
+        if self._skin_has_the_click() and self.skin.press(event.position(), self.photo_rect()):
+            self.update()
+            return
         self._panning_from = event.position().toPoint()
         self.setCursor(Qt.CursorShape.ClosedHandCursor)
 
@@ -727,6 +734,9 @@ class PhotoCanvas(QWidget):
             if self.spots.active:
                 # The brush circle follows the pointer, or the spot does.
                 self.spots.move(event.position(), self.photo_rect())
+                self.update()
+            if self.skin.active:
+                self.skin.move(event.position(), self.photo_rect())
                 self.update()
             if self.watermark.active:
                 free = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
@@ -754,6 +764,8 @@ class PhotoCanvas(QWidget):
             event.position(), self.photo_rect()
         ):
             self.update()
+        if self._panning_from is None and self.skin.release(event.position(), self.photo_rect()):
+            self.update()
         if self._panning_from is None and self.watermark.release(
             event.position(), self.photo_rect()
         ):
@@ -765,7 +777,7 @@ class PhotoCanvas(QWidget):
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt naming
         """Switch between fitting the window and actual pixels."""
-        if self.crop.active or self._picking or self.spots.active:
+        if self.crop.active or self._picking or self.spots.active or self.skin.active:
             return
         if self.watermark.active and self.watermark.double_click(
             event.position(), self.photo_rect()
@@ -822,6 +834,10 @@ class PhotoCanvas(QWidget):
         """Return whether a click belongs to the spot removal tool right now."""
         return self.spots.active and not self._space_held
 
+    def _skin_has_the_click(self) -> bool:
+        """Return whether a click belongs to the portrait brush right now."""
+        return self.skin.active and not self._space_held
+
     def set_spot_tool(self, active: bool) -> None:
         """Take up the spot removal tool, or put it down (A-32)."""
         self.spots.set_active(active)
@@ -834,9 +850,16 @@ class PhotoCanvas(QWidget):
         if self.spots.active:
             self.spots.set_pointer(None)
             self.update()
+        if self.skin.active:
+            self.skin.set_pointer(None)
+            self.update()
         if self.watermark.active:
             self.watermark.leave()
             self.update()
+
+    def refresh_cursor(self) -> None:
+        """Show the cursor for what the pointer would do now, after a tool changed."""
+        self._update_cursor()
 
     def _update_cursor(self, point: QPointF | None = None) -> None:
         """Show what the pointer would do where it is."""
@@ -858,6 +881,9 @@ class PhotoCanvas(QWidget):
                 if over or self.spots.dragging
                 else Qt.CursorShape.CrossCursor
             )
+            return
+        if self._skin_has_the_click():
+            self.setCursor(Qt.CursorShape.CrossCursor)
             return
         if self.watermark.active and (
             self.watermark.dragging

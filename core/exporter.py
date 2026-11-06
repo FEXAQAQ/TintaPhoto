@@ -44,7 +44,7 @@ from numpy.typing import NDArray
 from PIL import Image
 
 from core import color_management as cm
-from core import decoder, face_detector, metadata, pipeline, watermark
+from core import decoder, face_detector, metadata, pipeline, skin_range, watermark
 from core import geometry as geometry_module
 from core.decoder import DecodedPhoto, DecodeError
 from core.edit_state import EditState
@@ -239,8 +239,11 @@ def can_copy_original(
         return False
     if state is None:
         return True
-    if faces is not None and not faces:
-        # A photo known to hold no faces is untouched by the face sliders.
+    if faces is not None and skin_range.reaches_nothing(
+        faces, None if geometry is None else geometry.skin
+    ):
+        # A photo known to hold no skin for them is untouched by the face
+        # sliders.
         state = state.without_faces()
     return state.is_untouched(EditState.for_photo(False))
 

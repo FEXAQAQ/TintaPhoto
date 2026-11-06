@@ -126,14 +126,15 @@ def test_there_are_four_tabs_with_looks_beside_adjust(panel: Inspector) -> None:
     ]
 
 
-def test_portrait_and_lens_correction_are_on_the_retouch_tab(panel: Inspector) -> None:
-    """2026-11-01: neither is wanted on every photo, so they left the adjust tab."""
+def test_lens_correction_is_on_the_retouch_tab(panel: Inspector) -> None:
+    """2026-11-01: not wanted on every photo, so it left the adjust tab.
+
+    The portrait left with it, and then for a mode of its own (PLAN.md 3.15).
+    """
     retouch = panel.retouch_tab
-    assert set(retouch.rows()) == {"skin", "whiten"}
     assert set(retouch.lens_rows()) == {"distortion", "vignetting"}
     assert [group.header.text() for group in retouch.groups()] == [
         tr("adjust.group.spots"),
-        tr("adjust.group.portrait"),
         tr("adjust.group.lens"),
     ]
     adjust = panel.adjust_tab

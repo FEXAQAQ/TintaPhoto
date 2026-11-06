@@ -31,6 +31,7 @@ from core import embedded_lens
 from core import lens as lens_module
 from core.faces import Face
 from core.lens import LensProfile, LensShot
+from core.skin_range import SkinRange
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,11 @@ class DecodedPhoto:
     #: photo, so that the preview and the export agree on them; the geometry
     #: step moves them with the photo.
     faces: tuple[Face, ...] | None = None
+    #: The skin the portrait sliders work on, as the brush left it (PLAN.md
+    #: 2.10), in fractions of this photo's own frame. Set by the geometry
+    #: step from the photo's geometry and moved with the frame like the
+    #: faces; ``None`` is the skin found by itself, with no strokes.
+    skin: SkinRange | None = None
 
     @property
     def size(self) -> tuple[int, int]:

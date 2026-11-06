@@ -2296,3 +2296,77 @@ def test_the_collage_and_the_watermark_keep_out_of_each_other(
 def test_the_watermark_shortcut_is_t(window: MainWindow) -> None:
     assert window.shortcut_handlers()["shortcut.watermark"] == window.toggle_watermark
     assert tr("shortcut.watermark") == "T"
+
+
+# -- the portrait (PLAN.md 2.10, 3.15) ---------------------------------------
+
+
+def test_the_portrait_needs_a_photo(window: MainWindow) -> None:
+    window.toggle_portrait()
+    assert not window.in_portrait
+    assert not window.toolbar.portrait_button.isChecked()
+
+
+def test_the_portrait_takes_the_inspectors_place_and_keeps_the_history(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.toggle_portrait()
+    qt_app.processEvents()  # type: ignore[attr-defined]
+    assert window.in_portrait
+    assert window.toolbar.portrait_button.isChecked()
+    assert window.portrait_panel.isVisible() and not window.inspector.isVisible()
+    assert window.toolbar.title_label.text().endswith("a.jpg")
+    assert not window.preview.canvas.skin.active  # the brush waits to be taken up
+
+    window.toggle_portrait_brush("add")
+    assert window.preview.canvas.skin.active
+    window.on_escape()  # puts the brush down first
+    assert window.in_portrait and not window.preview.canvas.skin.active
+    window.on_escape()
+    qt_app.processEvents()  # type: ignore[attr-defined]
+    assert not window.in_portrait
+    assert window.inspector.isVisible() and not window.portrait_panel.isVisible()
+
+
+def test_a_stroke_on_the_photo_shapes_the_skin(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.enter_portrait()
+    window.toggle_portrait_brush("remove")
+    window.preview.canvas.skin.stroke_painted.emit([(0.4, 0.5), (0.6, 0.5)])
+    skin = window.controller.skin
+    assert len(skin.strokes) == 1 and not skin.strokes[0].adding
+    assert window.portrait_panel.reset_button.isEnabled()
+    window.controller.undo()
+    assert window.controller.skin.strokes == ()
+
+
+def test_the_portrait_and_the_watermark_take_turns(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.enter_portrait()
+    window.enter_watermark()
+    assert window.in_watermark and not window.in_portrait
+    window.enter_portrait()
+    assert window.in_portrait and not window.in_watermark
+    window.enter_collage()
+    assert not window.in_portrait
+    assert not window.toolbar.portrait_button.isEnabled()
+    window.leave_collage()
+    assert window.toolbar.portrait_button.isEnabled()
+
+
+def test_the_portrait_keys(window: MainWindow) -> None:
+    handlers = window.shortcut_handlers()
+    assert handlers["shortcut.portrait"] == window.toggle_portrait
+    assert handlers["shortcut.portrait_show"] == window.toggle_portrait_showing
+    assert [tr(key) for key in (
+        "shortcut.portrait", "shortcut.portrait_add", "shortcut.portrait_remove",
+        "shortcut.portrait_show",
+    )] == ["P", "B", "E", "M"]

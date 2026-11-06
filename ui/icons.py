@@ -72,6 +72,9 @@ ICON_WAND: Final[str] = "wand"
 ICON_SPOT: Final[str] = "spot"
 #: A rubber stamp: the toolbar button that opens the watermark (PLAN.md 3.14).
 ICON_STAMP: Final[str] = "stamp"
+#: A face in a viewfinder's corners: the toolbar button that opens the
+#: portrait (PLAN.md 3.15). Lucide's "scan-face".
+ICON_PORTRAIT: Final[str] = "portrait"
 
 
 def icons_dir() -> Path:

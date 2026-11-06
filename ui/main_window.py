@@ -56,6 +56,7 @@ from ui.filmstrip import Filmstrip, FilmstripTab
 from ui.histogram_widget import clipping_overlay
 from ui.about_dialog import AboutDialog
 from ui.collage_panel import CollagePanel
+from ui.portrait_panel import BRUSH_ADD, BRUSH_REMOVE, PortraitPanel
 from ui.watermark_panel import WatermarkPanel
 from ui.collage_view import CollageCanvas
 from ui.devlog_dialog import DevlogDialog
@@ -108,6 +109,8 @@ class MainWindow(QMainWindow):
         self._collage_mode = False
         #: Whether the watermark is being placed (PLAN.md 3.14).
         self._watermark_mode = False
+        #: Whether the portrait is open (PLAN.md 3.15).
+        self._portrait_mode = False
         #: What the watermark on screen was last drawn for, so that a new
         #: preview of the same photo does not draw it again.
         self._watermark_drawn: tuple[object, tuple[int, int]] | None = None
@@ -178,6 +181,10 @@ class MainWindow(QMainWindow):
         self.watermark_panel = WatermarkPanel(middle)
         middle_layout.addWidget(self.watermark_panel)
         self.watermark_panel.hide()
+        #: In the inspector's place while the portrait is open (PLAN.md 3.15).
+        self.portrait_panel = PortraitPanel(middle)
+        middle_layout.addWidget(self.portrait_panel)
+        self.portrait_panel.hide()
 
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -214,7 +221,7 @@ class MainWindow(QMainWindow):
         self.controller.adjustments_ready.connect(self.inspector.set_adjustments)
         self.controller.adjustments_ready.connect(self._on_photo_announced)
         self.controller.state_restored.connect(self.inspector.adjust_tab.set_state)
-        self.controller.state_restored.connect(self.inspector.retouch_tab.set_state)
+        self.controller.state_restored.connect(self.portrait_panel.set_state)
         self.controller.state_restored.connect(self.inspector.looks_tab.set_state)
         self.controller.geometry_changed.connect(self._on_geometry_changed)
         self.controller.history_changed.connect(self._on_history_changed)
@@ -235,10 +242,8 @@ class MainWindow(QMainWindow):
         self.filmstrip.checked_changed.connect(lambda _photos: self._show_export_count())
 
         self.inspector.adjust_tab.value_set.connect(self.controller.set_adjustment)
-        self.inspector.retouch_tab.value_set.connect(self.controller.set_adjustment)
         self.inspector.retouch_tab.lens_set.connect(self._on_lens_set)
         self.controller.lens_ready.connect(self.inspector.retouch_tab.set_lens_profile)
-        self.controller.faces_ready.connect(self.inspector.retouch_tab.set_faces)
         self.inspector.histogram.clipping_toggled.connect(self._on_clipping_toggled)
         self.inspector.histogram.set_mode(self._settings.histogram_mode)
         self.preview.canvas.resized.connect(self._on_preview_resized)
@@ -272,6 +277,25 @@ class MainWindow(QMainWindow):
         self._connect_filters()
         self._connect_collage()
         self._connect_watermark()
+        self._connect_portrait()
+
+    def _connect_portrait(self) -> None:
+        """Join the portrait's panel and brush to the controller (PLAN.md 3.15)."""
+        panel = self.portrait_panel
+        panel.value_set.connect(self.controller.set_adjustment)
+        panel.auto_set.connect(self.controller.set_skin_auto)
+        panel.reset_requested.connect(self.controller.reset_skin)
+        panel.leave_requested.connect(self.leave_portrait)
+        panel.brush_changed.connect(self._show_portrait_brush)
+        panel.brush_size_set.connect(lambda _radius, _dragging: self._show_portrait_brush())
+        panel.showing_changed.connect(self._on_portrait_showing)
+        self.controller.adjustments_ready.connect(
+            lambda state, _shot: self.portrait_panel.set_state(state)
+        )
+        self.controller.faces_ready.connect(self._on_faces_ready)
+        self.controller.skin_shown.connect(self._on_skin_shown)
+        self.preview.canvas.skin.stroke_painted.connect(self._on_skin_painted)
+        self.toolbar.portrait_button.clicked.connect(self.toggle_portrait)
 
     def _connect_watermark(self) -> None:
         """Join the watermark's panel and overlay to the settings (PLAN.md 3.14)."""
@@ -437,6 +461,7 @@ class MainWindow(QMainWindow):
         # Another folder starts in the editor, where the panels are set up
         # for what was opened.
         self.leave_watermark()
+        self.leave_portrait()
         self.filmstrip.set_photos(photos)
         self.controller.request_thumbnails(photos)
         self._show_recent_folders()
@@ -448,6 +473,8 @@ class MainWindow(QMainWindow):
         self.filmstrip.set_current(index, total)
         # A selected spot belongs to the photo it was selected on.
         self.preview.canvas.spots.select(-1)
+        # So does the skin shown in the portrait; the next photo's follows.
+        self.preview.canvas.skin.set_skin(None)
         # A photo moved to starts the wait over: the sign comes up only if
         # this one is still being developed DEVELOPING_DELAY_MS from now.
         self.preview.set_developing(False)
@@ -755,6 +782,119 @@ class MainWindow(QMainWindow):
 
     # -- the collage (PLAN.md 2.8, 3.13) ---------------------------------
 
+    # -- the portrait (PLAN.md 2.10, 3.15) --------------------------------
+
+    def toggle_portrait(self) -> None:
+        """Open the portrait, or go back to editing if it is open (P)."""
+        if self._portrait_mode:
+            self.leave_portrait()
+        else:
+            self.enter_portrait()
+
+    def enter_portrait(self) -> None:
+        """Put the portrait's panel in the inspector's place, its brush on the photo.
+
+        The tools that take the click on the photo are put down and a crop in
+        progress is finished first, as for the watermark. Undo and redo go on
+        working: what is done here is done to the photo.
+        """
+        if self._portrait_mode or self._collage_mode or self.controller.current is None:
+            self.toolbar.portrait_button.setChecked(self._portrait_mode)
+            return
+        self.leave_watermark()
+        if self.controller.cropping:
+            self.finish_crop()
+        self.set_spot_tool(False)
+        self.set_picking_white_balance(False)
+        self._portrait_mode = True
+        self.toolbar.portrait_button.setChecked(True)
+        panel = self.portrait_panel
+        panel.set_state(self.controller.state)
+        panel.set_skin(self.controller.skin)
+        panel.set_faces(self._faces_count())
+        self.inspector.hide()
+        panel.show()
+        self.preview.canvas.skin.set_open(True)
+        self._show_portrait_brush()
+        self._on_portrait_showing(panel.showing)
+        self.controller.request_skin_shown()
+        self.preview.canvas.setFocus()
+
+    def leave_portrait(self) -> None:
+        """Go back to editing; the skin range stays with each photo."""
+        if not self._portrait_mode:
+            return
+        self._portrait_mode = False
+        self.portrait_panel.set_brush(None)
+        canvas = self.preview.canvas
+        canvas.skin.set_open(False)
+        canvas.skin.set_skin(None)
+        canvas.update()
+        self.toolbar.portrait_button.setChecked(False)
+        self.portrait_panel.hide()
+        if not self.is_inspector_collapsed():
+            self.inspector.show()
+        self.preview.setFocus()
+
+    @property
+    def in_portrait(self) -> bool:
+        """Return whether the portrait is open."""
+        return self._portrait_mode
+
+    def toggle_portrait_brush(self, brush: str) -> None:
+        """Take the brush up for *brush*, or put it down if it already does that (B, E)."""
+        panel = self.portrait_panel
+        panel.set_brush(None if panel.brush == brush else brush)
+
+    def toggle_portrait_showing(self) -> None:
+        """Show the skin over the photo, or stop showing it (M)."""
+        self.portrait_panel.set_showing(not self.portrait_panel.showing)
+
+    def _faces_count(self) -> int | None:
+        """Return how many faces the photo now open holds, or ``None`` while looking."""
+        found = self.controller.faces_of_current()
+        return None if found is None else len(found)
+
+    def _show_portrait_brush(self) -> None:
+        """Give the photo's brush what the panel says, at the size it is on screen."""
+        panel = self.portrait_panel
+        brush = panel.brush
+        canvas = self.preview.canvas
+        has_photo = self.controller.current is not None
+        canvas.skin.set_brush(
+            self._portrait_mode and brush is not None and has_photo,
+            brush != BRUSH_REMOVE,
+            self.controller.shown_radius(panel.brush_size) if has_photo else 0.0,
+        )
+        canvas.refresh_cursor()
+        canvas.update()
+
+    def _on_portrait_showing(self, showing: bool) -> None:
+        self.preview.canvas.skin.set_showing(showing)
+        self.preview.canvas.update()
+
+    def _on_faces_ready(self, count: int | None) -> None:
+        """Say how many faces were found, and show the skin found beside them."""
+        self.portrait_panel.set_faces(count)
+        if self._portrait_mode and count:
+            self.controller.request_skin_shown()
+
+    def _on_skin_shown(self, skin: object) -> None:
+        if not self._portrait_mode:
+            return
+        self.preview.canvas.skin.set_skin(skin)  # type: ignore[arg-type]
+        self.preview.canvas.update()
+
+    def _on_skin_painted(self, points: list[tuple[float, float]]) -> None:
+        """Add to the skin or take from it, as the brush says."""
+        panel = self.portrait_panel
+        brush = panel.brush
+        if brush is None:
+            return
+        self.controller.add_skin_stroke(
+            points, panel.brush_size, adding=brush == BRUSH_ADD, snap=panel.snap
+        )
+
     # -- the watermark (PLAN.md 2.9, 3.14) -------------------------------
 
     def toggle_watermark(self) -> None:
@@ -774,6 +914,7 @@ class MainWindow(QMainWindow):
         if self._watermark_mode or self._collage_mode or self.controller.current is None:
             self.toolbar.watermark_button.setChecked(self._watermark_mode)
             return
+        self.leave_portrait()
         if self.controller.cropping:
             self.finish_crop()
         self.set_spot_tool(False)
@@ -880,6 +1021,7 @@ class MainWindow(QMainWindow):
         """
         if self._collage_mode:
             return
+        self.leave_portrait()
         if self.controller.cropping:
             self.finish_crop()
         self.set_spot_tool(False)
@@ -895,6 +1037,7 @@ class MainWindow(QMainWindow):
         self.set_info_shown(False)
         self.toolbar.info_button.setEnabled(False)
         self.toolbar.watermark_button.setEnabled(False)
+        self.toolbar.portrait_button.setEnabled(False)
         self._show_toolbar_for_welcome()
         self.toolbar.collage_button.setChecked(True)
         self.preview.hide()
@@ -917,6 +1060,7 @@ class MainWindow(QMainWindow):
         self._show_toolbar_for_welcome()
         self.toolbar.info_button.setEnabled(True)
         self.toolbar.watermark_button.setEnabled(True)
+        self.toolbar.portrait_button.setEnabled(True)
         self.toolbar.collage_button.setChecked(False)
         self.collage_canvas.hide()
         self.collage_panel.hide()
@@ -1122,6 +1266,10 @@ class MainWindow(QMainWindow):
         box.set_source(self.controller.photo_size)
         box.set_geometry(geometry_now)
         self._show_spots()
+        if self._portrait_mode:
+            self.portrait_panel.set_skin(geometry_now.skin)
+            self._show_portrait_brush()
+            self.controller.request_skin_shown()
         self.preview.canvas.update()
 
     def _on_lens_set(self, settings: LensSettings, dragging: bool) -> None:
@@ -1284,7 +1432,16 @@ class MainWindow(QMainWindow):
         self.preview.canvas.update()
 
     def resize_spot_brush(self, larger: bool) -> None:
-        """Make the brush, or the selected spot, a step larger or smaller ([ and ])."""
+        """Make the brush, or the selected spot, a step larger or smaller ([ and ]).
+
+        In the portrait it is the portrait's brush (PLAN.md 3.15).
+        """
+        if self._portrait_mode:
+            panel = self.portrait_panel
+            factor = SPOT_SIZE_STEP if larger else 1.0 / SPOT_SIZE_STEP
+            panel.set_brush_size(panel.brush_size * factor)
+            self._show_portrait_brush()
+            return
         if not self.spot_tool_on:
             return
         retouch = self.inspector.retouch_tab
@@ -1694,6 +1851,10 @@ class MainWindow(QMainWindow):
             "shortcut.check_none": self.check_no_photos,
             "shortcut.collage": self.toggle_collage,
             "shortcut.watermark": self.toggle_watermark,
+            "shortcut.portrait": self.toggle_portrait,
+            "shortcut.portrait_add": lambda: self.toggle_portrait_brush(BRUSH_ADD),
+            "shortcut.portrait_remove": lambda: self.toggle_portrait_brush(BRUSH_REMOVE),
+            "shortcut.portrait_show": self.toggle_portrait_showing,
             "shortcut.settings": self.open_settings,
             "shortcut.fullscreen": self.toggle_full_screen,
             "shortcut.zoom_in": canvas.zoom_in,
@@ -1728,6 +1889,10 @@ class MainWindow(QMainWindow):
             return
         if self._watermark_mode and key not in _WATERMARK_SHORTCUTS:
             return
+        if self._portrait_mode and key in _NOT_IN_PORTRAIT:
+            return
+        if not self._portrait_mode and key in _PORTRAIT_ONLY:
+            return
         handler()
 
     def _show_tab(self, tab: InspectorTab) -> None:
@@ -1755,6 +1920,11 @@ class MainWindow(QMainWindow):
         """
         if self._watermark_mode:
             self.leave_watermark()
+        elif self._portrait_mode and self.portrait_panel.brush is not None:
+            # The brush is put down first, then the portrait is left.
+            self.portrait_panel.set_brush(None)
+        elif self._portrait_mode:
+            self.leave_portrait()
         elif self._collage_mode and self.collage_canvas.aligning:
             # Esc ends the nearer thing first: aligning, then the collage.
             self.collage_panel.set_aligning(False)
@@ -1872,9 +2042,10 @@ class MainWindow(QMainWindow):
             return False
         if event.key() not in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
             return False
-        if self._watermark_mode:
-            # The watermark's panel is not the inspector the key folds away,
-            # so Tab moves between its controls as usual.
+        if self._watermark_mode or self._portrait_mode:
+            # Neither the watermark's panel nor the portrait's is the
+            # inspector the key folds away, so Tab moves between its
+            # controls as usual.
             return False
         self.toggle_focus_mode()
         return True
@@ -2010,6 +2181,42 @@ _COLLAGE_SHORTCUTS: frozenset[str] = frozenset(
         "shortcut.fullscreen",
         "shortcut.crop_cancel",
     }
+)
+
+#: What does nothing while the portrait is open (PLAN.md 3.15): the keys
+#: that work on the editing panel it covers, or that take the click on the
+#: photo away from its brush. Everything else - history, stepping through
+#: the photos, zooming, exporting - goes on as in the editor.
+_NOT_IN_PORTRAIT: frozenset[str] = frozenset(
+    {
+        "shortcut.white_balance_pick",
+        "shortcut.auto_light",
+        "shortcut.spot_tool",
+        "shortcut.crop",
+        "shortcut.crop_flip",
+        "shortcut.crop_grid",
+        "shortcut.crop_apply",
+        "shortcut.turn_left",
+        "shortcut.turn_right",
+        "shortcut.mirror_horizontal",
+        "shortcut.mirror_vertical",
+        "shortcut.reset",
+        "shortcut.copy_settings",
+        "shortcut.paste_settings",
+        "shortcut.new_preset",
+        "shortcut.toggle_inspector",
+        "shortcut.tab_adjust",
+        "shortcut.tab_looks",
+        "shortcut.tab_retouch",
+        "shortcut.tab_crop",
+        "shortcut.clipping",
+        "shortcut.histogram_mode",
+    }
+)
+
+#: The portrait's own keys, which mean nothing anywhere else.
+_PORTRAIT_ONLY: frozenset[str] = frozenset(
+    {"shortcut.portrait_add", "shortcut.portrait_remove", "shortcut.portrait_show"}
 )
 
 #: What still works while the watermark is being placed (PLAN.md 3.14):

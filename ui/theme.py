@@ -212,6 +212,17 @@ SPOT_PAINT_ALPHA: Final[int] = 112
 #: point; and how far a press may wander and still count as a click.
 SPOT_PAINT_STEP: Final[int] = 2
 SPOT_CLICK_SLOP: Final[int] = 4
+#: The portrait brush (PLAN.md 3.15): the skin the sliders work on is shown
+#: as a rose wash over the photo, a mark that says something about the
+#: photo as the clipping marks do, so it has a colour of its own. What the
+#: brush is painting is washed white when it adds and dark when it takes
+#: away; the brush itself is the spot brush's circle.
+SKIN_RANGE: Final[str] = "#FF6B8B"
+SKIN_RANGE_ALPHA: Final[int] = 120
+SKIN_REMOVE_WASH: Final[str] = "#000000"
+SKIN_REMOVE_ALPHA: Final[int] = 112
+#: Half the length of the + or − drawn in the brush's middle.
+SKIN_BRUSH_MARK: Final[int] = 4
 #: How near the pointer has to be to take hold of the collage's seam, either
 #: side of it (PLAN.md 3.13).
 COLLAGE_SEAM_GRAB: Final[int] = 8
@@ -622,7 +633,7 @@ QToolTip {{
     padding: {SPACE_XS}px {SPACE_SM}px;
 }}
 
-#Inspector, #CollagePanel, #WatermarkPanel {{
+#Inspector, #CollagePanel, #WatermarkPanel, #PortraitPanel {{
     background-color: {BG_PANEL};
     border-left: {BORDER_WIDTH}px solid {BORDER};
 }}

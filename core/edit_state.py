@@ -336,13 +336,15 @@ class Edit:
         An untouched photo has nothing worth storing, which is what makes its
         parameter file go away (PLAN.md 7.1). The lens correction is compared
         with *reference* rather than with off, since a RAW photo starts with
-        it on (PLAN.md 2.2). A mended spot is a change like any other.
+        it on (PLAN.md 2.2). A mended spot is a change like any other, and
+        so is a skin range shaped by the brush (PLAN.md 2.10).
         """
         return (
             self.adjustments.is_untouched(reference.adjustments)
             and self.geometry.is_default
             and self.geometry.lens == reference.geometry.lens
             and not self.geometry.spots
+            and self.geometry.skin.is_default
         )
 
 

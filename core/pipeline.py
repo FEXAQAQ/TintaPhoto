@@ -30,6 +30,7 @@ from numpy.typing import NDArray
 from core import color_management as cm
 from core import faces as faces_module
 from core import geometry as geometry_module
+from core import skin_range
 from core.decoder import PROXY_LONG_EDGE, ColorSpace, DecodedPhoto
 from core.filters import Look
 from core.geometry import Geometry, Window
@@ -993,26 +994,50 @@ def apply_detail(
 
 
 def has_skin(state: EditState, photo: DecodedPhoto) -> bool:
-    """Return whether the skin slider asks for anything and there is a face for it."""
-    return state.skin != 0.0 and bool(photo.faces)
+    """Return whether the skin slider asks for anything and there is a face for it.
+
+    Smoothing is worked out face by face, so it needs a face even where the
+    brush has added skin (PLAN.md 2.10).
+    """
+    return (
+        state.skin != 0.0
+        and bool(photo.faces)
+        and not skin_range.reaches_nothing(photo.faces, photo.skin)
+    )
 
 
 def has_whiten(state: EditState, photo: DecodedPhoto) -> bool:
-    """Return whether the whitening slider asks for anything and there is a face for it."""
-    return state.whiten != 0.0 and bool(photo.faces)
+    """Return whether the whitening slider asks for anything and there is skin for it.
+
+    Skin found beside a face, or skin the brush added where no face was
+    found (PLAN.md 2.10).
+    """
+    return state.whiten != 0.0 and not skin_range.reaches_nothing(photo.faces, photo.skin)
+
+
+def needs_body(state: EditState, photo: DecodedPhoto) -> bool:
+    """Return whether developing *photo* wants :func:`body_field`.
+
+    Whitening always does; smoothing only when the brush has changed the
+    skin it works on.
+    """
+    if has_whiten(state, photo):
+        return True
+    return has_skin(state, photo) and photo.skin is not None and not photo.skin.is_default
 
 
 def body_field(photo: DecodedPhoto) -> NDArray[np.float32] | None:
-    """Return the skin joined to *photo*'s faces, over its whole frame.
+    """Return the skin of *photo* over its whole frame, as :func:`core.skin_range.field`.
 
-    *photo* is the whole frame, framed and cropped. The field is small, and
-    :meth:`Window.take` cuts and stretches it for whatever is developed, so
-    a zoomed in window whitens exactly the skin the whole photo does
-    (PLAN.md 6 step 10, whitening). ``None`` without faces.
+    *photo* is the whole frame, framed and cropped, carrying its faces and
+    its skin range. The field is small, and :meth:`Window.take` cuts and
+    stretches it for whatever is developed, so a zoomed in window works on
+    exactly the skin the whole photo does (PLAN.md 6 step 10, whitening).
+    ``None`` when there is no skin to work on.
     """
-    if not photo.faces:
+    if skin_range.reaches_nothing(photo.faces, photo.skin):
         return None
-    return faces_module.body_mask(photo.image, photo.faces)
+    return skin_range.field(photo.image, photo.faces, photo.skin)
 
 
 def skin_placements(photo: DecodedPhoto, pane: Window) -> list[faces_module.Placement]:
@@ -1044,6 +1069,28 @@ def skin_reach(photo: DecodedPhoto, state: EditState, scale: float = 1.0) -> int
         widest, faces_module.MASK_SOFTEN, faces_module.COLOUR_HOLE_FILL / 2.0
     )
     return int(np.ceil(BLUR_REACH_SIGMAS * max(1.0, sigma)))
+
+
+def _shaped(
+    planes: NDArray[np.float32],
+    found: NDArray[np.float32] | None,
+    face: NDArray[np.float32] | None,
+) -> NDArray[np.float32]:
+    """Return the skin to work on: what was found, as the brush left it.
+
+    *planes* is :func:`body_field` cut to the photo at hand, *found* the
+    skin found beside the faces at that size and *face* the faces' own mask;
+    either may be missing. The strokes act as :func:`core.skin_range.field`
+    says: ``max(found × kept, added)``.
+    """
+    base = planes[..., skin_range.ADDED] * np.float32(0.0)
+    if found is not None:
+        base = np.maximum(base, found)
+    if face is not None:
+        base = np.maximum(base, face)
+    return np.maximum(
+        base * planes[..., skin_range.KEPT], planes[..., skin_range.ADDED]
+    ).astype(np.float32)
 
 
 def smooth_skin(
@@ -2495,9 +2542,9 @@ def is_passthrough(photo: DecodedPhoto, state: EditState | None = None) -> bool:
         return False
     if state is None:
         return True
-    if not photo.faces:
-        # The face sliders change nothing on a photo without faces, so they
-        # do not take the photo out of passing through.
+    if skin_range.reaches_nothing(photo.faces, photo.skin):
+        # The face sliders change nothing on a photo without skin for them,
+        # so they do not take the photo out of passing through.
         state = state.without_faces()
     return (
         state.is_neutral_colour
@@ -2729,23 +2776,32 @@ def develop(
     # Step 2.6, over the whole photo for the same reason. The mask is kept
     # for step 10, which brightens the same skin; whitening reaches the skin
     # joined to the faces as well.
+    # *skin* is the skin smoothed, which step 10 also brightens a little.
     skin: NDArray[np.float32] | None = None
     whitened: NDArray[np.float32] | None = None
-    if has_whiten(state, photo):
-        if body is None:
-            body = body_field(photo)
-        if body is not None:
-            whitened = pane.take(body).astype(np.float32, copy=False)
-    if has_skin(state, photo) or whitened is not None:
+    smoothing = has_skin(state, photo)
+    whitening = has_whiten(state, photo)
+    if smoothing or whitening:
+        planes: NDArray[np.float32] | None = None
+        if needs_body(state, photo):
+            if body is None:
+                body = body_field(photo)
+            if body is not None:
+                planes = pane.take(body).astype(np.float32, copy=False)
         placements = skin_placements(photo, pane)
-        skin = faces_module.skin_mask(photo.image, placements)
-        if skin is not None and whitened is not None:
-            whitened = np.maximum(whitened, skin)
-        if skin is not None and has_skin(state, photo):
-            photo = replace(
-                photo,
-                image=smooth_skin(photo.image, placements, skin, state.skin, photo.is_raw),
-            )
+        found = photo.skin is None or photo.skin.auto
+        # The face's own mask, at the photo's resolution, is sharper than
+        # the small field around the eyes and the mouth.
+        face = faces_module.skin_mask(photo.image, placements) if found else None
+        if whitening and planes is not None:
+            whitened = _shaped(planes, planes[..., skin_range.FOUND], face)
+        if smoothing:
+            skin = face if planes is None else _shaped(planes, None, face)
+            if skin is not None:
+                photo = replace(
+                    photo,
+                    image=smooth_skin(photo.image, placements, skin, state.skin, photo.is_raw),
+                )
 
     # Besides the detail step, only two things in the chain look at more
     # than one pixel at a time, and both are blurs: the softened mask of

@@ -1,8 +1,9 @@
-"""Tests for the retouch tab: spot removal, portrait and lens correction (PLAN.md 2.2, 3.1).
+"""Tests for the retouch tab: spot removal and lens correction (PLAN.md 2.2, 3.1).
 
 The portrait and lens groups used to be at the bottom of the adjust tab; they
-have a tab of their own because neither is wanted on every photo
-(2026-11-01). Spot removal joined them the same day (A-32).
+got a tab of their own because neither is wanted on every photo
+(2026-11-01). Spot removal joined them the same day (A-32). The portrait
+left again for a mode of its own, with its brush (2026-11-07, PLAN.md 3.15).
 """
 
 from __future__ import annotations
@@ -34,13 +35,11 @@ def tab(qt_app: object) -> Iterator[RetouchTab]:
     widget.deleteLater()
 
 
-def test_spot_removal_comes_first_then_the_portrait_then_the_lens(tab: RetouchTab) -> None:
+def test_spot_removal_comes_first_then_the_lens(tab: RetouchTab) -> None:
     assert [group.header.text() for group in tab.groups()] == [
         tr("adjust.group.spots"),
-        tr("adjust.group.portrait"),
         tr("adjust.group.lens"),
     ]
-    assert list(tab.rows()) == ["skin", "whiten"]
 
 
 # -- spot removal (A-32) -------------------------------------------------------
@@ -83,28 +82,6 @@ def test_the_caption_counts_the_spots_and_clearing_waits_for_one(tab: RetouchTab
     tab.spots_cleared.connect(lambda: cleared.append(True))
     tab.clear_spots_button.click()
     assert cleared == [True]
-
-
-def test_a_portrait_slider_says_what_changed(tab: RetouchTab) -> None:
-    tab.set_photo(EditState.for_photo(False))
-    tab.set_faces(1)
-    seen: list[tuple[str, float, bool]] = []
-    tab.value_set.connect(lambda name, value, dragging: seen.append((name, value, dragging)))
-
-    tab.rows()["skin"].set_value(30.0, announce=True)
-
-    assert seen[-1] == ("skin", pytest.approx(30.0), False)
-
-
-def test_undo_and_reset_show_the_portrait_without_announcing_it(tab: RetouchTab) -> None:
-    tab.set_photo(EditState.for_photo(False))
-    seen: list[object] = []
-    tab.value_set.connect(lambda *args: seen.append(args))
-
-    tab.set_state(EditState.for_photo(False).with_value("whiten", 25.0))
-
-    assert tab.rows()["whiten"].value == pytest.approx(25.0)
-    assert not seen
 
 
 def test_without_a_photo_the_groups_are_hidden(tab: RetouchTab) -> None:
@@ -202,39 +179,3 @@ def test_a_profile_without_vignetting_greys_only_that_slider(tab: RetouchTab) ->
 
     assert tab.lens_rows()["distortion"].isEnabled()
     assert not tab.lens_rows()["vignetting"].isEnabled()
-
-
-# -- skin enhancement (PLAN.md 2.2, A-29) ------------------------------------
-
-
-def test_the_portrait_group_says_how_many_faces_it_found(tab: RetouchTab) -> None:
-    tab.set_photo(EditState.for_photo(False))
-    skin = tab.rows()["skin"]
-
-    tab.set_faces(None)
-    assert tab.faces_caption.text() == tr("adjust.faces.looking")
-    assert skin.isEnabled()
-
-    tab.set_faces(2)
-    assert tab.faces_caption.text() == tr("adjust.faces.many", count=2)
-    assert skin.isEnabled()
-
-    tab.set_faces(1)
-    assert tab.faces_caption.text() == tr("adjust.faces.one")
-
-
-def test_the_skin_slider_is_greyed_out_without_faces(tab: RetouchTab) -> None:
-    tab.set_photo(EditState.for_photo(True, *SHOT))
-    tab.set_faces(0)
-    assert tab.faces_caption.text() == tr("adjust.faces.none")
-    assert not tab.rows()["skin"].isEnabled()
-
-
-def test_the_whitening_slider_sits_under_skin_and_is_greyed_out_with_it(tab: RetouchTab) -> None:
-    tab.set_photo(EditState.for_photo(False))
-    rows = tab.rows()
-    assert rows["whiten"].y() > rows["skin"].y()
-    tab.set_faces(0)
-    assert not rows["whiten"].isEnabled()
-    tab.set_faces(1)
-    assert rows["whiten"].isEnabled()

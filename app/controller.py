@@ -54,6 +54,7 @@ from core import (
     pipeline,
     presets,
     sidecar,
+    skin_range,
     thumbnails,
     watermark,
 )
@@ -66,6 +67,7 @@ from core.faces import Face
 
 from core.geometry import Geometry
 from core.healing import Spot
+from core.skin_range import SkinRange, SkinStroke
 from core.lens import LensSettings
 from core.cache import ThumbnailCache
 from core.decoder import DecodedPhoto, DecodeError
@@ -107,6 +109,9 @@ _GROUP_LOOK_THUMBNAILS = "look-thumbnails"
 #: Finding where a new spot takes its texture from. No group: every click
 #: of the spot removal tool is a spot of its own and none may be dropped.
 _GROUP_SPOT_SOURCE: Final[None] = None
+#: Showing the skin the portrait sliders work on (PLAN.md 3.15): only the
+#: newest is wanted.
+_GROUP_SKIN_SHOWN = "skin-shown"
 #: How many times a look thumbnail's side the photo is developed at along
 #: its long edge, so that even a 3:1 panorama still has the side across its
 #: short one.
@@ -334,6 +339,10 @@ class Controller(QObject):
     #: A stroke of the spot removal tool (A-32) has been mended and added,
     #: by its index in the geometry's spots.
     spot_added = Signal(int)
+    #: The skin the portrait sliders work on, as it lies on the frame on
+    #: screen: 0 to 255 for each pixel, at a size of its own, or ``None``
+    #: when there is none (PLAN.md 3.15).
+    skin_shown = Signal(object)
 
     def __init__(self, settings: Settings, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -703,7 +712,8 @@ class Controller(QObject):
         # One framed photo is kept, so the key says which photo was framed
         # and how: its size tells the proxy and the full size one apart, and
         # whether its faces had been found yet tells the two framings apart.
-        token = (path, source.size, shape, (path, shape.lens) in self._faces)
+        token = (path, source.size, geometry.frame_key(shape), (path, shape.lens) in self._faces)
+        skin = geometry.framed_skin(shape, source.size)
         transform = self._display_transform
         # The local brightness is a blur a hundredth of the frame wide, so it
         # is worked out on the proxy rather than on the full size photo. A
@@ -726,12 +736,16 @@ class Controller(QObject):
             field_photo: DecodedPhoto = field_from,
             field_key: object = field_token,
             look: Look | None = self._look_for(values),
+            skin: SkinRange | None = skin,
         ) -> NDArray[np.uint8]:
             """Develop the window, on whichever thread takes this on."""
             whole = framed.get(
                 key, lambda: geometry.apply(corrected(path, photo, shape), shape)
             )
             assert whole is not None  # the maker always returns a photo
+            # The framed photo is kept from one stroke of the portrait brush
+            # to the next; the newest skin range is put on it here.
+            whole = replace(whole, skin=skin)
             field = kept_field.get(
                 field_key,
                 lambda: pipeline.surroundings_field(
@@ -743,14 +757,15 @@ class Controller(QObject):
                 lambda: pipeline.with_detail(geometry.window_of(whole, around), values),
             )
             assert part is not None  # the maker always returns a photo
+            part = replace(part, skin=skin)
             grain = (
                 kept_grain.get((key, around), lambda: pipeline.grain_field(part, around))
                 if pipeline.has_grain(values)
                 else None
             )
             body = (
-                kept_body.get(key, lambda: pipeline.body_field(whole))
-                if pipeline.has_whiten(values, whole)
+                kept_body.get((key, skin), lambda: pipeline.body_field(whole))
+                if pipeline.needs_body(values, whole)
                 else None
             )
             developed = pipeline.develop(
@@ -1607,10 +1622,12 @@ class Controller(QObject):
     def reset_crop(self) -> None:
         """Put the crop and rotation back to the whole photo (PLAN.md 3.2).
 
-        The lens correction and the mended spots are not the crop tab's and
-        are left as they are.
+        The lens correction, the mended spots and the portrait's skin range
+        are not the crop tab's and are left as they are.
         """
-        fresh = Geometry(lens=self._geometry.lens, spots=self._geometry.spots)
+        fresh = Geometry(
+            lens=self._geometry.lens, spots=self._geometry.spots, skin=self._geometry.skin
+        )
         if self._cropping:
             fresh = replace(fresh, crop=geometry.start_crop(self.photo_size, fresh))
         self.set_geometry(fresh)
@@ -1739,6 +1756,98 @@ class Controller(QObject):
         """Give the photo these spots, the way any change of geometry is given."""
         self.set_geometry(replace(self._geometry, spots=spots), dragging)
         self.geometry_changed.emit(self._geometry)
+
+    # -- the portrait range (PLAN.md 2.10 and 3.15) -----------------------
+
+    @property
+    def skin(self) -> SkinRange:
+        """Return the skin range of the photo now open."""
+        return self._geometry.skin
+
+    def add_skin_stroke(
+        self,
+        points: Sequence[tuple[float, float]],
+        radius: float,
+        adding: bool,
+        snap: bool,
+    ) -> None:
+        """Add to the skin the portrait sliders work on, or take from it.
+
+        *points* is the path the pointer took, in fractions of the frame on
+        screen, and *radius* the brush's, a fraction of the photo's long
+        edge, as for :meth:`add_spot`. One stroke is one step of history.
+        """
+        if self.current is None or not points:
+            return
+        size, shape, crop = self._spot_frame()
+        on_photo = [geometry.source_point(point, size, shape, crop) for point in points]
+        on_photo = [(min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0)) for x, y in on_photo]
+        radius = skin_range.clamp_radius(radius)
+        stroke = SkinStroke(
+            points=skin_range.thinned(on_photo, radius, size),
+            radius=radius,
+            adding=adding,
+            snap=snap,
+        )
+        self._set_skin(self._geometry.skin.with_stroke(stroke))
+
+    def set_skin_auto(self, auto: bool) -> None:
+        """Say whether the skin beside the faces is found by itself."""
+        if self.current is not None and self._geometry.skin.auto != auto:
+            self._set_skin(replace(self._geometry.skin, auto=auto))
+
+    def reset_skin(self) -> None:
+        """Go back to the skin found by itself, every stroke gone, as one step."""
+        if self.current is not None and not self._geometry.skin.is_default:
+            self._set_skin(skin_range.DEFAULT_RANGE)
+
+    def _set_skin(self, skin: SkinRange) -> None:
+        """Give the photo this skin range, the way any change of geometry is given."""
+        self.set_geometry(replace(self._geometry, skin=skin))
+        self.geometry_changed.emit(self._geometry)
+
+    def request_skin_shown(self) -> None:
+        """Work out the skin on screen in the background, for :attr:`skin_shown`.
+
+        The same small field the preview whitens with, kept with it, so
+        showing it after a stroke costs nothing the preview has not paid.
+        """
+        path = self.current
+        decoded = self._decoded.get(path) if path is not None else None
+        if path is None or decoded is None:
+            self.skin_shown.emit(None)
+            return
+        long_edge = self._preview_long_edge
+        sized = self._sized_photo(path, decoded, long_edge)
+        shape = self._geometry
+        whole = self._cropping
+        key = (path, long_edge, geometry.frame_key(shape), whole, (path, shape.lens) in self._faces)
+        skin = geometry.framed_skin(shape, sized.size, crop=not whole)
+        corrected = self._corrected_lens
+        kept_body = self._body
+
+        def shown(photo: DecodedPhoto = sized) -> NDArray[np.uint8] | None:
+            """Work the skin out, on whichever thread takes this on."""
+            framed = self._framed.get(
+                key,
+                lambda: geometry.apply(corrected(path, photo, shape), shape, crop=not whole),
+            )
+            assert framed is not None  # the maker always returns a photo
+            framed = replace(framed, skin=skin)
+            if skin_range.reaches_nothing(framed.faces, framed.skin):
+                return None
+            field = kept_body.get((key, skin), lambda: pipeline.body_field(framed))
+            if field is None:
+                return None
+            combined = skin_range.combined(field)
+            return np.round(np.clip(combined, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+        self._submit(shown, _GROUP_SKIN_SHOWN, self._on_skin_shown, path)
+
+    def _on_skin_shown(self, path: Path, skin: NDArray[np.uint8] | None) -> None:
+        """Hand the skin on screen over, if it is still the photo's."""
+        if path == self.current:
+            self.skin_shown.emit(skin)
 
     # -- undo, redo and reset --------------------------------------------
 
@@ -2014,7 +2123,8 @@ class Controller(QObject):
         transform = self._display_transform
         frame = self._geometry if shape is None else shape
         whole = self._cropping
-        key = (path, long_edge, frame, whole, (path, frame.lens) in self._faces)
+        key = (path, long_edge, geometry.frame_key(frame), whole, (path, frame.lens) in self._faces)
+        skin = geometry.framed_skin(frame, sized.size, crop=not whole)
         on_screen = self._frame_of(path)
         detailed = self._detailed
         kept_grain = self._grain
@@ -2029,6 +2139,7 @@ class Controller(QObject):
             cut: bool = whole,
             token: object = key,
             look: Look | None = self._look_for(values),
+            skin: SkinRange | None = skin,
         ) -> NDArray[np.uint8]:
             """Develop the whole photo, on whichever thread takes this on."""
             framed = self._framed.get(
@@ -2036,19 +2147,23 @@ class Controller(QObject):
                 lambda: geometry.apply(corrected(path, photo, shape), shape, crop=not cut),
             )
             assert framed is not None  # the maker always returns a photo
+            # Kept from one stroke of the portrait brush to the next; the
+            # newest skin range is put on it here.
+            framed = replace(framed, skin=skin)
             sharpened = detailed.get(
                 (token, pipeline.detail_key(values)),
                 lambda: pipeline.with_detail(framed, values),
             )
             assert sharpened is not None  # the maker always returns a photo
+            sharpened = replace(sharpened, skin=skin)
             grain = (
                 kept_grain.get(token, lambda: pipeline.grain_field(framed))
                 if pipeline.has_grain(values)
                 else None
             )
             body = (
-                kept_body.get(token, lambda: pipeline.body_field(framed))
-                if pipeline.has_whiten(values, framed)
+                kept_body.get((token, skin), lambda: pipeline.body_field(framed))
+                if pipeline.needs_body(values, framed)
                 else None
             )
             return cm.apply_display_transform(
