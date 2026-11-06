@@ -151,15 +151,21 @@ def _drawn(overlay: SpotOverlay) -> QImage:
     return image
 
 
-def test_a_mended_stroke_keeps_a_faint_outline_and_a_selected_one_a_solid_one(
-    qt_app: object,
-) -> None:
-    overlay = _overlay(qt_app)
-    faint = max(QColor(_drawn(overlay).pixel(x, 150)).lightness() for x in range(270, 331))
+def test_a_mended_stroke_is_not_outlined_until_it_is_selected(qt_app: object) -> None:
+    overlay = _overlay(qt_app, [DOT, LINE])
+    # Nothing at all is drawn over the photo: no outline, no source.
+    unselected = _drawn(overlay)
+    assert all(
+        QColor(unselected.pixel(x, y)).name().upper() == "#808080"
+        for x in range(100, 500, 2)
+        for y in range(50, 250, 2)
+    )
     overlay.select(0)
     image = _drawn(overlay)
     solid = max(QColor(image.pixel(x, 150)).lightness() for x in range(270, 331))
-    assert 128 < faint < solid
+    assert solid > 160
+    # Only the selected stroke is outlined: the line along the top is not.
+    assert all(QColor(image.pixel(x, 90)).name().upper() == "#808080" for x in range(170, 270))
     # Inside the outline the photo is left alone: the tool covers nothing.
     assert QColor(image.pixel(300, 150)).name().upper() == "#808080"
     # The source is drawn once the stroke is selected: its outline crosses

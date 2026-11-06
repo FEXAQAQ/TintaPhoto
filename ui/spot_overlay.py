@@ -5,10 +5,10 @@ the button down paints: what has been painted is covered in a light wash, and
 letting go mends all of it at once, its source chosen by the program. A click
 that does not move is a round dot.
 
-What has been mended keeps only a faint outline. A click on one selects it:
-its outline turns solid and the outline of its source appears, joined to it
-by a line; then dragging either moves it, and the window deletes it on
-Delete. Painting can start anywhere, over an earlier stroke too: only a
+What has been mended is not outlined, so the photo stays clear however many
+strokes there are. A click on one still selects it: its outline appears with
+the outline of its source, joined to it by a line; then dragging either
+moves it, and the window deletes it on Delete. Painting can start anywhere, over an earlier stroke too: only a
 press on the selected stroke or its source takes hold of it.
 
 Like the crop box this is not a widget: it draws into the canvas's painter
@@ -37,7 +37,7 @@ _NOTHING: Final[int] = -1
 
 
 class SpotOverlay(QObject):
-    """The brush, what is being painted, the mended strokes and a selection."""
+    """The brush, what is being painted, and the selected stroke with its source."""
 
     #: A stroke painted, or a dot clicked: its path, in fractions of the
     #: frame as shown.
@@ -135,16 +135,14 @@ class SpotOverlay(QObject):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setClipRect(photo)
-        for index, (path, source, radius) in enumerate(self._spots):
+        if 0 <= self._selected < len(self._spots):
+            path, source, radius = self._spots[self._selected]
             size = _radius(photo, radius)
             outline = _outline([_at(photo, point) for point in path], size)
-            if index == self._selected:
-                source_outline = _outline([_at(photo, point) for point in source], size)
-                self._draw_link(painter, _at(photo, source[0]), _at(photo, path[0]), size)
-                self._draw_outline(painter, source_outline, theme.SPOT_LINE_WIDTH, faint=False)
-                self._draw_outline(painter, outline, theme.SPOT_SELECTED_WIDTH, faint=False)
-            else:
-                self._draw_outline(painter, outline, theme.SPOT_LINE_WIDTH, faint=True)
+            source_outline = _outline([_at(photo, point) for point in source], size)
+            self._draw_link(painter, _at(photo, source[0]), _at(photo, path[0]), size)
+            self._draw_outline(painter, source_outline, theme.SPOT_LINE_WIDTH)
+            self._draw_outline(painter, outline, theme.SPOT_SELECTED_WIDTH)
         brush = _radius(photo, self._brush)
         if self._painting is not None:
             wash = QColor(theme.WHITE)
@@ -161,17 +159,15 @@ class SpotOverlay(QObject):
         ):
             circle = QPainterPath()
             circle.addEllipse(self._pointer, brush, brush)
-            self._draw_outline(painter, circle, theme.SPOT_LINE_WIDTH, faint=False)
+            self._draw_outline(painter, circle, theme.SPOT_LINE_WIDTH)
         painter.restore()
 
     @staticmethod
-    def _draw_outline(painter: QPainter, outline: QPainterPath, width: int, faint: bool) -> None:
+    def _draw_outline(painter: QPainter, outline: QPainterPath, width: int) -> None:
         """Draw a white line with a dark edge, so it shows on any photo."""
         halo = QColor(theme.SPOT_HALO)
-        halo.setAlpha(theme.SPOT_FAINT_HALO_ALPHA if faint else theme.SPOT_HALO_ALPHA)
+        halo.setAlpha(theme.SPOT_HALO_ALPHA)
         line = QColor(theme.WHITE)
-        if faint:
-            line.setAlpha(theme.SPOT_FAINT_ALPHA)
         painter.setPen(QPen(halo, width + 2 * theme.SPOT_HALO_WIDTH))
         painter.drawPath(outline)
         painter.setPen(QPen(line, width))
@@ -190,7 +186,7 @@ class SpotOverlay(QObject):
         end = QPointF(target.x() - ux * radius, target.y() - uy * radius)
         line = QPainterPath(start)
         line.lineTo(end)
-        SpotOverlay._draw_outline(painter, line, theme.SPOT_LINE_WIDTH, faint=False)
+        SpotOverlay._draw_outline(painter, line, theme.SPOT_LINE_WIDTH)
 
     # -- the mouse -------------------------------------------------------
 

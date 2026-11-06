@@ -196,7 +196,8 @@ CROP_OUTSIDE_DIM: Final[float] = 0.60
 #: The spot removal brush (PLAN.md 3.6, A-32): white outlines over the photo,
 #: like the crop box's, each with a dark edge either side so that it shows
 #: on a white wall as well as on a dark sky. The selected stroke is drawn
-#: heavier, the way the current state is marked everywhere else.
+#: heavier, the way the current state is marked everywhere else. What has
+#: been mended is not outlined until it is selected.
 SPOT_LINE_WIDTH: Final[int] = 1
 SPOT_SELECTED_WIDTH: Final[int] = 2
 SPOT_HALO: Final[str] = "#000000"
@@ -204,9 +205,6 @@ SPOT_HALO_ALPHA: Final[int] = 128
 SPOT_HALO_WIDTH: Final[int] = 1
 #: How near the pointer has to be to take hold of a spot too small to aim at.
 SPOT_GRAB_RADIUS: Final[int] = 8
-#: What has been mended keeps only a faint outline until it is selected.
-SPOT_FAINT_ALPHA: Final[int] = 96
-SPOT_FAINT_HALO_ALPHA: Final[int] = 48
 #: The light wash over what the brush is painting, out of 255: enough to see
 #: where it has been, thin enough to see what is under it.
 SPOT_PAINT_ALPHA: Final[int] = 112
