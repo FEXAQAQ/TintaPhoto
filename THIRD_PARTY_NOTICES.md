@@ -51,10 +51,12 @@ https://code.qt.io/cgit/pyside/pyside-setup.git/.
   covered by the project's MIT licence. They follow the visual conventions of
   the Lucide icon set (24 px grid, 1.5 px stroke) but contain no Lucide files.
 * Latin text and numbers are set in **Inter 4.1**, Copyright (c) 2016 The Inter
-  Project Authors, used under the SIL Open Font License 1.1. The two static
-  font files in `resources/fonts` (`Inter-Regular.ttf`, `Inter-SemiBold.ttf`)
-  were taken unchanged from the official release at
-  https://github.com/rsms/inter/releases/tag/v4.1 on 2026-10-21; the full
+  Project Authors, used under the SIL Open Font License 1.1. The four static
+  font files in `resources/fonts` (`Inter-Regular.ttf`, `Inter-SemiBold.ttf`,
+  and, added 2026-11-06 for the watermark, `Inter-Italic.ttf` and
+  `Inter-SemiBoldItalic.ttf`) were taken unchanged from the official release at
+  https://github.com/rsms/inter/releases/tag/v4.1 on 2026-10-21 (the italics
+  on 2026-11-06, from the same zip); the full
   licence text, with its copyright line, is in `licenses/OFL-1.1.txt`. The
   font is redistributed, not sold, and carries no reserved font name, so the
   OFL's conditions are met by shipping that text alongside it. Chinese text

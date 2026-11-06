@@ -334,3 +334,10 @@ def test_the_screen_copy_carries_the_colour_and_the_coverage(fonts: Fonts) -> No
     assert rgba.shape == (sprite.size[1], sprite.size[0], 4)
     assert int(rgba[:, :, :3].max()) == 0
     assert int(rgba[:, :, 3].max()) == 128
+
+
+def test_the_bundled_inter_has_its_italics(fonts: Fonts) -> None:
+    assert fonts.italic is not None and fonts.italic.name == "Inter-Italic.ttf"
+    assert fonts.bold_italic is not None and fonts.bold_italic.name == "Inter-SemiBoldItalic.ttf"
+    choice = watermark.choose_font(WatermarkSpec(text="© 2026", bold=True, italic=True), fonts)
+    assert choice.path == fonts.bold_italic and not choice.slant
