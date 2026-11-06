@@ -157,6 +157,24 @@ def test_main_entry_point_exists() -> None:
     assert (PROJECT_ROOT / "main.py").is_file()
 
 
+def test_the_matrix_library_is_held_to_one_thread_before_numpy_loads() -> None:
+    """Called from several worker threads at once, a matrix library that
+    starts threads of its own crawls and can crash the program (PLAN.md 5).
+    The setting only counts if it is made before anything loads numpy."""
+    tree = ast.parse((PROJECT_ROOT / "main.py").read_text(encoding="utf-8"))
+    setting = None
+    first_import = None
+    for index, node in enumerate(tree.body):
+        if setting is None and "OPENBLAS_NUM_THREADS" in ast.unparse(node):
+            setting = index
+        if isinstance(node, ast.ImportFrom) and node.module not in ("__future__", "os"):
+            first_import = index if first_import is None else first_import
+        if isinstance(node, ast.Import) and any(a.name != "os" for a in node.names):
+            first_import = index if first_import is None else first_import
+    assert setting is not None
+    assert first_import is not None and setting < first_import
+
+
 # -- the packaged release (PLAN.md 13.2, 13.6) ---------------------------
 
 

@@ -12,6 +12,8 @@ from collections.abc import Iterator
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# As main.py does, before numpy is loaded: the tests run the same threads.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 
 @pytest.fixture(scope="session")

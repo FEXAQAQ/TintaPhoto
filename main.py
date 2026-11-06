@@ -7,17 +7,25 @@ logged and reported in one plain sentence rather than as a traceback.
 
 from __future__ import annotations
 
-import logging
-import sys
+import os
 
-from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import QApplication, QMessageBox
+# Before numpy is loaded (PLAN.md 5): its matrix library otherwise starts a
+# thread per core inside every call, and the program already works on several
+# threads of its own. Called from all of them at once it slows to a crawl and
+# can crash the whole program; one thread each is faster as well.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
-from app.i18n import init_translator, tr
-from app.paths import APP_NAME, APP_VERSION, resources_dir, setup_logging
-from app.settings import Settings
-from ui import icons, theme
-from ui.main_window import MainWindow
+import logging  # noqa: E402
+import sys  # noqa: E402
+
+from PySide6.QtGui import QFontDatabase  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+
+from app.i18n import init_translator, tr  # noqa: E402
+from app.paths import APP_NAME, APP_VERSION, resources_dir, setup_logging  # noqa: E402
+from app.settings import Settings  # noqa: E402
+from ui import icons, theme  # noqa: E402
+from ui.main_window import MainWindow  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +59,6 @@ def main() -> int:
     _register_bundled_fonts()
     app.setWindowIcon(icons.app_icon())
     app.setStyleSheet(theme.build_qss())
-
 
     try:
         window = MainWindow(settings)
