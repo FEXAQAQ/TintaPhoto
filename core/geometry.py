@@ -37,6 +37,7 @@ from numpy.typing import NDArray
 
 from core import healing
 from core import lens as lens_module
+from core import liquify as liquify_module
 from core.decoder import DecodedPhoto
 from core.faces import Face
 from core.healing import Spot
@@ -238,6 +239,9 @@ class Geometry:
     #: found by itself, and the brush's strokes, held like the spots and for
     #: their reasons.
     skin: SkinRange = DEFAULT_RANGE
+    #: The liquify brush's strokes (PLAN.md 2.11 and 6 step 1.7), held like
+    #: the spots and for their reasons, on the same frame.
+    liquify: tuple[liquify_module.Stroke, ...] = ()
 
     @property
     def is_default(self) -> bool:
@@ -247,7 +251,8 @@ class Geometry:
         the kind of photo, so it is compared with where the photo started
         instead (:meth:`core.edit_state.Edit.is_untouched`). Nor are the
         spots, which mend the picture without changing its frame, nor the
-        skin the portrait sliders work on.
+        skin the portrait sliders work on, nor the liquify strokes, which
+        move the picture inside the frame.
         """
         return (
             self.quarter_turns == 0
@@ -303,6 +308,7 @@ class Geometry:
             "lens": self.lens.to_dict(),
             "spots": healing.spots_to_list(self.spots),
             "skin": self.skin.to_dict(),
+            "liquify": liquify_module.strokes_to_list(self.liquify),
         }
 
     @classmethod
@@ -326,6 +332,7 @@ class Geometry:
             lens=LensSettings.from_dict(data.get("lens")),
             spots=healing.spots_from_list(data.get("spots")),
             skin=SkinRange.from_dict(data.get("skin")),
+            liquify=liquify_module.strokes_from_list(data.get("liquify")),
         )
 
 
@@ -416,8 +423,11 @@ def shown_point(
 
     *point* is in fractions of a photo of *size* before any turn, the way a
     spot is held (PLAN.md 6 step 1.6); what comes back is in fractions of
-    the frame :func:`apply` makes of it.
+    the frame :func:`apply` makes of it. The liquify strokes come first, as
+    they do in :func:`apply`: they carry the point with what they push.
     """
+    if geometry.liquify:
+        (point,) = liquify_module.shown_points((point,), geometry.liquify, size)
     matrix, frame = _frame_matrix(size, geometry, crop)
     x = point[0] * size[0] - 0.5
     y = point[1] * size[1] - 0.5
@@ -431,13 +441,17 @@ def source_point(
     """Return where a point of the shown frame lies on the unturned photo.
 
     The inverse of :func:`shown_point`: *point* is in fractions of the frame
-    as shown, and the answer in fractions of the photo of *size*.
+    as shown, and the answer in fractions of the photo of *size*, before
+    the liquify strokes moved anything.
     """
     matrix, frame = _frame_matrix(size, geometry, crop)
     x = point[0] * frame[0] - 0.5
     y = point[1] * frame[1] - 0.5
     source_x, source_y, _ = np.linalg.inv(matrix) @ np.array((x, y, 1.0))
-    return float((source_x + 0.5) / size[0]), float((source_y + 0.5) / size[1])
+    found = float((source_x + 0.5) / size[0]), float((source_y + 0.5) / size[1])
+    if geometry.liquify:
+        (found,) = liquify_module.source_points((found,), geometry.liquify, size)
+    return found
 
 
 def shown_scale(size: tuple[int, int], geometry: Geometry, crop: bool = True) -> float:
@@ -944,7 +958,9 @@ def apply(photo: DecodedPhoto, geometry: Geometry | None, crop: bool = True) -> 
 
     The lens comes first (PLAN.md section 6 step 1.5): its profile describes
     the frame as the sensor saw it, before anyone turned or cropped it. The
-    spots are mended next (step 1.6), on the frame they were placed on.
+    spots are mended next (step 1.6), on the frame they were placed on, and
+    the liquify strokes move the picture after them (step 1.7), carrying the
+    faces found on it and the portrait brush's strokes along.
 
     Nothing is copied when there is nothing to do, which is what lets an
     untouched JPEG still be shown exactly as it was decoded (PLAN.md section 6,
@@ -955,8 +971,12 @@ def apply(photo: DecodedPhoto, geometry: Geometry | None, crop: bool = True) -> 
     if geometry is not None:
         photo = lens_module.correct(photo, geometry.lens)
         photo = healing.heal(photo, geometry.spots)
-        if photo.skin != _skin_or_none(geometry.skin):
-            photo = replace(photo, skin=_skin_or_none(geometry.skin))
+        photo = liquify_module.warp(photo, geometry.liquify)
+        skin = liquify_module.moved_skin(
+            _skin_or_none(geometry.skin), geometry.liquify, photo.size
+        )
+        if photo.skin != skin:
+            photo = replace(photo, skin=skin)
     if geometry is None or geometry.is_default:
         return photo
     if (
@@ -1062,7 +1082,7 @@ def framed_skin(
     framed photos from one stroke of the brush to the next puts the newest
     range on them with this instead of framing them again.
     """
-    skin = _skin_or_none(geometry.skin)
+    skin = liquify_module.moved_skin(_skin_or_none(geometry.skin), geometry.liquify, size)
     if skin is None or not skin.strokes or geometry.is_default:
         return skin
     if not crop and geometry.quarter_turns == 0 and not geometry.mirrored and geometry.angle == 0.0:

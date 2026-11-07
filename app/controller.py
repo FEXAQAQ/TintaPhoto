@@ -1621,11 +1621,14 @@ class Controller(QObject):
     def reset_crop(self) -> None:
         """Put the crop and rotation back to the whole photo (PLAN.md 3.2).
 
-        The lens correction, the mended spots and the portrait's skin range
-        are not the crop tab's and are left as they are.
+        The lens correction, the mended spots, the portrait's skin range and
+        the liquify strokes are not the crop tab's and are left as they are.
         """
         fresh = Geometry(
-            lens=self._geometry.lens, spots=self._geometry.spots, skin=self._geometry.skin
+            lens=self._geometry.lens,
+            spots=self._geometry.spots,
+            skin=self._geometry.skin,
+            liquify=self._geometry.liquify,
         )
         if self._cropping:
             fresh = replace(fresh, crop=geometry.start_crop(self.photo_size, fresh))
@@ -2093,10 +2096,11 @@ class Controller(QObject):
         """Return the geometry a preview for *purpose* is framed with.
 
         The photo as it was found keeps its crop (PLAN.md 3.3) but not its
-        mended spots: comparing is how the mending is checked (A-32).
+        mended spots or its liquify strokes: comparing is how the mending
+        and the reshaping are checked (A-32, L-08).
         """
-        if purpose == _BEFORE and self._geometry.spots:
-            return replace(self._geometry, spots=())
+        if purpose == _BEFORE and (self._geometry.spots or self._geometry.liquify):
+            return replace(self._geometry, spots=(), liquify=())
         return self._geometry
 
     def _submit_whole(
