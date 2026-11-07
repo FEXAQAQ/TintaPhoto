@@ -226,6 +226,11 @@ SKIN_BRUSH_MARK: Final[int] = 4
 #: The liquify brush (PLAN.md 3.16): the spot brush's circle with a dot in
 #: its middle, this many pixels across, where the brush pushes from.
 LIQUIFY_BRUSH_DOT: Final[int] = 4
+#: The face's points while they are placed by hand (PLAN.md 3.16, L-12): a
+#: ring this many pixels across, filled in when it is the one in hand, and
+#: how near the pointer has to come to take hold of one.
+FACE_HANDLE_SIZE: Final[int] = 8
+FACE_HANDLE_GRAB: Final[int] = 8
 #: How near the pointer has to be to take hold of the collage's seam, either
 #: side of it (PLAN.md 3.13).
 COLLAGE_SEAM_GRAB: Final[int] = 8

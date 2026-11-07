@@ -2526,3 +2526,45 @@ def test_the_face_sliders_reach_the_controller_and_follow_the_faces(
     assert window.controller.face_shape.mouth == 30.0
     window.controller.undo()
     assert panel.face_rows["mouth"].value == 0.0
+
+
+def test_placing_the_face_points_puts_the_brush_down_and_esc_ends_it_first(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.enter_liquify()
+    window._on_faces_ready(1)
+    canvas = window.preview.canvas
+    window.liquify_panel.edit_faces_button.click()
+    assert window.editing_faces and window.controller.editing_faces
+    assert canvas.faces.active and not canvas.liquify.active
+
+    window.on_escape()  # ends placing the points first
+    assert window.in_liquify and not window.editing_faces
+    assert canvas.liquify.active and not window.controller.editing_faces
+    window.liquify_panel.edit_faces_button.click()
+    window.leave_liquify()
+    assert not window.editing_faces and not window.controller.editing_faces
+    assert not window.liquify_panel.edit_faces_button.isChecked()
+
+
+def test_a_dragged_face_point_reaches_the_controller(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    from core.faces import Face, SkinTone
+
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    controller = window.controller
+    face = Face(
+        points=((0.45, 0.4), (0.55, 0.4), (0.5, 0.47), (0.47, 0.54), (0.53, 0.54), (0.5, 0.48)),
+        tone=SkinTone(red=0.0, blue=0.0, spread=0.1, brightness=-2.0),
+    )
+    controller._faces[(controller.current, controller.geometry.lens)] = (face,)
+    window.enter_liquify()
+    window._on_faces_ready(1)
+    window.liquify_panel.edit_faces_button.click()
+    window.preview.canvas.faces.handle_moved.emit(0, "nose", 0.52, 0.48, False)
+    assert controller.face_shape.faces[0].points[2] == pytest.approx((0.52, 0.48), abs=1e-6)
+    assert window.liquify_panel.reset_faces_button.isEnabled()

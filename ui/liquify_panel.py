@@ -3,8 +3,9 @@
 Takes the inspector's place, at the same width and in the same style, as the
 portrait's panel does: a bar naming the mode, the seven tools of the brush,
 its size and strength, a line saying how to paint or how many strokes there
-are, the five face sliders (L-11) with how many faces they found, and an
-action row along the bottom.
+are, the five face sliders (L-11) with how many faces they found and the
+buttons that place the face's points by hand (L-12), and an action row
+along the bottom.
 
 The panel only says what was chosen: the controller keeps the strokes with
 the photo, and the photo's overlay paints them.
@@ -102,6 +103,26 @@ class ToolChoice(QPushButton):
         self.setToolTip(tooltip(f"liquify.tool.{self.tool}.tip"))
 
 
+class EditChoice(QPushButton):
+    """A button held down while something is being done, like the tools."""
+
+    def __init__(self, label_key: str, tip_key: str, parent: QWidget) -> None:
+        super().__init__(tr(label_key), parent)
+        self._label_key = label_key
+        self._tip_key = tip_key
+        self.setProperty("role", ROLE_CHOICE)
+        self.setCheckable(True)
+        self.setFixedHeight(theme.BUTTON_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.retranslate()
+
+    def retranslate(self) -> None:
+        """Read the name and the tooltip again after a language change."""
+        self.setText(tr(self._label_key))
+        self.setToolTip(tooltip(self._tip_key))
+
+
 class LiquifyPanel(QWidget):
     """The liquify brush's tools, size and strength, in the inspector's place."""
 
@@ -113,6 +134,10 @@ class LiquifyPanel(QWidget):
     #: One face slider moved: its name, its value, and whether a drag is
     #: still going on.
     face_value_set = Signal(str, float, bool)
+    #: Placing the face's points by hand was started or stopped (L-12).
+    editing_toggled = Signal(bool)
+    #: The face's points put back where they were found (L-12).
+    face_marks_reset_requested = Signal()
     #: Every stroke taken off the photo and the face sliders put to rest.
     reset_requested = Signal()
     #: Back to editing.
@@ -128,6 +153,7 @@ class LiquifyPanel(QWidget):
         self._strokes = 0
         self._face = liquify.DEFAULT_FACE_SHAPE
         self._faces: int | None = None
+        self._faces_edited = False
         self.face_rows: dict[str, SliderRow] = {}
 
         outer = QVBoxLayout(self)
@@ -222,6 +248,19 @@ class LiquifyPanel(QWidget):
         self.faces_caption.setProperty("role", "caption")
         self.faces_caption.setWordWrap(True)
         group.add_row(self.faces_caption)
+        # Placing the points by hand, for a face found in the wrong place (L-12).
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(theme.SPACE_SM)
+        self.edit_faces_button = EditChoice("liquify.edit_faces", "liquify.edit_faces.tip", group)
+        self.edit_faces_button.toggled.connect(self._on_editing)
+        row.addWidget(self.edit_faces_button, 1)
+        self.reset_faces_button = TextButton("liquify.reset_faces", group)
+        self.reset_faces_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.reset_faces_button.setToolTip(tooltip("liquify.reset_faces.tip"))
+        self.reset_faces_button.clicked.connect(self.face_marks_reset_requested.emit)
+        row.addWidget(self.reset_faces_button, 1)
+        group.add_layout(row)
         return group
 
     def _build_action_row(self) -> QWidget:
@@ -282,15 +321,34 @@ class LiquifyPanel(QWidget):
     def set_face_shape(self, face: liquify.FaceShape) -> None:
         """Show the photo's face sliders without announcing them."""
         self._face = face
+        self._faces_edited = any(marks.edited for marks in face.faces)
         for name, row in self.face_rows.items():
             row.blockSignals(True)
             row.set_value(face.value(name))
             row.blockSignals(False)
         self._show_strokes()
+        self._show_faces()
 
     def set_faces(self, count: int | None) -> None:
         """Say how many faces the photo holds, or ``None`` while looking."""
         self._faces = count
+        self._show_faces()
+
+    @property
+    def editing(self) -> bool:
+        """Return whether the face's points are being placed by hand."""
+        return self.edit_faces_button.isChecked()
+
+    def set_editing(self, editing: bool) -> None:
+        """Hold the editing button down or let it up, without announcing it."""
+        self.edit_faces_button.blockSignals(True)
+        self.edit_faces_button.setChecked(editing)
+        self.edit_faces_button.blockSignals(False)
+        self._show_faces()
+
+    def set_faces_edited(self, edited: bool) -> None:
+        """Say whether any face's points were placed by hand."""
+        self._faces_edited = edited
         self._show_faces()
 
     def set_brush_size(self, radius: float) -> None:
@@ -321,6 +379,9 @@ class LiquifyPanel(QWidget):
         for name, row in self.face_rows.items():
             row.set_spec(FACE_SPECS[name])
         self.set_face_shape(self._face)
+        self.edit_faces_button.retranslate()
+        self.reset_faces_button.retranslate()
+        self.reset_faces_button.setToolTip(tooltip("liquify.reset_faces.tip"))
         self._show_strokes()
         self._show_faces()
 
@@ -334,10 +395,16 @@ class LiquifyPanel(QWidget):
             caption = tr("adjust.faces.one")
         else:
             caption = tr("adjust.faces.many", count=count)
+        if self.editing:
+            caption = tr("liquify.editing_hint")
         self.faces_caption.setText(caption)
         # With no face there is nothing for the sliders to shape (L-11).
         for row in self.face_rows.values():
             row.setEnabled(bool(count))
+        # Faces kept with the sliders can be placed even before the search
+        # has finished again (L-12).
+        self.edit_faces_button.setEnabled(bool(count) or bool(self._face.faces) or self.editing)
+        self.reset_faces_button.setEnabled(self._faces_edited)
 
     def _show_strokes(self) -> None:
         count = self._strokes
@@ -360,6 +427,10 @@ class LiquifyPanel(QWidget):
         self._brush_size = liquify.clamp_radius(value / BRUSH_SIZE_SCALE)
         self._set_titles_dimmed(dragging)
         self.brush_size_set.emit(self._brush_size, dragging)
+
+    def _on_editing(self, editing: bool) -> None:
+        self._show_faces()
+        self.editing_toggled.emit(editing)
 
     def _on_face_row(self, name: str, value: float, dragging: bool) -> None:
         self._face = self._face.with_value(name, value)

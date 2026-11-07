@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import cv2
 import numpy as np
 import pytest
@@ -592,3 +594,88 @@ def test_a_face_slider_counts_as_an_edit_and_frames_the_points(tmp_path) -> None
     shown = geometry.shown_point(point, SIZE, shape)
     assert shown[0] > point[0] + 0.002
     assert geometry.source_point(shown, SIZE, shape) == pytest.approx(point, abs=1e-5)
+
+
+# -- placing the face's points by hand (PLAN.md 2.11 L-12) -------------------
+
+
+def _handle(guide: liquify.FaceGuide, name: str) -> tuple[float, float]:
+    return guide.handles[liquify.HANDLES.index(name)]
+
+
+def test_the_guide_has_eight_points_and_where_each_slider_works() -> None:
+    guide = liquify.face_guide(FACE, SIZE)
+    assert guide is not None
+    assert len(guide.handles) == len(liquify.HANDLES) == 8
+    assert np.allclose(guide.handles[:5], FACE.points[:5])
+    assert set(guide.reaches) == set(liquify.FACE_NAMES)
+    assert len(guide.reaches["eyes"]) == 2
+    # The chin lies below the mouth, the cheeks either side of the nose.
+    assert _handle(guide, "chin")[1] > FACE.points[3][1]
+    assert _handle(guide, "left_cheek")[0] < 0.5 < _handle(guide, "right_cheek")[0]
+    assert liquify.face_guide(liquify.FaceMarks(points=((0.5, 0.5),) * 6), SIZE) is None
+
+
+def test_points_worked_out_and_the_same_points_written_down_shape_alike() -> None:
+    guide = liquify.face_guide(FACE, SIZE)
+    assert guide is not None
+    written = replace(
+        FACE,
+        chin=_handle(guide, "chin"),
+        cheeks=(_handle(guide, "left_cheek"), _handle(guide, "right_cheek")),
+    )
+    worked_out = liquify.field((), SIZE, _shaped(chin=80.0, face_width=-60.0))
+    by_hand = liquify.field(
+        (), SIZE, liquify.FaceShape(chin=80.0, face_width=-60.0, faces=(written,))
+    )
+    assert worked_out is not None and by_hand is not None
+    assert np.allclose(worked_out.values, by_hand.values, atol=1e-6)
+
+
+def test_dragging_a_point_moves_it_and_marks_the_face_as_placed_by_hand() -> None:
+    moved = liquify.moved_handle(FACE, "nose", (0.51, 0.48), SIZE)
+    assert moved.points[2] == (0.51, 0.48) and moved.edited
+    assert moved.chin is None and moved.cheeks is None  # still worked out
+    chin = liquify.moved_handle(FACE, "chin", (0.5, 0.7), SIZE)
+    assert chin.chin == (0.5, 0.7) and chin.edited
+    guide = liquify.face_guide(FACE, SIZE)
+    assert guide is not None
+    cheek = liquify.moved_handle(FACE, "left_cheek", (0.3, 0.5), SIZE)
+    assert cheek.cheeks == (pytest.approx((0.3, 0.5)), pytest.approx(_handle(guide, "right_cheek")))
+    off = liquify.moved_handle(FACE, "chin", (1.4, -0.2), SIZE)
+    assert off.chin == (1.0, 0.0)
+
+
+def test_the_chin_slider_works_where_the_chin_was_put() -> None:
+    lower = (0.5, 0.75)
+    placed = replace(FACE, chin=lower)
+    shape = liquify.FaceShape(chin=100.0, faces=(placed,))
+    (moved,) = liquify.shown_points((lower,), (), SIZE, shape)
+    assert moved[1] > lower[1] + 0.005
+    # Where the chin was worked out to be is left nearly alone now.
+    guide = liquify.face_guide(FACE, SIZE)
+    assert guide is not None
+    worked = _handle(guide, "chin")
+    (still,) = liquify.shown_points((worked,), (), SIZE, shape)
+    assert abs(still[1] - worked[1]) < abs(moved[1] - lower[1]) / 3
+
+
+def test_the_face_width_works_between_the_cheeks_as_they_were_put() -> None:
+    # Cheeks put wider apart and to the right: the right cheek is narrowed in.
+    placed = replace(FACE, cheeks=((0.45, 0.5), (0.65, 0.5)))
+    shape = liquify.FaceShape(face_width=-100.0, faces=(placed,))
+    point = (0.62, 0.5)
+    (moved,) = liquify.shown_points((point,), (), SIZE, shape)
+    assert moved[0] < point[0] - 0.002
+
+
+def test_points_placed_by_hand_survive_being_stored() -> None:
+    placed = replace(
+        liquify.moved_handle(FACE, "chin", (0.5, 0.7), SIZE), cheeks=((0.4, 0.5), (0.6, 0.5))
+    )
+    shape = liquify.FaceShape(chin=10.0, faces=(placed,))
+    assert liquify.FaceShape.from_dict(shape.to_dict()) == shape
+    plain = FACE.to_dict()
+    assert "chin" not in plain and "cheeks" not in plain and "edited" not in plain
+    odd = liquify.FaceMarks.from_dict({**plain, "chin": [0.5], "cheeks": [[0.1, 0.1]], "edited": 1})
+    assert odd is not None and odd.chin is None and odd.cheeks is None and not odd.edited

@@ -524,6 +524,11 @@
   "liquify.face.nose": "Nose",
   "liquify.face.mouth": "Mouth",
   "liquify.faces.none": "No face found, so the face sliders cannot be used",
+  "liquify.edit_faces": "Edit features",
+  "liquify.edit_faces.tip": "Drag the points on the photo onto the eyes, nose tip, mouth corners, chin and cheeks",
+  "liquify.reset_faces": "Back to found",
+  "liquify.reset_faces.tip": "Put the points you moved back where the faces were found",
+  "liquify.editing_hint": "Drag the points onto the eyes, nose tip, mouth corners, chin and cheeks. The photo is shown without liquify meanwhile; press Edit features again to apply",
   "export.watermark": "Watermark",
   "export.watermark_unset": "Set it up under Watermark in the toolbar",
   "export.watermark_join": " · "

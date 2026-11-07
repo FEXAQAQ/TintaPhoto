@@ -215,6 +215,33 @@ FACE_WIDTH_RATE: Final[float] = 0.18
 FACE_CHIN_DROP: Final[float] = 0.85
 FACE_CHIN_REACH: Final[tuple[float, float]] = (0.9, 0.75)
 FACE_CHIN_RATE: Final[float] = 0.15
+#: The points of a face that can be dragged (PLAN.md 2.11 L-12), in order:
+#: the five the detector finds, then the chin and the two cheeks, which are
+#: worked out from the face's size until they are moved by hand.
+HANDLES: Final[tuple[str, ...]] = (
+    "left_eye",
+    "right_eye",
+    "nose",
+    "left_mouth",
+    "right_mouth",
+    "chin",
+    "left_cheek",
+    "right_cheek",
+)
+#: Which slider each point is where for.
+HANDLE_FEATURES: Final[dict[str, str]] = {
+    "left_eye": "eyes",
+    "right_eye": "eyes",
+    "nose": "nose",
+    "left_mouth": "mouth",
+    "right_mouth": "mouth",
+    "chin": "chin",
+    "left_cheek": "face_width",
+    "right_cheek": "face_width",
+}
+#: The narrowest the cheeks are taken to be apart, in S, so that two cheeks
+#: dragged on top of each other still leave a face width to work with.
+FACE_CHEEKS_LEAST: Final[float] = 0.5
 
 
 @dataclass(frozen=True)
@@ -295,14 +322,28 @@ class FaceMarks:
     points: tuple[Point, ...]
     width: float = 2.0
     height: float = 2.7
+    #: The tip of the chin and the two cheeks where the hand put them
+    #: (L-12), or ``None`` while they are worked out from the face's size.
+    chin: Point | None = None
+    cheeks: tuple[Point, Point] | None = None
+    #: Whether any point was moved by hand: such a face is kept as it is
+    #: rather than found again.
+    edited: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Return the face as it is stored (PLAN.md 7.1)."""
-        return {
+        stored: dict[str, Any] = {
             "points": [[x, y] for x, y in self.points],
             "width": self.width,
             "height": self.height,
         }
+        if self.chin is not None:
+            stored["chin"] = [self.chin[0], self.chin[1]]
+        if self.cheeks is not None:
+            stored["cheeks"] = [[x, y] for x, y in self.cheeks]
+        if self.edited:
+            stored["edited"] = True
+        return stored
 
     @classmethod
     def from_dict(cls, data: Any) -> "FaceMarks | None":
@@ -322,10 +363,20 @@ class FaceMarks:
             points.append((_fraction(x), _fraction(y)))
         width = _as_float(data.get("width"))
         height = _as_float(data.get("height"))
+        chin = _stored_point(data.get("chin"))
+        raw_cheeks = data.get("cheeks")
+        cheeks: tuple[Point, Point] | None = None
+        if isinstance(raw_cheeks, list) and len(raw_cheeks) == 2:
+            left, right = _stored_point(raw_cheeks[0]), _stored_point(raw_cheeks[1])
+            if left is not None and right is not None:
+                cheeks = (left, right)
         return cls(
             points=tuple(points),
             width=2.0 if width is None or width <= 0 else width,
             height=2.7 if height is None or height <= 0 else height,
+            chin=chin,
+            cheeks=cheeks,
+            edited=data.get("edited") is True,
         )
 
 
@@ -391,6 +442,189 @@ class FaceShape:
 
 
 DEFAULT_FACE_SHAPE: Final[FaceShape] = FaceShape()
+
+
+@dataclass(frozen=True)
+class _FaceFrame:
+    """One face measured on a grid: its points and its own axes, in units of the long edge."""
+
+    points: dict[str, NDArray[np.float64]]
+    #: From one eye to the other, and at right angles to it toward the mouth.
+    across: NDArray[np.float64]
+    down: NDArray[np.float64]
+    eye_distance: float
+    #: S, the size of the face (see :mod:`core.faces`).
+    size: float
+    half_mouth: float
+
+
+def _face_frame(marks: FaceMarks, extent: tuple[float, float]) -> _FaceFrame | None:
+    """Return *marks* measured on a grid of *extent*, or ``None`` for a face with no width."""
+    if len(marks.points) < 5:
+        return None
+    extent_x, extent_y = extent
+
+    def at(point: Point) -> NDArray[np.float64]:
+        return np.array((point[0] * extent_x, point[1] * extent_y), dtype=np.float64)
+
+    left_eye, right_eye, nose, left_mouth, right_mouth = (at(point) for point in marks.points[:5])
+    across = right_eye - left_eye
+    eye_distance = float(np.hypot(*across))
+    if eye_distance <= 0.0:
+        return None
+    across = across / eye_distance
+    eyes = (left_eye + right_eye) / 2.0
+    mouth = (left_mouth + right_mouth) / 2.0
+    down = mouth - eyes
+    down = down - across * float(down @ across)
+    length = float(np.hypot(*down))
+    down = np.array((-across[1], across[0])) if length <= 0.0 else down / length
+    size = max(float(np.hypot(*(mouth - eyes))), 0.8 * eye_distance)
+    half_mouth = max(float(np.hypot(*(right_mouth - left_mouth))) / 2.0, 0.2 * eye_distance)
+    chin = mouth + FACE_CHIN_DROP * size * down if marks.chin is None else at(marks.chin)
+    if marks.cheeks is None:
+        middle = nose + FACE_WIDTH_LOWER * size * down
+        half_width = marks.width * size / 2.0
+        left_cheek = middle - half_width * across
+        right_cheek = middle + half_width * across
+    else:
+        left_cheek, right_cheek = at(marks.cheeks[0]), at(marks.cheeks[1])
+    return _FaceFrame(
+        points={
+            "left_eye": left_eye,
+            "right_eye": right_eye,
+            "nose": nose,
+            "left_mouth": left_mouth,
+            "right_mouth": right_mouth,
+            "chin": chin,
+            "left_cheek": left_cheek,
+            "right_cheek": right_cheek,
+        },
+        across=across,
+        down=down,
+        eye_distance=eye_distance,
+        size=size,
+        half_mouth=half_mouth,
+    )
+
+
+#: Where one slider works: an ellipse's middle and its half widths across
+#: and down the face, in units of the long edge.
+_Reach = tuple[NDArray[np.float64], float, float]
+
+
+def _reaches(frame: _FaceFrame) -> dict[str, list[_Reach]]:
+    """Return where each face slider works on *frame*."""
+    points = frame.points
+    size = frame.size
+    eye_radius = FACE_EYE_REACH * frame.eye_distance
+    mouth = (points["left_mouth"] + points["right_mouth"]) / 2.0
+    cheeks = (points["left_cheek"] + points["right_cheek"]) / 2.0
+    half_width = max(
+        abs(float((points["right_cheek"] - points["left_cheek"]) @ frame.across)) / 2.0,
+        FACE_CHEEKS_LEAST * size / 2.0,
+    )
+    return {
+        "eyes": [
+            (points["left_eye"], eye_radius, eye_radius),
+            (points["right_eye"], eye_radius, eye_radius),
+        ],
+        "nose": [
+            (
+                points["nose"] - FACE_NOSE_RAISE * size * frame.down,
+                FACE_NOSE_REACH[0] * frame.eye_distance,
+                FACE_NOSE_REACH[1] * size,
+            )
+        ],
+        "mouth": [
+            (
+                mouth,
+                FACE_MOUTH_REACH[0] * frame.half_mouth,
+                FACE_MOUTH_REACH[1] * frame.half_mouth,
+            )
+        ],
+        "face_width": [
+            (cheeks, FACE_WIDTH_REACH[0] * half_width, FACE_WIDTH_REACH[1] * size)
+        ],
+        "chin": [(points["chin"], FACE_CHIN_REACH[0] * size, FACE_CHIN_REACH[1] * size)],
+    }
+
+
+@dataclass(frozen=True)
+class FaceGuide:
+    """One face as the point editor draws it (PLAN.md 3.16), in fractions of the photo.
+
+    *handles* are the eight points of :data:`HANDLES`. *reaches* says, for
+    each slider, where it works: each ellipse as its middle, the end of its
+    axis across the face and the end of its axis down the face.
+    """
+
+    handles: tuple[Point, ...]
+    reaches: dict[str, tuple[tuple[Point, Point, Point], ...]]
+
+
+def face_guide(marks: FaceMarks, size: tuple[int, int]) -> FaceGuide | None:
+    """Return where *marks* puts the eight points and the sliders' reach on a photo of *size*."""
+    grid = grid_for(size)
+    extent_x, extent_y = grid.extent
+    frame = _face_frame(marks, grid.extent)
+    if frame is None:
+        return None
+
+    def fraction(point: NDArray[np.float64]) -> Point:
+        return float(point[0] / extent_x), float(point[1] / extent_y)
+
+    reaches = {
+        name: tuple(
+            (
+                fraction(centre),
+                fraction(centre + wide * frame.across),
+                fraction(centre + tall * frame.down),
+            )
+            for centre, wide, tall in ellipses
+        )
+        for name, ellipses in _reaches(frame).items()
+    }
+    return FaceGuide(
+        handles=tuple(fraction(frame.points[name]) for name in HANDLES), reaches=reaches
+    )
+
+
+def moved_handle(
+    marks: FaceMarks, handle: str, point: Point, size: tuple[int, int]
+) -> FaceMarks:
+    """Return *marks* with *handle* dragged to *point* (fractions of a photo of *size*).
+
+    The five points the detector found move by themselves; the chin and the
+    cheeks, until they are moved, follow the face they were worked out from
+    and so are written down as they stand the first time one of them is.
+    """
+    point = (_fraction(point[0]), _fraction(point[1]))
+    index = HANDLES.index(handle)
+    if index < 5:
+        points = list(marks.points)
+        points[index] = point
+        return replace(marks, points=tuple(points), edited=True)
+    if handle == "chin":
+        return replace(marks, chin=point, edited=True)
+    guide = face_guide(marks, size)
+    cheeks = marks.cheeks
+    if cheeks is None:
+        if guide is None:
+            return marks
+        cheeks = (guide.handles[6], guide.handles[7])
+    cheeks = (point, cheeks[1]) if handle == "left_cheek" else (cheeks[0], point)
+    return replace(marks, cheeks=cheeks, edited=True)
+
+
+def _stored_point(data: Any) -> Point | None:
+    """Return a stored [x, y] as a point held in the photo, or ``None`` if it is not one."""
+    if not isinstance(data, list | tuple) or len(data) != 2:
+        return None
+    x, y = _as_float(data[0]), _as_float(data[1])
+    if x is None or y is None:
+        return None
+    return _fraction(x), _fraction(y)
 
 
 def _face_value(value: float) -> float:
@@ -663,35 +897,22 @@ def _face_values(grid: Grid, face: FaceShape | None) -> NDArray[np.float32]:
     extent_x, extent_y = grid.extent
     step = grid.step[0]
     for marks in face.faces:
-        if len(marks.points) < 5:
+        frame = _face_frame(marks, grid.extent)
+        if frame is None:
             continue
-        points = np.array(
-            [(x * extent_x, y * extent_y) for x, y in marks.points[:5]], dtype=np.float64
-        )
-        left_eye, right_eye, nose, left_mouth, right_mouth = points
-        across = right_eye - left_eye
-        eye_distance = float(np.hypot(*across))
-        if eye_distance <= 0.0:
-            continue
-        across /= eye_distance
-        eyes = (left_eye + right_eye) / 2.0
-        mouth = (left_mouth + right_mouth) / 2.0
-        down = mouth - eyes
-        down -= across * float(down @ across)
-        length = float(np.hypot(*down))
-        down = np.array((-across[1], across[0])) if length <= 0.0 else down / length
-        size = max(float(np.hypot(*(mouth - eyes))), 0.8 * eye_distance)
-        half_mouth = max(float(np.hypot(*(right_mouth - left_mouth))) / 2.0, 0.2 * eye_distance)
-
+        across, down = frame.across, frame.down
+        size = frame.size
+        reaches = _reaches(frame)
+        middle = frame.points["nose"]
         reach = max(
-            FACE_WIDTH_REACH[0] * marks.width * size / 2.0,
-            (FACE_CHIN_DROP + FACE_CHIN_REACH[1]) * size + float(np.hypot(*(mouth - nose))),
-            FACE_WIDTH_REACH[1] * size,
-        ) + size
-        first_column = max(0, math.floor((nose[0] - reach) / step))
-        last_column = min(grid.nodes[0], math.ceil((nose[0] + reach) / step) + 1)
-        first_row = max(0, math.floor((nose[1] - reach) / step))
-        last_row = min(grid.nodes[1], math.ceil((nose[1] + reach) / step) + 1)
+            float(np.hypot(*(centre - middle))) + max(wide, tall)
+            for ellipses in reaches.values()
+            for centre, wide, tall in ellipses
+        )
+        first_column = max(0, math.floor((middle[0] - reach) / step))
+        last_column = min(grid.nodes[0], math.ceil((middle[0] + reach) / step) + 1)
+        first_row = max(0, math.floor((middle[1] - reach) / step))
+        last_row = min(grid.nodes[1], math.ceil((middle[1] + reach) / step) + 1)
         if first_column >= last_column or first_row >= last_row:
             continue
         xs = np.arange(first_column, last_column, dtype=np.float64) * step
@@ -712,55 +933,35 @@ def _face_values(grid: Grid, face: FaceShape | None) -> NDArray[np.float32]:
             reach_t = np.sqrt((along / wide) ** 2 + (below / tall) ** 2)
             return falloff(reach_t.astype(np.float32)).astype(np.float64)
 
-        amount = face.eyes / FACE_LIMIT
-        if amount:
-            radius = FACE_EYE_REACH * eye_distance
-            for eye in (left_eye, right_eye):
-                along, below = local(eye)
-                rate = -FACE_EYE_RATE * amount * weight(along, below, radius, radius)
-                shift_x += rate * (nodes_x - eye[0])
-                shift_y += rate * (nodes_y - eye[1])
-
-        def widen(
-            centre: NDArray[np.float64], wide: float, tall: float, rate: float
-        ) -> None:
+        def widen(ellipse: _Reach, rate: float) -> None:
             """Fetch from nearer the middle line (widening) or farther (narrowing)."""
+            centre, wide, tall = ellipse
             along, below = local(centre)
             moved = -rate * weight(along, below, wide, tall) * along
             shift_x[...] += moved * across[0]
             shift_y[...] += moved * across[1]
 
+        amount = face.eyes / FACE_LIMIT
+        if amount:
+            for eye, wide, tall in reaches["eyes"]:
+                along, below = local(eye)
+                rate = -FACE_EYE_RATE * amount * weight(along, below, wide, tall)
+                shift_x += rate * (nodes_x - eye[0])
+                shift_y += rate * (nodes_y - eye[1])
         amount = face.nose / FACE_LIMIT
         if amount:
-            widen(
-                nose - FACE_NOSE_RAISE * size * down,
-                FACE_NOSE_REACH[0] * eye_distance,
-                FACE_NOSE_REACH[1] * size,
-                FACE_NOSE_RATE * amount,
-            )
+            widen(reaches["nose"][0], FACE_NOSE_RATE * amount)
         amount = face.mouth / FACE_LIMIT
         if amount:
-            widen(
-                mouth,
-                FACE_MOUTH_REACH[0] * half_mouth,
-                FACE_MOUTH_REACH[1] * half_mouth,
-                FACE_MOUTH_RATE * amount,
-            )
+            widen(reaches["mouth"][0], FACE_MOUTH_RATE * amount)
         amount = face.face_width / FACE_LIMIT
         if amount:
-            widen(
-                nose + FACE_WIDTH_LOWER * size * down,
-                FACE_WIDTH_REACH[0] * marks.width * size / 2.0,
-                FACE_WIDTH_REACH[1] * size,
-                FACE_WIDTH_RATE * amount,
-            )
+            widen(reaches["face_width"][0], FACE_WIDTH_RATE * amount)
         amount = face.chin / FACE_LIMIT
         if amount:
-            chin = mouth + FACE_CHIN_DROP * size * down
+            chin, wide, tall = reaches["chin"][0]
             along, below = local(chin)
-            moved = -FACE_CHIN_RATE * amount * size * weight(
-                along, below, FACE_CHIN_REACH[0] * size, FACE_CHIN_REACH[1] * size
-            )
+            moved = -FACE_CHIN_RATE * amount * size * weight(along, below, wide, tall)
             shift_x += moved * down[0]
             shift_y += moved * down[1]
 

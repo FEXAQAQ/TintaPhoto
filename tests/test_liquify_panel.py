@@ -177,3 +177,35 @@ def test_undo_shows_the_face_sliders_without_announcing_them(panel: LiquifyPanel
     assert not panel.reset_button.isEnabled()
     assert not seen
 
+
+
+# -- placing the face's points by hand (L-12) --------------------------------
+
+
+def test_the_point_buttons_wait_for_a_face_and_for_a_point_moved(panel: LiquifyPanel) -> None:
+    panel.set_faces(0)
+    assert not panel.edit_faces_button.isEnabled()
+    panel.set_faces(1)
+    assert panel.edit_faces_button.isEnabled()
+    assert not panel.reset_faces_button.isEnabled()
+    assert panel.edit_faces_button.y() > panel.faces_caption.y()
+    assert panel.edit_faces_button.width() == panel.reset_faces_button.width()
+    marks = liquify.FaceMarks(points=((0.4, 0.4),) * 6, edited=True)
+    panel.set_face_shape(liquify.FaceShape(faces=(marks,)))
+    assert panel.reset_faces_button.isEnabled()
+
+
+def test_editing_says_how_and_is_announced(panel: LiquifyPanel) -> None:
+    seen: list[object] = []
+    panel.editing_toggled.connect(seen.append)
+    panel.face_marks_reset_requested.connect(lambda: seen.append("reset"))
+    panel.set_faces(1)
+    panel.edit_faces_button.click()
+    assert panel.editing and seen == [True]
+    assert panel.faces_caption.text() == tr("liquify.editing_hint")
+    panel.set_editing(False)  # told, not announced
+    assert not panel.editing and seen == [True]
+    assert panel.faces_caption.text() == tr("adjust.faces.one")
+    panel.set_faces_edited(True)
+    panel.reset_faces_button.click()
+    assert seen[-1] == "reset"

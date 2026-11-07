@@ -494,6 +494,10 @@ class Controller(QObject):
         #: developed for it.
         self._liquify_base: Preview | None = None
         self._liquify_stroke = 0
+        #: Whether the face's points are being placed by hand (L-12): the
+        #: photo is then shown without liquify, so that the points can be
+        #: put on the features as they really are.
+        self._editing_faces = False
         self.preview_ready.connect(self._remember_on_screen)
 
         self._save_timer = QTimer(self)
@@ -1951,17 +1955,124 @@ class Controller(QObject):
         """
         if self.current is None or name not in liquify.FACE_NAMES:
             return
-        found = self.faces_of_current() or ()
-        marks = tuple(
-            liquify.FaceMarks(points=face.points, width=face.width, height=face.height)
-            for face in found
-        )
         shape = self._geometry.face_shape.with_value(name, value)
-        if marks:
-            shape = shape.with_faces(marks)
+        if not shape.faces:
+            # Taken once: faces already kept, and above all faces placed by
+            # hand (L-12), are not replaced by a newer search.
+            marks = self._found_marks()
+            if marks:
+                shape = shape.with_faces(marks)
         self.set_geometry(replace(self._geometry, face_shape=shape), dragging)
         if not dragging:
             self.geometry_changed.emit(self._geometry)
+
+    def _found_marks(self) -> tuple[liquify.FaceMarks, ...]:
+        """Return the faces found on the photo now open, as the face sliders keep them."""
+        return tuple(
+            liquify.FaceMarks(points=face.points, width=face.width, height=face.height)
+            for face in self.faces_of_current() or ()
+        )
+
+    def _face_marks(self) -> tuple[liquify.FaceMarks, ...]:
+        """Return the faces the sliders work on: those kept, or else those found."""
+        return self._geometry.face_shape.faces or self._found_marks()
+
+    @property
+    def editing_faces(self) -> bool:
+        """Return whether the face's points are being placed by hand (L-12)."""
+        return self._editing_faces
+
+    def set_editing_faces(self, editing: bool) -> None:
+        """Start or stop placing the face's points by hand (L-12).
+
+        While they are placed the photo is developed without liquify, its
+        mended spots kept, so that a point lands on the feature itself
+        rather than on where liquify has moved it.
+        """
+        if editing == self._editing_faces:
+            return
+        self._editing_faces = editing
+        self._end_liquify_draft()
+        self._developed = None
+        self._develop_current()
+
+    @property
+    def faces_edited(self) -> bool:
+        """Return whether any face's points were placed by hand."""
+        return any(marks.edited for marks in self._geometry.face_shape.faces)
+
+    def _bare_frame(self) -> tuple[tuple[int, int], Geometry, bool]:
+        """Return the frame the face's points are placed on: the photo without liquify."""
+        size, shape, crop = self._spot_frame()
+        return size, replace(shape, liquify=(), face_shape=liquify.DEFAULT_FACE_SHAPE), crop
+
+    def face_guides_on_screen(self) -> list[liquify.FaceGuide]:
+        """Return each face's points and its sliders' reach, in fractions of the frame on screen.
+
+        As placed on the photo without liquify, which is what is shown
+        while they are edited.
+        """
+        if self.current is None:
+            return []
+        size, shape, crop = self._bare_frame()
+        guides = []
+        for marks in self._face_marks():
+            guide = liquify.face_guide(marks, size)
+            if guide is None:
+                continue
+
+            def shown(point: tuple[float, float]) -> tuple[float, float]:
+                return geometry.shown_point(point, size, shape, crop)
+
+            guides.append(
+                liquify.FaceGuide(
+                    handles=tuple(shown(point) for point in guide.handles),
+                    reaches={
+                        name: tuple(
+                            (shown(centre), shown(across), shown(down))
+                            for centre, across, down in ellipses
+                        )
+                        for name, ellipses in guide.reaches.items()
+                    },
+                )
+            )
+        return guides
+
+    def move_face_handle(
+        self,
+        face: int,
+        handle: str,
+        point: tuple[float, float],
+        dragging: bool = False,
+    ) -> None:
+        """Put one point of a face where the hand put it (L-12).
+
+        *point* is in fractions of the frame on screen. Letting go is one
+        step of history. Nothing is developed: while points are placed the
+        photo is shown without liquify, which they do not change.
+        """
+        path = self.current
+        marks = list(self._face_marks())
+        if path is None or not 0 <= face < len(marks) or handle not in liquify.HANDLES:
+            return
+        size, shape, crop = self._bare_frame()
+        on_photo = geometry.source_point(point, size, shape, crop)
+        marks[face] = liquify.moved_handle(marks[face], handle, on_photo, size)
+        moved = replace(self._geometry.face_shape, faces=tuple(marks))
+        self._geometry = replace(self._geometry, face_shape=moved)
+        if not dragging:
+            self._record(path, self.edit)
+            self.geometry_changed.emit(self._geometry)
+            if not self._editing_faces:
+                self._develop_current()
+
+    def reset_face_marks(self) -> None:
+        """Put every face's points back where they were found, as one step (L-12)."""
+        if self.current is None or not self.faces_edited:
+            return
+        shape = replace(self._geometry.face_shape, faces=self._found_marks())
+        self.set_geometry(replace(self._geometry, face_shape=shape))
+        self.geometry_changed.emit(self._geometry)
 
     def draft_liquify(
         self,
@@ -2290,7 +2401,8 @@ class Controller(QObject):
 
         The photo as it was found keeps its crop (PLAN.md 3.3) but not its
         mended spots or its liquify: comparing is how the mending and the
-        reshaping are checked (A-32, L-08).
+        reshaping are checked (A-32, L-08). While the face's points are
+        placed by hand the photo is shown without liquify (L-12).
         """
         shape = self._geometry
         if purpose == _BEFORE and (
@@ -2299,6 +2411,9 @@ class Controller(QObject):
             return replace(
                 shape, spots=(), liquify=(), face_shape=liquify.DEFAULT_FACE_SHAPE
             )
+        if self._editing_faces and shape.liquified:
+            # The face's points are placed on the photo as it is (L-12).
+            return replace(shape, liquify=(), face_shape=liquify.DEFAULT_FACE_SHAPE)
         return shape
 
     def _submit_whole(

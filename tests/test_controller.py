@@ -2631,3 +2631,64 @@ def test_the_photo_as_it_was_found_has_no_face_sliders(
     controller.set_comparing(True)
     found = _wait_for_preview(controller)
     assert _blot_area(found.image) == pytest.approx(_blot_area(before.image), abs=3)
+
+
+# -- placing the face's points by hand (PLAN.md 2.11 L-12) -------------------
+
+
+def test_points_placed_by_hand_are_one_step_and_kept_from_a_newer_search(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _shown(controller, _blotted_folder(tmp_path))
+    _with_found_face(controller)
+    (guide,) = controller.face_guides_on_screen()
+    assert guide.handles[0] == pytest.approx((0.5, 0.5))
+
+    controller.move_face_handle(0, "chin", (0.55, 0.9), dragging=True)
+    assert not controller.can_undo  # still under the hand
+    controller.move_face_handle(0, "chin", (0.55, 0.85))
+    assert controller.can_undo and controller.faces_edited
+    (marks,) = controller.face_shape.faces
+    assert marks.chin == pytest.approx((0.55, 0.85))
+
+    # A face slider moved afterwards keeps the points where the hand put them.
+    _with_found_face(controller)
+    controller.set_face_shape_value("chin", 50.0)
+    assert controller.face_shape.faces[0].chin == pytest.approx((0.55, 0.85))
+
+    controller.reset_face_marks()
+    assert not controller.faces_edited
+    assert controller.face_shape.faces[0].chin is None
+    assert controller.face_shape.chin == 50.0
+    controller.undo()
+    assert controller.faces_edited
+
+
+def test_the_points_follow_the_crop_on_screen(controller: Controller, tmp_path: Path) -> None:
+    _shown(controller, _blotted_folder(tmp_path))
+    _with_found_face(controller)
+    controller.set_geometry(Geometry(crop=Rect(0.25, 0.25, 0.5, 0.5)))
+    (guide,) = controller.face_guides_on_screen()
+    assert guide.handles[0] == pytest.approx((0.5, 0.5), abs=0.01)  # the middle of the crop
+    controller.move_face_handle(0, "nose", (0.6, 0.6))
+    assert controller.face_shape.faces[0].points[2] == pytest.approx((0.55, 0.55), abs=0.01)
+
+
+def test_the_photo_is_shown_without_liquify_while_the_points_are_placed(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _photo, before = _shown(controller, _blotted_folder(tmp_path))
+    _with_found_face(controller)
+    controller.set_face_shape_value("eyes", 100.0)
+    shaped = _wait_for_preview(controller)
+    assert _blot_area(shaped.image) > _blot_area(before.image) * 1.3
+
+    controller.set_editing_faces(True)
+    plain = _wait_for_preview(controller)
+    assert _blot_area(plain.image) == pytest.approx(_blot_area(before.image), abs=3)
+    controller.move_face_handle(0, "chin", (0.55, 0.8))
+    assert controller.face_shape.eyes == 100.0
+
+    controller.set_editing_faces(False)
+    again = _wait_for_preview(controller)
+    assert _blot_area(again.image) > _blot_area(before.image) * 1.3

@@ -293,6 +293,9 @@ class MainWindow(QMainWindow):
         panel.reset_requested.connect(self.controller.reset_liquify)
         panel.leave_requested.connect(self.leave_liquify)
         panel.face_value_set.connect(self.controller.set_face_shape_value)
+        panel.editing_toggled.connect(self.set_editing_faces)
+        panel.face_marks_reset_requested.connect(self.controller.reset_face_marks)
+        self.preview.canvas.faces.handle_moved.connect(self._on_face_handle_moved)
         panel.tool_changed.connect(lambda _tool: self._show_liquify_brush())
         panel.brush_size_set.connect(lambda _radius, _dragging: self._show_liquify_brush())
         overlay = self.preview.canvas.liquify
@@ -904,6 +907,7 @@ class MainWindow(QMainWindow):
         """Say how many faces were found, and show the skin found beside them."""
         self.portrait_panel.set_faces(count)
         self.liquify_panel.set_faces(count)
+        self._show_face_guides()
         if self._portrait_mode and count:
             self.controller.request_skin_shown()
 
@@ -965,6 +969,7 @@ class MainWindow(QMainWindow):
         """Go back to editing; the strokes stay with each photo."""
         if not self._liquify_mode:
             return
+        self.set_editing_faces(False)
         self._liquify_mode = False
         canvas = self.preview.canvas
         canvas.liquify.set_open(False)
@@ -991,6 +996,40 @@ class MainWindow(QMainWindow):
         )
         canvas.refresh_cursor()
         canvas.update()
+
+    def set_editing_faces(self, editing: bool) -> None:
+        """Start or stop placing the face's points by hand (L-12).
+
+        While they are placed the liquify brush is put down and the photo is
+        shown without liquify; letting go of the button shapes it again.
+        """
+        editing = editing and self._liquify_mode
+        self.liquify_panel.set_editing(editing)
+        self.controller.set_editing_faces(editing)
+        canvas = self.preview.canvas
+        canvas.faces.set_open(editing)
+        canvas.liquify.set_open(self._liquify_mode and not editing)
+        self._show_face_guides()
+        canvas.refresh_cursor()
+        canvas.update()
+
+    @property
+    def editing_faces(self) -> bool:
+        """Return whether the face's points are being placed by hand."""
+        return self.preview.canvas.faces.active
+
+    def _show_face_guides(self) -> None:
+        """Give the photo the face's points as they are now, while they are placed."""
+        canvas = self.preview.canvas
+        if canvas.faces.active:
+            canvas.faces.set_guides(self.controller.face_guides_on_screen())
+            canvas.update()
+
+    def _on_face_handle_moved(
+        self, face: int, handle: str, x: float, y: float, dragging: bool
+    ) -> None:
+        """Put a face's point where it was dragged; letting go is one step."""
+        self.controller.move_face_handle(face, handle, (x, y), dragging)
 
     def _on_liquify_stroke_changed(self, points: list[tuple[float, float]]) -> None:
         """Show the stroke being painted as a draft (PLAN.md 3.16)."""
@@ -1403,6 +1442,7 @@ class MainWindow(QMainWindow):
             self.liquify_panel.set_strokes(len(geometry_now.liquify))
             self.liquify_panel.set_face_shape(geometry_now.face_shape)
             self._show_liquify_brush()
+            self._show_face_guides()
         self.preview.canvas.update()
 
     def _on_lens_set(self, settings: LensSettings, dragging: bool) -> None:
@@ -2068,6 +2108,9 @@ class MainWindow(QMainWindow):
             self.portrait_panel.set_brush(None)
         elif self._portrait_mode:
             self.leave_portrait()
+        elif self._liquify_mode and self.editing_faces:
+            # Placing the points ends first, then liquify is left.
+            self.set_editing_faces(False)
         elif self._liquify_mode:
             self.leave_liquify()
         elif self._collage_mode and self.collage_canvas.aligning:
