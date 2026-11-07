@@ -49,6 +49,9 @@ class LiquifyOverlay(QObject):
         self._pointer: QPointF | None = None
         self._photo = QRectF()
         self._painting: list[Point] | None = None
+        #: Whether Alt was held when the stroke began, which turns a twirl
+        #: the other way (PLAN.md 3.16).
+        self._reversed = False
         self._timer = QTimer(self)
         self._timer.setInterval(TICK_MS)
         self._timer.timeout.connect(self._tick)
@@ -64,6 +67,15 @@ class LiquifyOverlay(QObject):
     def painting(self) -> bool:
         """Return whether the brush is down."""
         return self._painting is not None
+
+    @property
+    def reversed(self) -> bool:
+        """Return whether the stroke was begun with Alt held."""
+        return self._reversed
+
+    def set_reversed(self, reversed_: bool) -> None:
+        """Say whether Alt is held as the stroke begins."""
+        self._reversed = reversed_
 
     def set_open(self, open_: bool) -> None:
         """Say whether liquify is open; closed draws nothing and drops the stroke."""

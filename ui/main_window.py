@@ -47,6 +47,7 @@ from app.settings import (
 
 from core import collage as collage_module
 from core import geometry
+from core import liquify as liquify_module
 from core.edit_state import EditState
 from core.geometry import Geometry
 from core.lens import LensSettings
@@ -56,7 +57,7 @@ from ui.filmstrip import Filmstrip, FilmstripTab
 from ui.histogram_widget import clipping_overlay
 from ui.about_dialog import AboutDialog
 from ui.collage_panel import CollagePanel
-from ui.liquify_panel import LiquifyPanel
+from ui.liquify_panel import PAGE_BRUSH, PAGE_FACE, LiquifyPanel
 from ui.portrait_panel import BRUSH_ADD, BRUSH_REMOVE, PortraitPanel
 from ui.watermark_panel import WatermarkPanel
 from ui.collage_view import CollageCanvas
@@ -73,6 +74,7 @@ from ui.toolbar import Toolbar
 from ui.widgets.dialog import Dialog
 from ui.widgets.flight import FlyingPhoto
 from ui.widgets.region import Scrim
+from ui.widgets.text import format_number
 from ui.widgets.toast import Toast
 
 logger = logging.getLogger(__name__)
@@ -124,6 +126,15 @@ class MainWindow(QMainWindow):
         #: Whether the faces are still to be zoomed onto, because placing
         #: began before they were found.
         self._faces_to_zoom = False
+        #: The face slider under the pointer and the one being dragged, whose
+        #: reach the photo outlines (PLAN.md 3.16), and the timer that takes
+        #: the outline away a moment after both are let go.
+        self._face_hovered = ""
+        self._face_dragged = ""
+        self._spotlight_timer = QTimer(self)
+        self._spotlight_timer.setSingleShot(True)
+        self._spotlight_timer.setInterval(theme.FACE_REACH_LINGER_MS)
+        self._spotlight_timer.timeout.connect(self._clear_spotlight)
         #: What the watermark on screen was last drawn for, so that a new
         #: preview of the same photo does not draw it again.
         self._watermark_drawn: tuple[object, tuple[int, int]] | None = None
@@ -303,6 +314,10 @@ class MainWindow(QMainWindow):
         panel.reset_requested.connect(self.controller.reset_liquify)
         panel.leave_requested.connect(self.leave_liquify)
         panel.face_value_set.connect(self.controller.set_face_shape_value)
+        panel.face_value_set.connect(self._on_face_value_for_spotlight)
+        panel.face_hovered.connect(self._on_face_hovered)
+        panel.face_reset_requested.connect(self.controller.reset_face_shape)
+        panel.page_changed.connect(lambda _page: self._open_liquify_brush())
         panel.editing_toggled.connect(self.set_editing_faces)
         panel.face_marks_reset_requested.connect(self.controller.reset_face_marks)
         self.preview.canvas.faces.handle_moved.connect(self._on_face_handle_moved)
@@ -968,10 +983,15 @@ class MainWindow(QMainWindow):
         panel = self.liquify_panel
         panel.set_strokes(len(self.controller.liquify_strokes))
         panel.set_face_shape(self.controller.face_shape)
-        panel.set_faces(self._faces_count())
+        count = self._faces_count()
+        panel.set_faces(count)
+        # The face sliders first, the easier of the two; the brush when the
+        # photo is known to hold no face for them.
+        no_face = count == 0 and not self.controller.face_shape.faces
+        panel.set_page(PAGE_BRUSH if no_face else PAGE_FACE)
         self.inspector.hide()
         panel.show()
-        self.preview.canvas.liquify.set_open(True)
+        self._open_liquify_brush()
         self._show_liquify_brush()
         self.preview.canvas.setFocus()
 
@@ -981,6 +1001,9 @@ class MainWindow(QMainWindow):
             return
         self.set_editing_faces(False)
         self._liquify_mode = False
+        self._face_hovered = ""
+        self._face_dragged = ""
+        self._clear_spotlight()
         canvas = self.preview.canvas
         canvas.liquify.set_open(False)
         canvas.refresh_cursor()
@@ -995,6 +1018,74 @@ class MainWindow(QMainWindow):
     def in_liquify(self) -> bool:
         """Return whether liquify is open."""
         return self._liquify_mode
+
+    def _open_liquify_brush(self) -> None:
+        """Let the brush paint only on the brush page, and not while points are placed."""
+        canvas = self.preview.canvas
+        canvas.liquify.set_open(
+            self._liquify_mode
+            and self.liquify_panel.page == PAGE_BRUSH
+            and not canvas.faces.active
+        )
+        canvas.refresh_cursor()
+        canvas.update()
+
+    def _liquify_tool(self) -> str:
+        """Return the tool the brush is, a twirl turned the other way when Alt was held."""
+        tool = self.liquify_panel.tool
+        if self.preview.canvas.liquify.reversed:
+            tool = liquify_module.mirrored_tool(tool)
+        return tool
+
+    def _on_face_hovered(self, name: str) -> None:
+        """Outline where the face slider under the pointer works (PLAN.md 3.16)."""
+        self._face_hovered = name
+        self._show_spotlight()
+
+    def _on_face_value_for_spotlight(self, name: str, _value: float, dragging: bool) -> None:
+        """Keep the outline up while a face slider is dragged, and a moment after."""
+        self._face_dragged = name if dragging else ""
+        self._show_spotlight()
+
+    def _show_spotlight(self) -> None:
+        """Show the reach of the face slider in hand or under the pointer, or let it go."""
+        name = self._face_dragged or self._face_hovered
+        canvas = self.preview.canvas
+        if not name or not self._liquify_mode or canvas.faces.active:
+            if canvas.faces.spotlit and not self._spotlight_timer.isActive():
+                self._spotlight_timer.start()
+            return
+        self._spotlight_timer.stop()
+        reaches = self.controller.face_reach_on_screen(name)
+        if not reaches:
+            self._clear_spotlight()
+            return
+        value = self.controller.face_shape.value(name)
+        label = tr(f"liquify.face.{name}")
+        if value:
+            effect = tr(f"liquify.face.{name}.{'more' if value > 0 else 'less'}")
+            text = tr(
+                "liquify.reach.text",
+                name=label,
+                value=format_number(value, 0, signed=True),
+                effect=effect,
+            )
+        else:
+            text = tr(
+                "liquify.reach.rest",
+                name=label,
+                more=tr(f"liquify.face.{name}.more"),
+                less=tr(f"liquify.face.{name}.less"),
+            )
+        canvas.faces.set_spotlight(name, value, reaches, text)
+        canvas.update()
+
+    def _clear_spotlight(self) -> None:
+        """Take a face slider's outline off the photo."""
+        self._spotlight_timer.stop()
+        canvas = self.preview.canvas
+        canvas.faces.clear_spotlight()
+        canvas.update()
 
     def _show_liquify_brush(self) -> None:
         """Give the photo's brush what the panel says, at the size it is on screen."""
@@ -1019,7 +1110,9 @@ class MainWindow(QMainWindow):
         self.liquify_panel.set_editing(editing)
         self.controller.set_editing_faces(editing)
         canvas.faces.set_open(editing)
-        canvas.liquify.set_open(self._liquify_mode and not editing)
+        if editing:
+            self._clear_spotlight()
+        self._open_liquify_brush()
         current = self.controller.current
         if editing and not was_editing and current is not None:
             # The faces are brought up close, and the view is put back after.
@@ -1063,12 +1156,16 @@ class MainWindow(QMainWindow):
     def _on_liquify_stroke_changed(self, points: list[tuple[float, float]]) -> None:
         """Show the stroke being painted as a draft (PLAN.md 3.16)."""
         panel = self.liquify_panel
-        self.controller.draft_liquify(points, panel.tool, panel.brush_size, panel.strength)
+        self.controller.draft_liquify(
+            points, self._liquify_tool(), panel.brush_size, panel.strength
+        )
 
     def _on_liquify_painted(self, points: list[tuple[float, float]]) -> None:
         """Reshape the photo along the stroke just painted."""
         panel = self.liquify_panel
-        self.controller.add_liquify_stroke(points, panel.tool, panel.brush_size, panel.strength)
+        self.controller.add_liquify_stroke(
+            points, self._liquify_tool(), panel.brush_size, panel.strength
+        )
 
     # -- the watermark (PLAN.md 2.9, 3.14) -------------------------------
 
@@ -1472,6 +1569,8 @@ class MainWindow(QMainWindow):
             self.liquify_panel.set_face_shape(geometry_now.face_shape)
             self._show_liquify_brush()
             self._show_face_guides()
+            if self.preview.canvas.faces.spotlit:
+                self._show_spotlight()
         self.preview.canvas.update()
 
     def _on_lens_set(self, settings: LensSettings, dragging: bool) -> None:

@@ -174,6 +174,8 @@ THUMBNAIL_BADGE_SIZE: Final[int] = 16
 CHECK_BOX_SIZE: Final[int] = THUMBNAIL_BADGE_SIZE
 
 SLIDER_ROW_HEIGHT: Final[int] = 28
+#: The line under a two-way slider that says what each end means (PLAN.md 3.16).
+SLIDER_ENDS_HEIGHT: Final[int] = 16
 GROUP_GAP: Final[int] = 16
 #: The title row of a collapsible group (PLAN.md 3.1): a little taller than a
 #: slider row, so that it reads as the start of a section and gives the arrow
@@ -236,6 +238,10 @@ FACE_HANDLE_GRAB: Final[int] = 12
 #: hair alike.
 FACE_HANDLE_DOT: Final[int] = 4
 FACE_LABEL_HALO: Final[int] = 2
+#: The arrows that say which way a face slider moves the face, and how long
+#: its outline stays on the photo after the pointer leaves the slider.
+FACE_ARROW_LENGTH: Final[int] = 16
+FACE_REACH_LINGER_MS: Final[int] = 800
 #: How near the pointer has to be to take hold of the collage's seam, either
 #: side of it (PLAN.md 3.13).
 COLLAGE_SEAM_GRAB: Final[int] = 8

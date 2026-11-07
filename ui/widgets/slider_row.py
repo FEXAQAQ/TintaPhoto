@@ -495,3 +495,44 @@ class SliderRow(QWidget):
             self._refresh_text()
             return
         super().keyReleaseEvent(event)
+
+
+class SliderEnds(QWidget):
+    """What a slider's two ends mean, written under its track (PLAN.md 3.16).
+
+    A slider that runs both ways - narrower or wider, shorter or longer - is
+    read at a glance once each end says which way it goes. Laid out against
+    the same track as :class:`SliderRow`, so the words sit under its ends.
+    """
+
+    def __init__(
+        self, ends: tuple[str, str], show_name: bool = True, parent: QWidget | None = None
+    ) -> None:
+        """Build the line for a slider whose ends are the text keys *ends*."""
+        super().__init__(parent)
+        self._ends = ends
+        self._show_name = show_name
+        self.setFixedHeight(theme.SLIDER_ENDS_HEIGHT)
+
+    @property
+    def texts(self) -> tuple[str, str]:
+        """Return the words at the low end and at the high end."""
+        return tr(self._ends[0]), tr(self._ends[1])
+
+    def retranslate(self) -> None:
+        """Say the ends again after a language change (U-02)."""
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        """Write the low end under the track's left end and the high end under its right."""
+        painter = QPainter(self)
+        font = painter.font()
+        font.setPixelSize(theme.FONT_SIZE_CAPTION)
+        painter.setFont(font)
+        painter.setPen(QColor(theme.TEXT_TERTIARY if self.isEnabled() else theme.BORDER))
+        left = NAME_WIDTH + theme.SPACE_SM if self._show_name else 0
+        right = self.width() - VALUE_WIDTH - theme.SPACE_SM
+        track = QRect(left, 0, max(1, right - left), self.height())
+        low, high = self.texts
+        painter.drawText(track, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, low)
+        painter.drawText(track, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop, high)

@@ -773,11 +773,13 @@ class PhotoCanvas(QWidget):
             self._update_cursor(event.position())
             self.update()
             return
-        if self._liquify_has_the_click() and self.liquify.press(
-            event.position(), self.photo_rect()
-        ):
-            self.update()
-            return
+        if self._liquify_has_the_click():
+            self.liquify.set_reversed(
+                bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+            )
+            if self.liquify.press(event.position(), self.photo_rect()):
+                self.update()
+                return
         self._panning_from = event.position().toPoint()
         self.setCursor(Qt.CursorShape.ClosedHandCursor)
 

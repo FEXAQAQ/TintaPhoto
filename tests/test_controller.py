@@ -2692,3 +2692,17 @@ def test_the_photo_is_shown_without_liquify_while_the_points_are_placed(
     controller.set_editing_faces(False)
     again = _wait_for_preview(controller)
     assert _blot_area(again.image) > _blot_area(before.image) * 1.3
+
+
+def test_a_face_sliders_reach_is_where_the_photo_shows_it(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _shown(controller, _blotted_folder(tmp_path))
+    assert controller.face_reach_on_screen("eyes") == []
+    _with_found_face(controller)
+    eyes = controller.face_reach_on_screen("eyes")
+    assert len(eyes) == 2 and eyes[0][0] == pytest.approx((0.5, 0.5))
+    controller.set_geometry(Geometry(crop=Rect(0.25, 0.25, 0.5, 0.5)))
+    (left, _right) = controller.face_reach_on_screen("eyes")
+    assert left[0] == pytest.approx((0.5, 0.5), abs=0.01)
+    assert controller.face_reach_on_screen("ears") == []

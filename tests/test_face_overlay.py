@@ -111,3 +111,24 @@ def test_every_point_has_a_name_and_a_place_to_go(qt_app: object) -> None:
     for feature in ("eye", "nose", "mouth", "chin", "cheek"):
         key = f"liquify.handle.{feature}.where"
         assert tr(key) != key
+
+
+def test_a_face_slider_in_hand_is_outlined_with_arrows_and_a_line(qt_app: object) -> None:
+    overlay = FaceOverlay()  # not placing points: only the outline is drawn
+    guide = liquify.face_guide(FACE, (400, 300))
+    assert guide is not None
+    reaches = list(guide.reaches["chin"])
+    overlay.set_spotlight("chin", 40.0, reaches, "Chin +40: longer")
+    assert overlay.spotlit == "chin"
+    image = QImage(600, 400, QImage.Format.Format_ARGB32)
+    image.fill(0)
+    painter = QPainter(image)
+    overlay.paint(painter, PHOTO)
+    painter.end()
+    centre, across, _down = reaches[0]
+    middle = _on_screen(centre)
+    assert image.pixelColor(middle.toPoint()).alpha() > 0  # the arrow through the chin
+    top = int(PHOTO.top()) + 20
+    assert any(image.pixelColor(x, top).alpha() > 0 for x in range(250, 350))  # the line at the top
+    overlay.clear_spotlight()
+    assert overlay.spotlit == ""

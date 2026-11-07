@@ -13,6 +13,11 @@ be told apart at a glance:
   reach of the slider it is for is outlined, and a line on the photo says
   where it belongs.
 
+Apart from placing the points, the same overlay shows where one face slider
+works while it is under the pointer or being dragged (PLAN.md 3.16): its
+reach outlined with a dashed line, arrows for which way it moves the face,
+and a line at the top saying what it does.
+
 Like the spot brush this is not a widget: it draws into the canvas's painter
 and is handed the canvas's mouse events. What it holds is what is on screen
 - fractions of the frame as shown - and what a point is on the photo is the
@@ -44,6 +49,12 @@ _PAIRS: Final[tuple[tuple[str, str, str], ...]] = (
     ("left_mouth", "right_mouth", "mouth"),
     ("left_cheek", "right_cheek", "cheek"),
 )
+#: The sliders that widen and narrow across the face; the chin moves along
+#: it instead.
+_ACROSS: Final[frozenset[str]] = frozenset({"eyes", "nose", "mouth", "face_width"})
+#: Where along an ellipse's axis across the face the arrows of a slider that
+#: widens stand, as a share of the half width.
+_ARROW_REACH: Final[float] = 0.6
 #: The mark each feature is drawn with.
 _MARKS: Final[dict[str, str]] = {
     "eye": "ring",
@@ -72,6 +83,9 @@ class FaceOverlay(QObject):
         #: The point being dragged and where it is now, or ``None``.
         self._held: tuple[int, int] | None = None
         self._held_at: Point | None = None
+        #: The face slider being shown: its name, its value, its ellipses on
+        #: screen and the line saying what it does; or ``None``.
+        self._spotlight: tuple[str, float, list[tuple[Point, Point, Point]], str] | None = None
 
     # -- what it is showing ----------------------------------------------
 
@@ -102,6 +116,25 @@ class FaceOverlay(QObject):
         if self._over is not None and self._over[0] >= len(self._guides):
             self._over = None
 
+    @property
+    def spotlit(self) -> str:
+        """Return the face slider whose reach is shown, or an empty string."""
+        return "" if self._spotlight is None else self._spotlight[0]
+
+    def set_spotlight(
+        self,
+        feature: str,
+        value: float,
+        reaches: list[tuple[Point, Point, Point]],
+        text: str,
+    ) -> None:
+        """Show where the face slider *feature* works and which way *value* moves it."""
+        self._spotlight = (feature, value, list(reaches), text)
+
+    def clear_spotlight(self) -> None:
+        """Stop showing a face slider's reach."""
+        self._spotlight = None
+
     def over_handle(self, point: QPointF, photo: QRectF) -> bool:
         """Return whether *point* is on one of the face's points."""
         return self._hit(point, photo) is not None
@@ -121,8 +154,12 @@ class FaceOverlay(QObject):
     # -- drawing ---------------------------------------------------------
 
     def paint(self, painter: QPainter, photo: QRectF) -> None:
-        """Draw every face's points over the photo at *photo*."""
-        if not self._open or photo.isEmpty() or not self._guides:
+        """Draw the face slider in hand's reach, and every face's points while they are placed."""
+        if photo.isEmpty():
+            return
+        if self._spotlight is not None and not self._open:
+            self._draw_spotlight(painter, photo)
+        if not self._open or not self._guides:
             return
         painter.save()
         painter.setClipRect(photo)
@@ -188,8 +225,64 @@ class FaceOverlay(QObject):
         jaw.quadTo(bend, right)
         self._stroke(painter, jaw, Qt.PenStyle.DashLine)
 
+    def _draw_spotlight(self, painter: QPainter, photo: QRectF) -> None:
+        """Outline where one face slider works, with arrows for which way, and say what it does."""
+        assert self._spotlight is not None
+        feature, value, reaches, text = self._spotlight
+        painter.save()
+        painter.setClipRect(photo)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        font = QFont(painter.font())
+        font.setPixelSize(theme.FONT_SIZE_LABEL)
+        painter.setFont(font)
+        for centre, across, down in reaches:
+            self._draw_reach(painter, photo, centre, across, down, Qt.PenStyle.DashLine)
+            if value:
+                self._draw_arrows(painter, photo, feature, value, centre, across, down)
+        self._draw_hint(painter, photo, text)
+        painter.restore()
+
+    def _draw_arrows(
+        self,
+        painter: QPainter,
+        photo: QRectF,
+        feature: str,
+        value: float,
+        centre: Point,
+        across: Point,
+        down: Point,
+    ) -> None:
+        """Draw which way a face slider moves the face: out or in, down or up."""
+        middle = _at(photo, centre)
+        side = _at(photo, across) - middle
+        below = _at(photo, down) - middle
+        length = float(theme.FACE_ARROW_LENGTH)
+        arrows = QPainterPath()
+        if feature in _ACROSS:
+            span = math.hypot(side.x(), side.y())
+            if span <= 0.0:
+                return
+            unit = side / span
+            for sign in (-1.0, 1.0):
+                foot = middle + side * (sign * _ARROW_REACH)
+                pointing = unit * (sign if value > 0 else -sign)
+                _add_arrow(arrows, foot - pointing * (length / 2), pointing, length)
+        else:
+            span = math.hypot(below.x(), below.y())
+            if span <= 0.0:
+                return
+            pointing = below / span * (1.0 if value > 0 else -1.0)
+            _add_arrow(arrows, middle - pointing * (length / 2), pointing, length)
+        self._stroke(painter, arrows)
+
     def _draw_reach(
-        self, painter: QPainter, photo: QRectF, centre: Point, across: Point, down: Point
+        self,
+        painter: QPainter,
+        photo: QRectF,
+        centre: Point,
+        across: Point,
+        down: Point,
+        style: Qt.PenStyle = Qt.PenStyle.SolidLine,
     ) -> None:
         """Outline one ellipse a slider works within, turned and cut as the frame is."""
         middle = _at(photo, centre)
@@ -200,7 +293,7 @@ class FaceOverlay(QObject):
         axes = QTransform(first.x(), first.y(), second.x(), second.y(), middle.x(), middle.y())
         circle = QPainterPath()
         circle.addEllipse(QPointF(0.0, 0.0), 1.0, 1.0)
-        self._stroke(painter, axes.map(circle))
+        self._stroke(painter, axes.map(circle), style)
 
     def _draw_mark(self, painter: QPainter, centre: QPointF, mark: str, filled: bool) -> None:
         """Draw one point with its feature's mark, filled in when it is the one in hand."""
@@ -352,3 +445,16 @@ def _middle(handles: list[QPointF]) -> QPointF:
     for point in handles:
         total += point
     return total / max(len(handles), 1)
+
+
+def _add_arrow(path: QPainterPath, start: QPointF, pointing: QPointF, length: float) -> None:
+    """Add to *path* an arrow *length* long from *start*, the way *pointing* (of length one) goes."""
+    tip = start + pointing * length
+    head = length * 0.4
+    back = tip - pointing * head
+    across = QPointF(-pointing.y(), pointing.x()) * (head * 0.6)
+    path.moveTo(start)
+    path.lineTo(tip)
+    path.moveTo(back + across)
+    path.lineTo(tip)
+    path.lineTo(back - across)

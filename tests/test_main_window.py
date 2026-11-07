@@ -2437,7 +2437,6 @@ def test_liquify_takes_the_inspectors_place_with_its_brush_taken_up(
     assert toolbar.liquify_button.isChecked()
     assert window.liquify_panel.isVisible() and not window.inspector.isVisible()
     assert toolbar.title_label.text().endswith("a.jpg")
-    assert window.preview.canvas.liquify.active
 
     window.on_escape()
     qt_app.processEvents()  # type: ignore[attr-defined]
@@ -2536,17 +2535,17 @@ def test_placing_the_face_points_puts_the_brush_down_and_esc_ends_it_first(
     window.enter_liquify()
     window._on_faces_ready(1)
     canvas = window.preview.canvas
-    window.liquify_panel.edit_faces_button.click()
+    window.liquify_panel.edit_faces_link.click()
     assert window.editing_faces and window.controller.editing_faces
     assert canvas.faces.active and not canvas.liquify.active
 
     window.on_escape()  # ends placing the points first
     assert window.in_liquify and not window.editing_faces
-    assert canvas.liquify.active and not window.controller.editing_faces
-    window.liquify_panel.edit_faces_button.click()
+    assert not window.controller.editing_faces and not window.liquify_panel.editing
+    window.liquify_panel.edit_faces_link.click()
     window.leave_liquify()
     assert not window.editing_faces and not window.controller.editing_faces
-    assert not window.liquify_panel.edit_faces_button.isChecked()
+    assert not window.liquify_panel.editing
 
 
 def test_a_dragged_face_point_reaches_the_controller(
@@ -2564,7 +2563,7 @@ def test_a_dragged_face_point_reaches_the_controller(
     controller._faces[(controller.current, controller.geometry.lens)] = (face,)
     window.enter_liquify()
     window._on_faces_ready(1)
-    window.liquify_panel.edit_faces_button.click()
+    window.liquify_panel.edit_faces_link.click()
     window.preview.canvas.faces.handle_moved.emit(0, "nose", 0.52, 0.48, False)
     assert controller.face_shape.faces[0].points[2] == pytest.approx((0.52, 0.48), abs=1e-6)
     assert window.liquify_panel.reset_faces_button.isEnabled()
@@ -2587,7 +2586,7 @@ def test_placing_the_points_zooms_onto_the_face_and_puts_the_view_back(
     assert canvas.fitting
     window.enter_liquify()
     window._on_faces_ready(1)
-    window.liquify_panel.edit_faces_button.click()
+    window.liquify_panel.edit_faces_link.click()
     # This small photo already fills the window at its largest zoom, so the
     # view only moves its middle onto the face.
     fitting, _scale, centre = canvas.view_state()
@@ -2598,5 +2597,83 @@ def test_placing_the_points_zooms_onto_the_face_and_puts_the_view_back(
     middle = ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
     assert not fitting
     assert (centre.x() / width, centre.y() / height) == pytest.approx(middle, abs=0.01)
-    window.liquify_panel.edit_faces_button.click()
+    window.liquify_panel.finish_editing_button.click()
     assert canvas.fitting
+
+
+def test_the_brush_paints_only_on_its_page_and_alt_turns_a_twirl_back(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    from core import liquify
+    from core.faces import Face, SkinTone
+    from ui.liquify_panel import PAGE_BRUSH, PAGE_FACE
+
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    controller = window.controller
+    face = Face(
+        points=((0.45, 0.4), (0.55, 0.4), (0.5, 0.47), (0.47, 0.54), (0.53, 0.54), (0.5, 0.48)),
+        tone=SkinTone(red=0.0, blue=0.0, spread=0.1, brightness=-2.0),
+    )
+    controller._faces[(controller.current, controller.geometry.lens)] = (face,)
+    window.enter_liquify()
+    panel = window.liquify_panel
+    canvas = window.preview.canvas
+    assert panel.page == PAGE_FACE and not canvas.liquify.active
+    panel.page_switch.buttons()[PAGE_BRUSH].click()
+    assert canvas.liquify.active
+
+    panel.tool_buttons[liquify.TOOL_TWIRL_CW].click()
+    canvas.liquify.set_reversed(True)
+    canvas.liquify.stroke_painted.emit([(0.5, 0.5)] * 5)
+    canvas.liquify.set_reversed(False)
+    canvas.liquify.stroke_painted.emit([(0.3, 0.3)] * 5)
+    first, second = window.controller.liquify_strokes
+    assert first.tool == liquify.TOOL_TWIRL_CCW and second.tool == liquify.TOOL_TWIRL_CW
+
+
+def test_a_photo_without_a_face_opens_liquify_on_the_brush(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    from ui.liquify_panel import PAGE_BRUSH
+
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window._on_faces_ready(0)
+    controller = window.controller
+    controller._faces[(controller.current, controller.geometry.lens)] = ()
+    window.enter_liquify()
+    assert window.liquify_panel.page == PAGE_BRUSH
+    assert window.preview.canvas.liquify.active
+
+
+def test_a_face_slider_under_the_pointer_is_outlined_on_the_photo(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    from core.faces import Face, SkinTone
+
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    controller = window.controller
+    face = Face(
+        points=((0.45, 0.4), (0.55, 0.4), (0.5, 0.47), (0.47, 0.54), (0.53, 0.54), (0.5, 0.48)),
+        tone=SkinTone(red=0.0, blue=0.0, spread=0.1, brightness=-2.0),
+    )
+    controller._faces[(controller.current, controller.geometry.lens)] = (face,)
+    window._on_faces_ready(1)
+    window.enter_liquify()
+    faces = window.preview.canvas.faces
+    window.liquify_panel.face_hovered.emit("chin")
+    assert faces.spotlit == "chin"
+    window.liquify_panel.face_value_set.emit("chin", 40.0, True)
+    assert faces.spotlit == "chin" and controller.face_shape.chin == 40.0
+    window.liquify_panel.face_value_set.emit("chin", 40.0, False)
+    window.liquify_panel.face_hovered.emit("")
+    assert faces.spotlit == "chin"  # lingers a moment
+    window._spotlight_timer.timeout.emit()
+    assert faces.spotlit == ""
+
+    window.liquify_panel.face_value_set.emit("chin", 40.0, False)
+    controller.reset_face_shape()
+    assert controller.face_shape.is_default and controller.face_shape.faces
+

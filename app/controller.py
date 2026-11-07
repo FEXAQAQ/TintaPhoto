@@ -2066,6 +2066,44 @@ class Controller(QObject):
             if not self._editing_faces:
                 self._develop_current()
 
+    def reset_face_shape(self) -> None:
+        """Put the face sliders back to rest, as one step; the strokes stay (PLAN.md 3.16)."""
+        shape = self._geometry.face_shape
+        if self.current is None or shape.is_default:
+            return
+        rested = replace(shape, **{name: 0.0 for name in liquify.FACE_NAMES})
+        self.set_geometry(replace(self._geometry, face_shape=rested))
+        self.geometry_changed.emit(self._geometry)
+
+    def face_reach_on_screen(
+        self, feature: str
+    ) -> list[tuple[tuple[float, float], tuple[float, float], tuple[float, float]]]:
+        """Return where the face slider *feature* works, on the photo as it is shown now.
+
+        Each ellipse as its middle and the ends of its two axes, in fractions
+        of the frame on screen, for every face: what the photo outlines while
+        that slider is under the pointer (PLAN.md 3.16).
+        """
+        if self.current is None or feature not in liquify.FACE_NAMES:
+            return []
+        size, shape, crop = self._spot_frame()
+        if self._editing_faces:
+            size, shape, crop = self._bare_frame()
+        reaches = []
+        for marks in self._face_marks():
+            guide = liquify.face_guide(marks, size)
+            if guide is None:
+                continue
+            for centre, across, down in guide.reaches.get(feature, ()):
+                reaches.append(
+                    (
+                        geometry.shown_point(centre, size, shape, crop),
+                        geometry.shown_point(across, size, shape, crop),
+                        geometry.shown_point(down, size, shape, crop),
+                    )
+                )
+        return reaches
+
     def reset_face_marks(self) -> None:
         """Put every face's points back where they were found, as one step (L-12)."""
         if self.current is None or not self.faces_edited:
