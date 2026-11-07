@@ -479,6 +479,7 @@ class MainWindow(QMainWindow):
         # this one is still being developed DEVELOPING_DELAY_MS from now.
         self.preview.set_developing(False)
         self._developing_timer.start()
+        self._enable_photo_modes()
         if self._collage_mode:
             # The collage keeps the toolbar until it is left.
             return
@@ -796,12 +797,14 @@ class MainWindow(QMainWindow):
 
         The tools that take the click on the photo are put down and a crop in
         progress is finished first, as for the watermark. Undo and redo go on
-        working: what is done here is done to the photo.
+        working: what is done here is done to the photo. The watermark or the
+        collage, if open, is left first, so the modes switch in one click.
         """
-        if self._portrait_mode or self._collage_mode or self.controller.current is None:
+        if self._portrait_mode or self.controller.current is None:
             self.toolbar.portrait_button.setChecked(self._portrait_mode)
             return
         self.leave_watermark()
+        self.leave_collage()
         if self.controller.cropping:
             self.finish_crop()
         self.set_spot_tool(False)
@@ -909,12 +912,14 @@ class MainWindow(QMainWindow):
 
         The photo on screen is the photo as it will be exported - adjusted
         and cropped - so a crop in progress is finished first, and the tools
-        that take the click on the photo are put down.
+        that take the click on the photo are put down. The portrait or the
+        collage, if open, is left first, so the modes switch in one click.
         """
-        if self._watermark_mode or self._collage_mode or self.controller.current is None:
+        if self._watermark_mode or self.controller.current is None:
             self.toolbar.watermark_button.setChecked(self._watermark_mode)
             return
         self.leave_portrait()
+        self.leave_collage()
         if self.controller.cropping:
             self.finish_crop()
         self.set_spot_tool(False)
@@ -922,7 +927,6 @@ class MainWindow(QMainWindow):
         self.controller.set_comparing(False)
         self._watermark_mode = True
         self.toolbar.watermark_button.setChecked(True)
-        self.toolbar.collage_button.setEnabled(False)
         self.toolbar.set_title(None, tr("watermark.title"))
         self.toolbar.undo_button.setEnabled(False)
         self.toolbar.redo_button.setEnabled(False)
@@ -945,7 +949,6 @@ class MainWindow(QMainWindow):
         canvas.watermark.set_active(False)
         canvas.update()
         self.toolbar.watermark_button.setChecked(False)
-        self.toolbar.collage_button.setEnabled(True)
         self.preview.view_bar.compare_button.setEnabled(True)
         self.watermark_panel.hide()
         if not self.is_inspector_collapsed():
@@ -1017,11 +1020,13 @@ class MainWindow(QMainWindow):
 
         Photos chosen together in the filmstrip go straight in. Photos
         already in the collage are developed again, since they may have been
-        edited since they were put there.
+        edited since they were put there. The portrait or the watermark, if
+        open, is left first, so the modes switch in one click.
         """
         if self._collage_mode:
             return
         self.leave_portrait()
+        self.leave_watermark()
         if self.controller.cropping:
             self.finish_crop()
         self.set_spot_tool(False)
@@ -1036,8 +1041,7 @@ class MainWindow(QMainWindow):
         # The card is about the photo being edited, which the collage covers.
         self.set_info_shown(False)
         self.toolbar.info_button.setEnabled(False)
-        self.toolbar.watermark_button.setEnabled(False)
-        self.toolbar.portrait_button.setEnabled(False)
+        self._enable_photo_modes()
         self._show_toolbar_for_welcome()
         self.toolbar.collage_button.setChecked(True)
         self.preview.hide()
@@ -1059,8 +1063,7 @@ class MainWindow(QMainWindow):
         self.filmstrip.set_choosing_allowed(True)
         self._show_toolbar_for_welcome()
         self.toolbar.info_button.setEnabled(True)
-        self.toolbar.watermark_button.setEnabled(True)
-        self.toolbar.portrait_button.setEnabled(True)
+        self._enable_photo_modes()
         self.toolbar.collage_button.setChecked(False)
         self.collage_canvas.hide()
         self.collage_panel.hide()
@@ -1079,6 +1082,16 @@ class MainWindow(QMainWindow):
     def in_collage(self) -> bool:
         """Return whether the collage is on screen."""
         return self._collage_mode
+
+    def _enable_photo_modes(self) -> None:
+        """Let the portrait and the watermark be opened while there is a photo for them.
+
+        The collage can be opened from the welcome screen, before any photo
+        is; once one is, either button leaves the collage for it.
+        """
+        has_photo = self.controller.current is not None
+        self.toolbar.portrait_button.setEnabled(has_photo)
+        self.toolbar.watermark_button.setEnabled(has_photo)
 
     def choose_collage_photo(self, slot: int) -> None:
         """Ask for the photo to put in one half of the collage."""
@@ -2170,6 +2183,7 @@ class MainWindow(QMainWindow):
 
 #: What the keyboard still does while the collage is open: everything else
 #: acts on the photo being edited, which the collage covers (PLAN.md 3.13).
+#: The portrait and the watermark keys leave the collage for that mode.
 _COLLAGE_SHORTCUTS: frozenset[str] = frozenset(
     {
         "shortcut.toggle_filmstrip",
@@ -2177,6 +2191,8 @@ _COLLAGE_SHORTCUTS: frozenset[str] = frozenset(
         "shortcut.open_folder",
         "shortcut.export",
         "shortcut.collage",
+        "shortcut.watermark",
+        "shortcut.portrait",
         "shortcut.settings",
         "shortcut.fullscreen",
         "shortcut.crop_cancel",
@@ -2220,11 +2236,14 @@ _PORTRAIT_ONLY: frozenset[str] = frozenset(
 )
 
 #: What still works while the watermark is being placed (PLAN.md 3.14):
-#: leaving it, stepping through the photos it is checked against, looking
-#: closer, and exporting. The rest acts on the editing panel it covers.
+#: leaving it or switching to another mode, stepping through the photos it
+#: is checked against, looking closer, and exporting. The rest acts on the
+#: editing panel it covers.
 _WATERMARK_SHORTCUTS: frozenset[str] = frozenset(
     {
         "shortcut.watermark",
+        "shortcut.portrait",
+        "shortcut.collage",
         "shortcut.crop_cancel",
         "shortcut.toggle_filmstrip",
         "shortcut.open_file",

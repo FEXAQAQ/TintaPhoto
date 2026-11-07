@@ -2250,7 +2250,7 @@ def test_the_watermark_takes_the_inspectors_place(
     assert window.watermark_panel.isVisible() and not window.inspector.isVisible()
     assert window.toolbar.title_label.text() == tr("watermark.title")
     assert not window.toolbar.undo_button.isEnabled()
-    assert not window.toolbar.collage_button.isEnabled()
+    assert window.toolbar.collage_button.isEnabled()
     assert window.preview.canvas.watermark.active
 
     window.on_escape()
@@ -2280,17 +2280,51 @@ def test_typing_the_first_text_turns_the_watermark_on(
     assert not overlay.screen_rect(window.preview.canvas.photo_rect()).isEmpty()
 
 
-def test_the_collage_and_the_watermark_keep_out_of_each_other(
+def test_the_collage_and_the_watermark_switch_straight_to_each_other(
     window: MainWindow, tmp_path: object, qt_app: object
 ) -> None:
     _open_photos(window, tmp_path, qt_app)
     _wait_for_photo(window, qt_app)
     window.enter_collage()
-    assert not window.toolbar.watermark_button.isEnabled()
-    window.enter_watermark()
-    assert not window.in_watermark
-    window.leave_collage()
     assert window.toolbar.watermark_button.isEnabled()
+    window.toolbar.watermark_button.click()
+    assert window.in_watermark and not window.in_collage
+    assert window.watermark_panel.isVisible() and not window.collage_panel.isVisible()
+    assert window.toolbar.title_label.text() == tr("watermark.title")
+    window.toolbar.collage_button.click()
+    assert window.in_collage and not window.in_watermark
+    assert window.collage_panel.isVisible() and not window.watermark_panel.isVisible()
+    assert not window.preview.canvas.watermark.active
+
+
+def test_the_mode_keys_switch_between_the_modes(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    handlers = window.shortcut_handlers()
+    window.enter_collage()
+    window._on_shortcut("shortcut.portrait", handlers["shortcut.portrait"])
+    assert window.in_portrait and not window.in_collage
+    window._on_shortcut("shortcut.watermark", handlers["shortcut.watermark"])
+    assert window.in_watermark and not window.in_portrait
+    window._on_shortcut("shortcut.portrait", handlers["shortcut.portrait"])
+    assert window.in_portrait and not window.in_watermark
+    window.enter_watermark()
+    window._on_shortcut("shortcut.collage", handlers["shortcut.collage"])
+    assert window.in_collage and not window.in_watermark
+    window._on_shortcut("shortcut.watermark", handlers["shortcut.watermark"])
+    assert window.in_watermark and not window.in_collage
+
+
+def test_a_collage_opened_before_any_photo_keeps_the_photo_modes_off(
+    window: MainWindow,
+) -> None:
+    window.enter_collage()
+    assert not window.toolbar.portrait_button.isEnabled()
+    assert not window.toolbar.watermark_button.isEnabled()
+    window.enter_portrait()
+    assert window.in_collage and not window.in_portrait
 
 
 def test_the_watermark_shortcut_is_t(window: MainWindow) -> None:
@@ -2357,9 +2391,11 @@ def test_the_portrait_and_the_watermark_take_turns(
     assert window.in_portrait and not window.in_watermark
     window.enter_collage()
     assert not window.in_portrait
-    assert not window.toolbar.portrait_button.isEnabled()
-    window.leave_collage()
     assert window.toolbar.portrait_button.isEnabled()
+    window.toolbar.portrait_button.click()
+    assert window.in_portrait and not window.in_collage
+    assert window.portrait_panel.isVisible() and not window.collage_panel.isVisible()
+    assert window.toolbar.title_label.text().endswith("a.jpg")
 
 
 def test_the_portrait_keys(window: MainWindow) -> None:
