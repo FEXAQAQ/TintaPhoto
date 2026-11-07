@@ -35,9 +35,10 @@ from app.i18n import tr
 from app.paths import (
     APP_NAME,
     APP_VERSION,
-    fallback_sidecar_dir,
+    earlier_sidecar_dir,
     filters_dir,
     presets_dir,
+    sidecar_dir,
     thumbnail_cache_dir,
 )
 from app.settings import Settings
@@ -443,11 +444,11 @@ class Controller(QObject):
 
         self._history = History()
         self._application = sidecar.Application(APP_NAME, APP_VERSION)
-        self._fallback_dir = fallback_sidecar_dir()
+        self._store = sidecar_dir()
+        # A handful of small files at most, so this is quick enough here.
+        sidecar.adopt(earlier_sidecar_dir(), self._store)
         #: Adjustments changed but not yet written; emptied by the save timer.
         self._unsaved: dict[Path, Edit] = {}
-        #: Folders the user has already been told are stored elsewhere.
-        self._fallback_announced: set[Path] = set()
         self._edited: set[Path] = set()
         #: The unknown fields each photo's parameter file holds, so that
         #: saving cannot throw away what this version does not understand.
@@ -1120,7 +1121,7 @@ class Controller(QObject):
             self._edited = set()
             self.edited_photos_ready.emit(set())
             return
-        store = self._fallback_dir
+        store = self._store
         self._submit(
             lambda: sidecar.edited_photos(photos, store),
             _GROUP_EDITED,
@@ -1335,7 +1336,7 @@ class Controller(QObject):
 
     def _stored_edit(self, path: Path) -> Edit:
         """Return what the parameter file of *path* says, or the reference (E-03)."""
-        stored = sidecar.read(path, self._reference, self._fallback_dir)
+        stored = sidecar.read(path, self._reference, self._store)
         if stored is None:
             return self.reference_edit
         self._carried[path] = stored.extra
@@ -1363,7 +1364,7 @@ class Controller(QObject):
         called on a background thread, unlike the history.
         """
         reference = EditState.for_photo(decoded.is_raw, *pipeline.shot_white_balance(decoded))
-        stored = sidecar.read(path, reference, self._fallback_dir)
+        stored = sidecar.read(path, reference, self._store)
         if stored is None:
             return Edit(reference, _reference_geometry(decoded))
         return stored.edit.with_adjustments(self._as_installed(stored.edit.adjustments))
@@ -1521,9 +1522,7 @@ class Controller(QObject):
             if same_kind or name not in _KIND_NAMES
         }
         values["filter"] = copied.filter
-        result = _update_sidecar(
-            photo, values, self._application, self._fallback_dir
-        )
+        result = _update_sidecar(photo, values, self._application, self._store)
         if result.failed:
             return False
         self._note_edited(photo, result)
@@ -2572,26 +2571,16 @@ class Controller(QObject):
             edit,
             self.reference_edit,
             self._application,
-            self._fallback_dir,
+            self._store,
             self._carried.get(path, {}),
         )
 
     def _on_saved(self, path: Path, result: sidecar.SaveResult) -> None:
-        """React to a finished save: the filmstrip mark and the one notice."""
+        """React to a finished save: the filmstrip mark, or what went wrong."""
         if result.failed:
             self.error.emit(tr("error.cannot_save_parameters", name=path.name))
             return
-        self._note_fallback(path, result)
         self._note_edited(path, result)
-
-    def _note_fallback(self, path: Path, result: sidecar.SaveResult) -> None:
-        """Tell the user once per folder that the parameters went elsewhere."""
-        if not self._settings.warn_read_only:
-            return
-        if result.fallback and path.parent not in self._fallback_announced:
-            # PLAN.md 7.1: tell the user once per folder, not once per photo.
-            self._fallback_announced.add(path.parent)
-            self.error.emit(tr("notice.parameters_stored_elsewhere", name=path.parent.name))
 
     def _note_edited(self, path: Path, result: sidecar.SaveResult) -> None:
         """Keep the filmstrip's mark in step with the parameter file."""
@@ -2757,13 +2746,11 @@ def _update_sidecar(
     photo: Path,
     values: dict[str, float],
     application: sidecar.Application,
-    fallback_dir: Path,
+    store: Path,
 ) -> sidecar.SaveResult:
     """Change some stored adjustments, reporting rather than raising."""
     try:
-        return sidecar.update_adjustments(
-            photo, values, application, fallback_dir=fallback_dir
-        )
+        return sidecar.update_adjustments(photo, values, application, store)
     except Exception:  # noqa: BLE001 - a paste must never take anything down
         logger.exception("The parameters of %s could not be stored", photo)
         return sidecar.SaveResult(failed=True)
@@ -2774,7 +2761,7 @@ def _save_sidecar(
     edit: Edit,
     reference: Edit,
     application: sidecar.Application,
-    fallback_dir: Path,
+    store: Path,
     extra: dict[str, Any],
 ) -> sidecar.SaveResult:
     """Store the parameters of one photo, reporting rather than raising.
@@ -2788,7 +2775,7 @@ def _save_sidecar(
             edit,
             reference,
             application,
-            fallback_dir=fallback_dir,
+            store,
             extra=extra,
         )
     except Exception:  # noqa: BLE001 - a save must never take anything down

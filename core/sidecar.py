@@ -1,20 +1,25 @@
-"""Reading and writing the parameter file beside a photo (PLAN.md 7.1).
+"""Reading and writing the parameter file of a photo (PLAN.md 7.1).
 
 Editing is non-destructive: the photo itself is never touched, and everything
-the user changes lives in a small JSON file named after it. The name keeps the
-original extension, ``DSC01234.ARW.json``, because a camera shooting RAW+JPEG
-produces two photos with the same stem that must not share one file (F-05).
+the user changes lives in a small JSON file kept in the program's own store,
+never in the photo's folder. The file is named after a hash of the photo's
+full path, so two photos of the same name in different folders stay apart, and
+``DSC01234.ARW`` and ``DSC01234.JPG`` of a RAW+JPEG shot each have their own
+(F-05).
 
-Three things here are worth knowing about:
+Four things here are worth knowing about:
 
 * A write goes to a temporary file and is then renamed, so an interrupted
   write cannot leave a half finished parameter file behind.
-* When the folder cannot be written to - a write protected card, a read only
-  folder, a network drive without permission - the file is stored in an
-  alternative place instead, named after a hash of the photo's full path.
-  Reading looks beside the photo first and only then there.
 * When nothing is adjusted any more, the file is deleted rather than left
   behind holding nothing but defaults.
+* Versions before 0.35.0 wrote the file beside the photo, as
+  ``DSC01234.ARW.json``. Those are still read when the store has nothing for
+  the photo, but never written, moved or deleted: the store is what counts
+  from then on.
+* Because an old file beside the photo would come back once the store's copy
+  is deleted, a photo reset to its defaults while one is there gets a small
+  "cleared" mark in the store that hides it.
 
 Nothing in this module ever opens a photo for writing. The only thing it asks
 the photo for is its size and modification time, which go into the file so
@@ -48,6 +53,9 @@ SIDECAR_SUFFIX: Final[str] = ".json"
 
 #: Written while saving and renamed over the real file when complete.
 _TEMP_SUFFIX: Final[str] = ".tmp"
+
+#: Marks a photo reset to its defaults whose old file beside it must not count.
+_CLEARED_SUFFIX: Final[str] = ".cleared"
 
 @dataclass(frozen=True)
 class Application:
@@ -92,13 +100,10 @@ class SaveResult:
     """What became of a save.
 
     ``path`` is where the file ended up, or ``None`` when there is no longer a
-    file at all. ``fallback`` says that the folder of the photo could not be
-    written to and the alternative store was used, which is the one thing the
-    user has to be told about.
+    file at all.
     """
 
     path: Path | None = None
-    fallback: bool = False
     deleted: bool = False
     failed: bool = False
 
@@ -108,17 +113,17 @@ class SaveResult:
 # -------------------------------------------------------------------------
 
 
-def sidecar_path(photo: Path) -> Path:
-    """Return the parameter file that belongs beside *photo*.
+def legacy_path(photo: Path) -> Path:
+    """Return where versions before 0.35.0 kept *photo*'s parameter file.
 
-    The whole file name is kept, extension included, so that
-    ``DSC01234.ARW`` and ``DSC01234.JPG`` do not overwrite each other (F-05).
+    That was beside the photo, with the whole file name kept, extension
+    included. It is only ever read now, never written.
     """
     return photo.with_name(photo.name + SIDECAR_SUFFIX)
 
 
-def fallback_key(photo: Path) -> str:
-    """Return the file name *photo* is stored under in the alternative store.
+def store_key(photo: Path) -> str:
+    """Return the name *photo* is stored under in the store.
 
     A hash of the full path, so that two photos of the same name in different
     folders stay apart. The path is resolved and case folded first, because on
@@ -132,42 +137,83 @@ def fallback_key(photo: Path) -> str:
     return hashlib.sha256(identity.encode("utf-8", "replace")).hexdigest()
 
 
-def fallback_path(photo: Path, fallback_dir: Path) -> Path:
-    """Return where *photo*'s parameters go when its folder is unwritable."""
-    return fallback_dir / f"{fallback_key(photo)}{SIDECAR_SUFFIX}"
+def stored_path(photo: Path, store: Path) -> Path:
+    """Return where *photo*'s parameter file goes in *store*."""
+    return store / f"{store_key(photo)}{SIDECAR_SUFFIX}"
 
 
-def existing_path(photo: Path, fallback_dir: Path | None = None) -> Path | None:
-    """Return the parameter file of *photo*, beside it or in the store.
+def _cleared_path(photo: Path, store: Path) -> Path:
+    """Return the mark that hides an old file beside *photo*."""
+    return store / f"{store_key(photo)}{_CLEARED_SUFFIX}"
 
-    Beside the photo wins: a folder that was unwritable once may be writable
-    now, and the file the user can see and copy is the one that counts.
+
+def existing_path(photo: Path, store: Path) -> Path | None:
+    """Return the parameter file of *photo*, or ``None`` if it has none.
+
+    The store wins. An old file beside the photo counts only when the store
+    knows nothing about the photo - neither a file nor a mark saying it was
+    reset since.
     """
-    beside = sidecar_path(photo)
+    stored = stored_path(photo, store)
+    if stored.is_file():
+        return stored
+    if _cleared_path(photo, store).is_file():
+        return None
+    beside = legacy_path(photo)
     if beside.is_file():
         return beside
-    if fallback_dir is not None:
-        stored = fallback_path(photo, fallback_dir)
-        if stored.is_file():
-            return stored
     return None
 
 
-def is_edited(photo: Path, fallback_dir: Path | None = None) -> bool:
+def is_edited(photo: Path, store: Path) -> bool:
     """Return whether *photo* has been adjusted (for the filmstrip mark).
 
     Only the presence of the file is checked, never its contents: a parameter
     file exists exactly when something is not at its default, because saving
     an untouched photo deletes it. Opening a folder of three hundred photos
-    therefore costs three hundred cheap questions to the file system rather
+    therefore costs a few hundred cheap questions to the file system rather
     than three hundred JSON files to parse.
     """
-    return existing_path(photo, fallback_dir) is not None
+    return existing_path(photo, store) is not None
 
 
-def edited_photos(photos: list[Path], fallback_dir: Path | None = None) -> set[Path]:
+def edited_photos(photos: list[Path], store: Path) -> set[Path]:
     """Return which of *photos* have a parameter file."""
-    return {photo for photo in photos if is_edited(photo, fallback_dir)}
+    return {photo for photo in photos if is_edited(photo, store)}
+
+
+def adopt(old_store: Path, store: Path) -> int:
+    """Move the files of an earlier store into *store*; return how many moved.
+
+    Before 0.35.0 the program only used a store - in another folder - for
+    photos whose own folder could not be written to. Those files are the
+    program's own, so they are moved rather than copied. A file *store*
+    already has is newer and is kept; the old one is then left where it is.
+    """
+    try:
+        found = sorted(old_store.glob(f"*{SIDECAR_SUFFIX}"))
+    except OSError:
+        logger.exception("Could not look in the earlier store %s", old_store)
+        return 0
+    if not found:
+        return 0
+    try:
+        store.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.exception("The parameter store %s cannot be used", store)
+        return 0
+    moved = 0
+    for path in found:
+        target = store / path.name
+        if target.exists():
+            continue
+        try:
+            os.replace(path, target)
+        except OSError:
+            logger.exception("Could not move %s into the store", path)
+            continue
+        moved += 1
+    return moved
 
 
 # -------------------------------------------------------------------------
@@ -175,9 +221,7 @@ def edited_photos(photos: list[Path], fallback_dir: Path | None = None) -> set[P
 # -------------------------------------------------------------------------
 
 
-def read(
-    photo: Path, reference: EditState, fallback_dir: Path | None = None
-) -> Sidecar | None:
+def read(photo: Path, reference: EditState, store: Path) -> Sidecar | None:
     """Return the stored parameters of *photo*, or ``None`` if there are none.
 
     *reference* is the state the photo opens in - for a RAW photo that is the
@@ -186,22 +230,20 @@ def read(
     be read or makes no sense is logged and treated as absent, so that one bad
     parameter file cannot stop a photo from opening.
     """
-    found = read_document(photo, fallback_dir)
+    found = read_document(photo, store)
     if found is None:
         return None
     path, data = found
     return _from_dict(data, reference, path)
 
 
-def read_document(
-    photo: Path, fallback_dir: Path | None = None
-) -> tuple[Path, dict[str, Any]] | None:
+def read_document(photo: Path, store: Path) -> tuple[Path, dict[str, Any]] | None:
     """Return the parameter file of *photo* as it is written, and where it is.
 
     Used where the file has to be changed rather than understood, which is
     what pasting onto a photo that is not open does.
     """
-    path = existing_path(photo, fallback_dir)
+    path = existing_path(photo, store)
     if path is None:
         return None
     try:
@@ -249,50 +291,25 @@ def save(
     edit: Edit,
     reference: Edit,
     application: Application,
-    fallback_dir: Path | None = None,
+    store: Path,
     extra: dict[str, Any] | None = None,
 ) -> SaveResult:
     """Store the edit of *photo*, or delete the file if there is nothing in it.
 
-    Writing goes beside the photo, and only to the alternative store when that
-    fails. A photo whose adjustments are all back at *reference* and which has
-    no crop has nothing worth storing, so its parameter file is removed
-    instead of being left holding defaults (PLAN.md section 7.1).
+    A photo whose adjustments are all back at *reference* and which has no
+    crop has nothing worth storing, so its parameter file is removed instead
+    of being left holding defaults (PLAN.md section 7.1).
     """
     if edit.is_untouched(reference):
-        removed = delete(photo, fallback_dir)
-        return SaveResult(deleted=removed)
-
-    document = _to_dict(photo, edit, application, extra or {})
-    beside = sidecar_path(photo)
-    if _write_atomically(beside, document):
-        if fallback_dir is not None:
-            # A folder that has become writable again takes over, so that the
-            # photo and its parameters travel together from now on.
-            _remove(fallback_path(photo, fallback_dir))
-        return SaveResult(path=beside)
-
-    if fallback_dir is None:
-        logger.error("The parameters of %s could not be stored", photo)
-        return SaveResult(failed=True)
-
-    stored = fallback_path(photo, fallback_dir)
-    try:
-        fallback_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        logger.exception("The alternative parameter store %s cannot be used", fallback_dir)
-        return SaveResult(failed=True)
-    if _write_atomically(stored, document):
-        return SaveResult(path=stored, fallback=True)
-    logger.error("The parameters of %s could not be stored", photo)
-    return SaveResult(failed=True)
+        return SaveResult(deleted=delete(photo, store))
+    return _store(photo, _to_dict(photo, edit, application, extra or {}), store)
 
 
 def update_adjustments(
     photo: Path,
     values: dict[str, float | str],
     application: Application,
-    fallback_dir: Path | None = None,
+    store: Path,
 ) -> SaveResult:
     """Set some of the adjustments of *photo* in its parameter file (P-02).
 
@@ -310,7 +327,7 @@ def update_adjustments(
     if not values:
         return SaveResult()
 
-    found = read_document(photo, fallback_dir)
+    found = read_document(photo, store)
     document: dict[str, Any] = dict(found[1]) if found is not None else {}
     stored = document.get("adjustments")
     adjustments = dict(stored) if isinstance(stored, dict) else {}
@@ -337,37 +354,44 @@ def update_adjustments(
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         }
     )
+    return _store(photo, document, store)
 
-    beside = sidecar_path(photo)
-    if _write_atomically(beside, document):
-        if fallback_dir is not None:
-            _remove(fallback_path(photo, fallback_dir))
-        return SaveResult(path=beside)
-    if fallback_dir is None:
+
+def delete(photo: Path, store: Path) -> bool:
+    """Remove the parameters of *photo*; return whether it had any.
+
+    An old file beside the photo is left exactly where it is - it is not the
+    program's to delete any more - and hidden by a mark in the store instead,
+    or it would come back the next time the photo is opened.
+    """
+    removed = _remove(stored_path(photo, store))
+    cleared = _cleared_path(photo, store)
+    if legacy_path(photo).is_file() and not cleared.is_file():
+        try:
+            store.mkdir(parents=True, exist_ok=True)
+            cleared.touch()
+        except OSError:
+            logger.exception("Could not mark %s as reset", photo)
+        else:
+            removed = True
+    return removed
+
+
+def _store(photo: Path, document: dict[str, Any], store: Path) -> SaveResult:
+    """Write *document* as *photo*'s parameter file in *store*."""
+    try:
+        store.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.exception("The parameter store %s cannot be used", store)
+        return SaveResult(failed=True)
+    target = stored_path(photo, store)
+    if not _write_atomically(target, document):
         logger.error("The parameters of %s could not be stored", photo)
         return SaveResult(failed=True)
-    stored_path = fallback_path(photo, fallback_dir)
-    try:
-        fallback_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        logger.exception("The alternative parameter store %s cannot be used", fallback_dir)
-        return SaveResult(failed=True)
-    if _write_atomically(stored_path, document):
-        return SaveResult(path=stored_path, fallback=True)
-    return SaveResult(failed=True)
-
-
-def delete(photo: Path, fallback_dir: Path | None = None) -> bool:
-    """Remove the parameter file of *photo* from both places.
-
-    Returns whether anything was there to remove. Both are cleared, or an old
-    copy in the alternative store would come back the next time the photo is
-    opened.
-    """
-    removed = _remove(sidecar_path(photo))
-    if fallback_dir is not None:
-        removed = _remove(fallback_path(photo, fallback_dir)) or removed
-    return removed
+    # The file in the store wins from now on, so a mark hiding an old file
+    # beside the photo is no longer needed.
+    _remove(_cleared_path(photo, store))
+    return SaveResult(path=target)
 
 
 def _to_dict(
@@ -438,14 +462,16 @@ __all__ = [
     "SIDECAR_VERSION",
     "SaveResult",
     "Sidecar",
+    "adopt",
     "delete",
     "edited_photos",
     "existing_path",
-    "read_document",
-    "fallback_path",
     "is_edited",
+    "legacy_path",
     "read",
+    "read_document",
     "save",
-    "sidecar_path",
+    "store_key",
+    "stored_path",
     "update_adjustments",
 ]

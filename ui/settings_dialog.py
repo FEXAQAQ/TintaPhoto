@@ -178,7 +178,7 @@ class SettingsDialog(Dialog):
     # -- building the pages ----------------------------------------------
 
     def _build_general(self) -> QWidget:
-        """Language, what to do at start-up, and the read only warning."""
+        """Language and what to do at start-up."""
         page, rows = _page()
 
         self.language_box = _combo(
@@ -191,8 +191,6 @@ class SettingsDialog(Dialog):
         )
         rows.addWidget(SettingsRow("settings.startup", self.startup_box))
 
-        self.warn_switch = _switch(self._settings.warn_read_only, self._on_warn)
-        rows.addWidget(SettingsRow("settings.warn_read_only", self.warn_switch))
         rows.addStretch(1)
         return page
 
@@ -446,10 +444,6 @@ class SettingsDialog(Dialog):
 
     def _on_startup(self, action: str) -> None:
         self._settings.startup_action = action
-        self._announce()
-
-    def _on_warn(self, on: bool) -> None:
-        self._settings.warn_read_only = on
         self._announce()
 
     def _on_display_profile(self, on: bool) -> None:

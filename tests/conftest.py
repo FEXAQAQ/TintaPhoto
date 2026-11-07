@@ -26,3 +26,17 @@ def qt_app() -> Iterator[object]:
 
     application.setStyleSheet(theme.build_qss())
     yield application
+
+
+@pytest.fixture(autouse=True)
+def scratch_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point %APPDATA% and %LOCALAPPDATA% at a throwaway folder for every test.
+
+    Every photo's parameter file is kept under %APPDATA% (PLAN.md 7.1), so a
+    test that opens and adjusts a photo must not be able to write into the
+    person's own application data. ``app/paths.py`` reads both variables on
+    every call, which is what makes this enough.
+    """
+    scratch = tmp_path_factory.mktemp("profile")
+    monkeypatch.setenv("APPDATA", str(scratch / "roaming"))
+    monkeypatch.setenv("LOCALAPPDATA", str(scratch / "local"))

@@ -66,7 +66,7 @@ def test_every_change_is_announced(dialog: SettingsDialog) -> None:
     announced: list[int] = []
     dialog.changed.connect(lambda: announced.append(1))
 
-    dialog.warn_switch.setChecked(False)
+    dialog.preload_switch.setChecked(not dialog.preload_switch.isChecked())
     dialog.background_choice.buttons()[settings_module.BACKGROUND_MID].click()
     dialog.suffix_field.setText("_web")
     dialog._on_suffix("_web")
@@ -99,13 +99,6 @@ def test_what_happens_at_start_up_can_be_changed(
         dialog.startup_box.findData(settings_module.STARTUP_LAST_FOLDER)
     )
     assert settings.startup_action == settings_module.STARTUP_LAST_FOLDER
-
-
-def test_the_read_only_warning_can_be_turned_off(
-    dialog: SettingsDialog, settings: Settings
-) -> None:
-    dialog.warn_switch.setChecked(False)
-    assert not settings.warn_read_only
 
 
 # -- preview and colour ---------------------------------------------------
@@ -345,7 +338,6 @@ def test_searching_matches_the_name_as_well_as_the_keys(
 
 def test_every_new_setting_survives_a_round_trip(tmp_path: Path) -> None:
     settings = Settings(
-        warn_read_only=False,
         use_display_profile=False,
         clipping_marks=settings_module.CLIPPING_MONO,
         preview_background=settings_module.BACKGROUND_MID,

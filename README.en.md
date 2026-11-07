@@ -169,14 +169,14 @@ or tick several photos in the filmstrip and export them all at once.
 | --- | --- | --- |
 | **White balance eyedropper**<br>Click something that should be white or grey and the colour cast is gone (`W`) | **Lens corrections**<br>Distortion, colour fringing and vignetting fixed automatically for RAW, from data the camera wrote or the Lensfun database | **One-touch skin and whiten**<br>Finds faces and smooths, brightens and clears only the skin, never the background; in Portrait mode (`P`) a brush adds or removes skin by hand |
 | **Noise reduction and sharpening**<br>RAW files open with a touch of sharpening and colour noise reduction, adjustable in Detail | **Film grain and vignette**<br>Grain measured from a camera's own, 50 and 100 matching its weak and strong settings | **Histogram**<br>RGB or luminance, with clipping warnings at a glance (`H`, `J`) |
-| **Presets**<br>Save a look you like and apply it with a click, or copy and paste it across a whole set | **Non-destructive**<br>Adjustments live in a small file next to the photo; the original is never written to | **JPEG passthrough**<br>An unadjusted JPEG exports with exactly the original pixels |
+| **Presets**<br>Save a look you like and apply it with a click, or copy and paste it across a whole set | **Non-destructive**<br>Adjustments live in the program's own folder; the original is never written to, and nothing is added beside it | **JPEG passthrough**<br>An unadjusted JPEG exports with exactly the original pixels |
 | **Familiar shortcuts**<br>The shortcuts most photo editors share, so your hands already know the way | **Whole folders at once**<br>Subfolders included, large folders stay responsive, thumbnails are cached | **English / 繁體中文**<br>Dark interface; switching language takes effect immediately |
 
 <br>
 
 ## Why TintaPhoto
 
-- **Your originals are sacred.** Photos are never written, moved or deleted, under any circumstances. Every adjustment is stored beside the photo and can be undone back to the start.
+- **Your originals are sacred.** Photos are never written, moved or deleted, under any circumstances. Every adjustment is stored in the program's own folder and can be undone back to the start.
 - **Colour, done properly.** Processing runs in 32-bit floating point on linear light in a wide-gamut working space. Saturation changes chroma only, never lightness or hue, and colours are gamut-compressed before output instead of clipped — the most saturated part of a sunset or a petal keeps its shape instead of turning into a flat patch.
 - **Out of your way.** No library, no account, no cloud, no subscription. Open it, use it, close it.
 - **Free and open source.** MIT licensed; the code is all here.

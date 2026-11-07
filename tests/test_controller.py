@@ -71,11 +71,11 @@ def wait_for(signal, timeout_ms: int = TIMEOUT_MS) -> list:
 def controller(
     qt_app: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[Controller]:
-    # The alternative parameter store is only used when a photo's folder
-    # cannot be written to, but a test must not be able to reach the real
-    # application data folder even then.
+    # Every parameter file goes into the store, which a test must keep out
+    # of the real application data folder.
+    monkeypatch.setattr(controller_module, "sidecar_dir", lambda: tmp_path / "store")
     monkeypatch.setattr(
-        controller_module, "fallback_sidecar_dir", lambda: tmp_path / "store"
+        controller_module, "earlier_sidecar_dir", lambda: tmp_path / "earlier store"
     )
     # The same goes for the presets folder, which is in the user's own
     # application data.
@@ -513,16 +513,16 @@ def _opened(controller: Controller, folder: Path) -> Path:
     return current
 
 
-def test_adjusting_writes_a_parameter_file_beside_the_photo(
+def test_adjusting_writes_a_parameter_file(
     controller: Controller, folder: Path
 ) -> None:
-    """E-02: the adjustments are stored next to the photo."""
+    """E-02: the adjustments are stored in the program's own store."""
     photo = _opened(controller, folder)
 
     controller.set_adjustments(controller.state.with_value("exposure", 0.8))
     controller.flush()
 
-    stored = sidecar.read(photo, controller.state)
+    stored = sidecar.read(photo, controller.state, controller._store)
     assert stored is not None
     assert stored.adjustments.exposure == 0.8
 
@@ -575,12 +575,12 @@ def test_a_photo_back_at_its_defaults_loses_its_parameter_file(
     photo = _opened(controller, folder)
     controller.set_adjustments(controller.state.with_value("exposure", 0.8))
     controller.flush()
-    assert sidecar.sidecar_path(photo).is_file()
+    assert sidecar.stored_path(photo, controller._store).is_file()
 
     controller.reset()
     controller.flush()
 
-    assert not sidecar.sidecar_path(photo).exists()
+    assert not sidecar.stored_path(photo, controller._store).exists()
 
 
 def test_a_whole_drag_is_one_undo(controller: Controller, folder: Path) -> None:
@@ -746,7 +746,7 @@ def test_moving_to_another_photo_writes_what_was_still_waiting(
     controller.select(1)
     wait_for(controller.edited_changed)
 
-    assert sidecar.sidecar_path(photo).is_file()
+    assert sidecar.stored_path(photo, controller._store).is_file()
 
 
 def test_the_before_view_shows_the_photo_as_it_was_found(
@@ -784,6 +784,7 @@ def test_which_photos_are_edited_is_announced_when_a_folder_opens(
         Edit(EditState(contrast=30.0)),
         Edit(EditState()),
         sidecar.Application("TintaPhoto", "0.1.0"),
+        controller._store,
     )
 
     controller.open(folder)
@@ -810,31 +811,64 @@ def test_editing_and_resetting_change_the_mark(
     assert not controller.is_edited(photo)
 
 
-def test_a_folder_that_cannot_be_written_to_says_so_once(
-    controller: Controller, folder: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_adjusting_leaves_nothing_in_the_photo_folder(
+    controller: Controller, folder: Path
 ) -> None:
-    """PLAN.md 7.1: store the parameters elsewhere and mention it once."""
+    """PLAN.md 7.1: the parameter files are the program's, not the folder's."""
+    before = sorted(path.name for path in folder.iterdir())
     photo = _opened(controller, folder)
-    messages: list[str] = []
-    controller.error.connect(messages.append)
-
-    real_open = Path.open
-
-    def guarded(self: Path, mode: str = "r", *args: object, **kwargs: object):
-        if self.parent == folder and any(flag in mode for flag in "wxa+"):
-            raise PermissionError(13, "Access is denied")
-        return real_open(self, mode, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "open", guarded)
 
     controller.set_adjustments(controller.state.with_value("exposure", 0.8))
     controller.flush()
+
+    assert sorted(path.name for path in folder.iterdir()) == before
+    assert sidecar.stored_path(photo, controller._store).is_file()
+
+
+def test_an_old_file_beside_the_photo_still_opens_and_is_never_touched(
+    controller: Controller, folder: Path
+) -> None:
+    """0.34 and earlier wrote beside the photo; that is read but left alone."""
+    photo = folder / "a.jpg"
+    beside = sidecar.legacy_path(photo)
+    beside.write_text('{"version": 1, "adjustments": {"contrast": 30}}', encoding="utf-8")
+    untouched = beside.read_bytes()
+
+    shown = _opened(controller, folder)
+    assert shown == photo
+    assert controller.state.contrast == 30.0
+
     controller.set_adjustments(controller.state.with_value("contrast", 10.0))
     controller.flush()
+    assert sidecar.read(photo, controller.state, controller._store).adjustments.contrast == 10.0
 
-    monkeypatch.undo()
-    assert sidecar.fallback_path(photo, tmp_path / "store").is_file()
-    assert len(messages) == 1
+    controller.reset()
+    controller.flush()
+    assert sidecar.read(photo, controller.state, controller._store) is None
+    assert not controller.is_edited(photo)
+    assert beside.read_bytes() == untouched
+
+
+def test_the_earlier_store_is_taken_over_at_start_up(
+    qt_app: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, folder: Path
+) -> None:
+    """Parameters of unwritable folders from 0.34 and earlier are not lost."""
+    photo = folder / "a.jpg"
+    earlier = tmp_path / "earlier"
+    earlier.mkdir()
+    old = sidecar.stored_path(photo, earlier)
+    old.write_text('{"version": 1, "adjustments": {"contrast": 30}}', encoding="utf-8")
+    store = tmp_path / "new store"
+    monkeypatch.setattr(controller_module, "sidecar_dir", lambda: store)
+    monkeypatch.setattr(controller_module, "earlier_sidecar_dir", lambda: earlier)
+    monkeypatch.setattr(controller_module, "presets_dir", lambda: tmp_path / "presets")
+
+    created = Controller(Settings())
+    try:
+        assert not old.exists()
+        assert sidecar.read(photo, EditState(), store).adjustments.contrast == 30.0
+    finally:
+        created.shutdown()
 
 
 # -- cropping and rotation (PLAN.md C-01 to C-07) -------------------------
@@ -995,7 +1029,7 @@ def test_a_crop_alone_is_worth_a_parameter_file(
     controller.set_geometry(Geometry(crop=Rect(0.2, 0.2, 0.5, 0.5)))
     controller.flush()
 
-    stored = sidecar.read(photo, controller.state)
+    stored = sidecar.read(photo, controller.state, controller._store)
     assert stored is not None
     assert stored.geometry.crop.w == pytest.approx(0.5)
     assert stored.adjustments == controller.state
@@ -1163,7 +1197,7 @@ def test_pasting_reaches_every_chosen_photo(controller: Controller, many: Path) 
     controller.flush()
 
     for photo in photos:
-        stored = sidecar.read(photo, EditState())
+        stored = sidecar.read(photo, EditState(), controller._store)
         assert stored is not None, f"{photo.name} was not changed"
         assert stored.adjustments.vibrance == 35.0
         assert stored.adjustments.contrast == 20.0
@@ -1183,6 +1217,7 @@ def test_pasting_leaves_the_crop_of_the_other_photos_alone(
         Edit(EditState(), Geometry(angle=4.0, crop=Rect(0.1, 0.1, 0.6, 0.6))),
         Edit(EditState()),
         sidecar.Application("TintaPhoto", "0.1.0"),
+        controller._store,
     )
 
     controller.set_adjustments(controller.state.with_value("saturation", 25.0))
@@ -1190,7 +1225,7 @@ def test_pasting_leaves_the_crop_of_the_other_photos_alone(
     controller.paste_adjustments([photos[0], other])
     controller.flush()
 
-    stored = sidecar.read(other, EditState())
+    stored = sidecar.read(other, EditState(), controller._store)
     assert stored is not None
     assert stored.adjustments.saturation == 25.0
     assert stored.geometry.angle == 4.0
@@ -1936,6 +1971,7 @@ def test_a_filter_that_is_not_installed_is_taken_off(
         Edit(reference.with_filter("no-such-filter").with_value("vibrance", 20.0)),
         Edit(reference),
         sidecar.Application("TintaPhoto", "0.1.0"),
+        controller._store,
     )
 
     controller.open_file(photo)
@@ -2160,7 +2196,7 @@ def test_switching_the_lens_off_is_undone_and_stored(
 
     controller.set_lens(LensSettings(enabled=False))
     controller.flush()
-    stored = sidecar.read(photo, controller.state)
+    stored = sidecar.read(photo, controller.state, controller._store)
     assert stored is not None and not stored.geometry.lens.enabled
 
     controller.undo()
@@ -2176,7 +2212,7 @@ def test_a_raw_untouched_but_for_its_own_lens_has_no_parameter_file(
     controller.set_adjustments(controller.state.with_value("exposure", 0.0))
     controller.flush()
 
-    assert sidecar.read(photo, controller.state) is None
+    assert sidecar.read(photo, controller.state, controller._store) is None
 
 
 def test_neither_reset_touches_the_lens_correction(
@@ -2257,7 +2293,7 @@ def test_a_click_mends_a_spot_as_one_step_and_stores_it(
     assert after.image[80, 120].mean() > 120
 
     controller.flush()
-    stored = sidecar.read(photo, controller.state)
+    stored = sidecar.read(photo, controller.state, controller._store)
     assert stored is not None and stored.geometry.spots == (spot,)
 
     controller.undo()
@@ -2376,7 +2412,7 @@ def test_a_painted_stroke_is_whitened_where_no_face_was_found(
     assert np.array_equal(after.image[5, 5], before.image[5, 5])
 
     controller.flush()
-    stored = sidecar.read(photo, controller.state)
+    stored = sidecar.read(photo, controller.state, controller._store)
     assert stored is not None and len(stored.geometry.skin.strokes) == 1
     controller.undo()
     assert controller.skin.strokes == ()

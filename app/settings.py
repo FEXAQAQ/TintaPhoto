@@ -318,9 +318,6 @@ class Settings:
     filmstrip_collapsed: bool = False
     #: Decode the photos either side of the current one in advance.
     preload_neighbours: bool = True
-    #: Say so when a photo's folder cannot be written to and its parameter
-    #: file has to be stored elsewhere (PLAN.md 7.1).
-    warn_read_only: bool = True
     #: Correct the preview for the screen's own profile (PLAN.md 6 step 13).
     use_display_profile: bool = True
     clipping_marks: str = CLIPPING_COLOURED
@@ -365,7 +362,6 @@ class Settings:
                     "filmstrip_collapsed": self.filmstrip_collapsed,
                 },
                 "preload_neighbours": self.preload_neighbours,
-                "warn_read_only": self.warn_read_only,
                 "use_display_profile": self.use_display_profile,
                 "clipping_marks": self.clipping_marks,
                 "preview_background": self.preview_background,
@@ -397,6 +393,8 @@ class Settings:
             "window",
             "panels",
             "preload_neighbours",
+            # Retired in 0.35.0, when parameter files stopped going beside the
+            # photos; listed so that an old settings file drops it.
             "warn_read_only",
             "use_display_profile",
             "clipping_marks",
@@ -440,7 +438,6 @@ class Settings:
             inspector_collapsed=bool(panels.get("inspector_collapsed", False)),
             filmstrip_collapsed=bool(panels.get("filmstrip_collapsed", False)),
             preload_neighbours=bool(data.get("preload_neighbours", True)),
-            warn_read_only=bool(data.get("warn_read_only", True)),
             use_display_profile=bool(data.get("use_display_profile", True)),
             clipping_marks=_one_of(
                 data.get("clipping_marks"), CLIPPING_MARKS, CLIPPING_COLOURED

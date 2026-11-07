@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from app.paths import sidecar_dir
 from app.settings import CollageSettings, Settings, WindowState
 from core import collage, sidecar
 from core.collage import Layout, Placement
@@ -165,8 +166,10 @@ def test_each_photo_goes_in_with_its_own_edit(window: MainWindow, tmp_path: Path
     edited = EditState.for_photo(False).with_value("exposure", -1.0)
     application = sidecar.Application("TintaPhoto", "test")
     reference = Edit(EditState.for_photo(False), Geometry())
-    sidecar.save(darker, Edit(edited, Geometry()), reference, application)
-    assert sidecar.is_edited(darker)
+    # Where the window's own controller looks; the test profile keeps it
+    # out of the real application data (tests/conftest.py).
+    sidecar.save(darker, Edit(edited, Geometry()), reference, application, sidecar_dir())
+    assert sidecar.is_edited(darker, sidecar_dir())
     window.collage.load(0, plain)
     window.collage.load(1, darker)
     _wait(lambda: window.collage.complete)

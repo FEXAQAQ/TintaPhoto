@@ -31,7 +31,7 @@ from PySide6.QtCore import QEventLoop, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app.controller import Controller  # noqa: E402
-from app.paths import filters_dir  # noqa: E402
+from app.paths import filters_dir, sidecar_dir  # noqa: E402
 from app.i18n import init_translator  # noqa: E402
 from app.settings import Settings  # noqa: E402
 from core import decoder, exporter, pipeline, sidecar  # noqa: E402
@@ -392,16 +392,18 @@ def use_a_scratch_profile() -> Path:
 
 
 def forget_adjustments(photos: list[Path]) -> None:
-    """Remove the parameter files the measurements leave beside the photos.
+    """Remove the parameter files the measurements leave behind.
 
     Letting go of a slider and changing a crop are finished changes, so the
-    controller saves them beside the photo, which is what it is supposed to
-    do. Left there, the next run opens the photo with those adjustments
-    already on it and measures something else: on 2026-10-23 a leftover
-    +0.25 EV was being developed during the open measurement.
+    controller saves them, which is what it is supposed to do. Left there,
+    the next run opens the photo with those adjustments already on it and
+    measures something else: on 2026-10-23 a leftover +0.25 EV was being
+    developed during the open measurement. The store is in the scratch
+    profile, and an old file beside a sample from 0.34 and earlier is hidden
+    rather than deleted (PLAN.md 7.1).
     """
     for photo in photos:
-        sidecar.delete(photo)
+        sidecar.delete(photo, sidecar_dir())
 
 
 def time_one_open(controller, sample: Path, timeout: float = 60.0) -> tuple[float, float]:

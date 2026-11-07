@@ -1,8 +1,8 @@
 """Application data locations and logging setup.
 
-User data lives under ``%APPDATA%\\TintaPhoto`` (settings, presets, logs) and
-regenerable data under ``%LOCALAPPDATA%\\TintaPhoto`` (thumbnail cache,
-fallback sidecars), following PLAN.md sections 4 and 7.
+User data lives under ``%APPDATA%\\TintaPhoto`` (settings, presets, parameter
+files, logs) and regenerable data under ``%LOCALAPPDATA%\\TintaPhoto``
+(thumbnail cache), following PLAN.md sections 4 and 7.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Final
 
 APP_NAME: Final[str] = "TintaPhoto"
-APP_VERSION: Final[str] = "0.34.5"
+APP_VERSION: Final[str] = "0.35.0"
 
 _LOG_FILE_NAME: Final[str] = "tintaphoto.log"
 _LOG_MAX_BYTES: Final[int] = 1_000_000
@@ -108,8 +108,17 @@ def thumbnail_cache_dir() -> Path:
     return local_dir() / "cache" / "thumbs"
 
 
-def fallback_sidecar_dir() -> Path:
-    """Return the sidecar directory used for unwritable folders (PLAN.md 7.1)."""
+def sidecar_dir() -> Path:
+    """Return where every photo's parameter file is kept (PLAN.md 7.1)."""
+    return roaming_dir() / "edits"
+
+
+def earlier_sidecar_dir() -> Path:
+    """Return where versions before 0.35.0 stored parameter files.
+
+    That was only for photos whose own folder could not be written to; its
+    files are moved into :func:`sidecar_dir` at start-up.
+    """
     return local_dir() / "sidecars"
 
 

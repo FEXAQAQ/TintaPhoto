@@ -428,8 +428,9 @@ def test_the_lens_setting_is_stored_with_the_geometry(tmp_path: Path) -> None:
     edit = Edit(state, Geometry(lens=LensSettings(enabled=True, distortion=50.0)))
     application = sidecar.Application("TintaPhoto", "test")
 
-    sidecar.save(photo, edit, reference, application)
-    stored = sidecar.read(photo, state)
+    store = tmp_path / "store"
+    sidecar.save(photo, edit, reference, application, store)
+    stored = sidecar.read(photo, state, store)
 
     assert stored is not None
     assert stored.geometry.lens == LensSettings(enabled=True, distortion=50.0)
@@ -443,11 +444,12 @@ def test_pasting_onto_a_raw_without_a_file_keeps_its_lens_on(tmp_path: Path) -> 
     jpeg.write_bytes(b"jpeg")
     application = sidecar.Application("TintaPhoto", "test")
 
-    sidecar.update_adjustments(raw, {"exposure": 0.5}, application)
-    sidecar.update_adjustments(jpeg, {"exposure": 0.5}, application)
+    store = tmp_path / "store"
+    sidecar.update_adjustments(raw, {"exposure": 0.5}, application, store)
+    sidecar.update_adjustments(jpeg, {"exposure": 0.5}, application, store)
 
-    assert sidecar.read(raw, EditState.for_photo(True)).geometry.lens.enabled  # type: ignore[union-attr]
-    assert not sidecar.read(jpeg, EditState.for_photo(False)).geometry.lens.enabled  # type: ignore[union-attr]
+    assert sidecar.read(raw, EditState.for_photo(True), store).geometry.lens.enabled  # type: ignore[union-attr]
+    assert not sidecar.read(jpeg, EditState.for_photo(False), store).geometry.lens.enabled  # type: ignore[union-attr]
 
 
 # -- real photos --------------------------------------------------------------
