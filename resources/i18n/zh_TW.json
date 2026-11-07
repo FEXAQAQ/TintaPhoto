@@ -517,6 +517,13 @@
   "liquify.strokes.many": "已液化 {count} 筆",
   "liquify.reset": "重設液化",
   "liquify.leave": "完成",
+  "liquify.group.face": "臉部",
+  "liquify.face.eyes": "眼睛大小",
+  "liquify.face.face_width": "臉寬",
+  "liquify.face.chin": "下巴",
+  "liquify.face.nose": "鼻子寬度",
+  "liquify.face.mouth": "嘴巴寬度",
+  "liquify.faces.none": "沒有找到臉，臉部滑桿無法使用",
   "export.watermark": "浮水印",
   "export.watermark_unset": "在工具列的浮水印中設定",
   "export.watermark_join": " · "

@@ -454,3 +454,141 @@ def test_a_draft_grid_is_only_as_fine_as_the_brush_needs() -> None:
     liquify.draft(np.zeros((200, 300, 3), np.uint8), _held(liquify.TOOL_BLOAT, (0.5, 0.5), 5))
     with liquify._cache_lock:
         assert len(liquify._cache) == kept  # drafts are kept nowhere
+
+
+# -- the face sliders (PLAN.md 2.11 L-11) -----------------------------------
+
+#: A face square to the camera, in fractions of a 300 by 200 photo: eyes 30
+#: px apart, the nose between them and a little lower, the mouth below.
+FACE = liquify.FaceMarks(
+    points=((0.45, 0.4), (0.55, 0.4), (0.5, 0.47), (0.47, 0.54), (0.53, 0.54), (0.5, 0.48)),
+)
+
+
+def _shaped(**values: float) -> liquify.FaceShape:
+    return liquify.FaceShape(faces=(FACE,), **values)
+
+
+def _shown_x(point: tuple[float, float], shape: liquify.FaceShape) -> tuple[float, float]:
+    (shown,) = liquify.shown_points((point,), (), SIZE, shape)
+    return shown
+
+
+def test_the_face_sliders_survive_being_stored() -> None:
+    shape = _shaped(eyes=40.0, chin=-25.0)
+    assert liquify.FaceShape.from_dict(shape.to_dict()) == shape
+    geometry_now = Geometry(face_shape=shape)
+    assert Geometry.from_dict(geometry_now.to_dict()) == geometry_now
+    assert Geometry.from_dict({}).face_shape == liquify.DEFAULT_FACE_SHAPE
+
+
+@pytest.mark.parametrize(
+    "data",
+    [None, "eyes", {"eyes": "a"}, {"eyes": True}, {"faces": [{"points": [[0.5, 0.5]]}]}],
+)
+def test_what_is_not_a_face_slider_rests(data: object) -> None:
+    shape = liquify.FaceShape.from_dict(data)
+    assert shape.is_default and shape.faces == ()
+
+
+def test_a_hand_edited_face_slider_is_brought_back_into_range() -> None:
+    shape = liquify.FaceShape.from_dict({"nose": 500, "mouth": -300})
+    assert shape.nose == 100.0 and shape.mouth == -100.0
+    with pytest.raises(KeyError):
+        shape.with_value("ears", 10.0)
+
+
+def test_sliders_at_rest_or_without_a_face_move_nothing() -> None:
+    photo = _photo(_texture(SIZE))
+    assert liquify.field((), SIZE, _shaped()) is None
+    assert liquify.field((), SIZE, liquify.FaceShape(eyes=100.0)) is None
+    assert liquify.warp(photo, (), liquify.FaceShape(eyes=100.0)) is photo
+
+
+def test_the_eyes_grow_or_shrink_about_themselves() -> None:
+    left_eye = FACE.points[0]
+    image = _dot(SIZE, left_eye, 4)
+    area = image[..., 0].sum()
+    bigger = liquify.warp(_photo(image), (), _shaped(eyes=100.0)).image
+    smaller = liquify.warp(_photo(image), (), _shaped(eyes=-100.0)).image
+    assert bigger[..., 0].sum() > area * 1.3
+    assert smaller[..., 0].sum() < area * 0.85
+    assert _centroid(bigger) == pytest.approx(left_eye, abs=0.004)
+
+
+@pytest.mark.parametrize(
+    ("name", "point"),
+    [
+        ("nose", (0.52, 0.46)),  # beside the nose
+        ("mouth", (0.53, 0.54)),  # a corner of the mouth
+        ("face_width", (0.58, 0.52)),  # a cheek
+    ],
+)
+def test_wider_moves_out_from_the_middle_and_narrower_in(
+    name: str, point: tuple[float, float]
+) -> None:
+    wider = _shown_x(point, _shaped(**{name: 100.0}))
+    narrower = _shown_x(point, _shaped(**{name: -100.0}))
+    assert wider[0] > point[0] + 0.002
+    assert narrower[0] < point[0] - 0.002
+    assert wider[1] == pytest.approx(point[1], abs=0.002)
+
+
+def test_a_longer_chin_moves_the_chin_down() -> None:
+    chin = (0.5, 0.54 + 0.85 * 0.14 * 2 / 3)  # S is the eyes to mouth, 0.14 of the height
+    longer = _shown_x(chin, _shaped(chin=100.0))
+    shorter = _shown_x(chin, _shaped(chin=-100.0))
+    assert longer[1] > chin[1] + 0.005 > shorter[1] + 0.01
+    assert longer[0] == pytest.approx(chin[0], abs=0.002)
+
+
+def test_a_tilted_face_is_shaped_along_its_own_lines() -> None:
+    # The same face turned a quarter: its eyes one above the other, the
+    # mouth to the left of them. The chin moves along the face, leftward.
+    turned = liquify.FaceMarks(
+        points=((0.5, 0.35), (0.5, 0.65), (0.45, 0.5), (0.4, 0.45), (0.4, 0.55), (0.45, 0.5)),
+    )
+    shape = liquify.FaceShape(chin=100.0, faces=(turned,))
+    size = (300, 300)
+    chin = (0.4 - 0.85 * 0.1, 0.5)
+    (moved,) = liquify.shown_points((chin,), (), size, shape)
+    assert moved[0] < chin[0] - 0.005
+    assert moved[1] == pytest.approx(0.5, abs=0.002)
+
+
+def test_every_face_slider_at_either_end_leaves_the_picture_unfolded() -> None:
+    for value in (-100.0, 100.0):
+        shape = _shaped(**{name: value for name in liquify.FACE_NAMES})
+        built = liquify.field((), SIZE, shape)
+        assert built is not None
+        assert _map_slopes(built).min() > 0.0
+
+
+def test_strokes_are_laid_over_the_face_sliders() -> None:
+    shape = _shaped(eyes=60.0)
+    stroke = _held(liquify.TOOL_BLOAT, FACE.points[2], 10, radius=0.05)
+    both = liquify.field((stroke,), SIZE, shape)
+    face_only = liquify.field((), SIZE, shape)
+    with liquify._cache_lock:
+        liquify._cache.clear()
+    afresh = liquify.field((stroke,), SIZE, shape)
+    assert both is not None and face_only is not None and afresh is not None
+    assert np.array_equal(both.values, afresh.values)
+    assert not np.array_equal(both.values, face_only.values)
+    # Without the face sliders the stroke alone makes another field.
+    alone = liquify.field((stroke,), SIZE)
+    assert alone is not None and not np.array_equal(alone.values, both.values)
+
+
+def test_a_face_slider_counts_as_an_edit_and_frames_the_points(tmp_path) -> None:
+    reference = Edit(EditState.for_photo(False))
+    shaped = Edit(reference.adjustments, Geometry(face_shape=_shaped(eyes=50.0)))
+    assert not shaped.is_untouched(reference)
+    options = ExportOptions()
+    source = tmp_path / "photo.jpg"
+    assert not exporter.can_copy_original(source, reference.adjustments, shaped.geometry, options)
+    point = (0.53, 0.54)
+    shape = Geometry(face_shape=_shaped(mouth=100.0))
+    shown = geometry.shown_point(point, SIZE, shape)
+    assert shown[0] > point[0] + 0.002
+    assert geometry.source_point(shown, SIZE, shape) == pytest.approx(point, abs=1e-5)

@@ -236,7 +236,7 @@ def can_copy_original(
     if source.suffix.lower() not in decoder.JPEG_EXTENSIONS:
         return False
     if geometry is not None and (
-        not geometry.is_default or geometry.spots or geometry.liquify
+        not geometry.is_default or geometry.spots or geometry.liquified
     ):
         return False
     if state is None:

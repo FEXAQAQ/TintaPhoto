@@ -2558,3 +2558,76 @@ def test_a_stroke_being_painted_is_drafted_on_the_picture_on_screen(
     controller._on_liquify_drafted(controller.current, draft.image, base, number)
     controller.preview_ready.disconnect(connection)
     assert not shown
+
+
+def _with_found_face(controller: Controller) -> None:
+    """Say a face was found whose left eye is the blot of :func:`_blotted_folder`."""
+    from core.faces import Face, SkinTone
+
+    face = Face(
+        points=((0.5, 0.5), (0.6, 0.5), (0.55, 0.56), (0.52, 0.62), (0.58, 0.62), (0.55, 0.57)),
+        tone=SkinTone(red=0.0, blue=0.0, spread=0.1, brightness=-2.0),
+    )
+    controller._faces[(controller.current, controller.geometry.lens)] = (face,)
+
+
+def _blot_area(image: np.ndarray) -> int:
+    return int((image.astype(float).mean(axis=2) < 110).sum())
+
+
+def test_a_face_slider_shapes_the_faces_found_as_one_step(
+    controller: Controller, tmp_path: Path
+) -> None:
+    photo, before = _shown(controller, _blotted_folder(tmp_path))
+    _with_found_face(controller)
+
+    controller.set_face_shape_value("eyes", 100.0)
+    after = _wait_for_preview(controller)
+    assert _blot_area(after.image) > _blot_area(before.image) * 1.3
+    shape = controller.face_shape
+    assert shape.eyes == 100.0 and len(shape.faces) == 1
+    assert shape.faces[0].points[0] == pytest.approx((0.5, 0.5))
+
+    controller.flush()
+    stored = sidecar.read(photo, controller.state, controller._store)
+    assert stored is not None and stored.geometry.face_shape == shape
+    controller.undo()
+    assert controller.face_shape.is_default
+
+
+def test_without_a_face_the_face_sliders_shape_nothing(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _photo, before = _shown(controller, _blotted_folder(tmp_path))
+    controller._faces[(controller.current, controller.geometry.lens)] = ()
+    controller.set_face_shape_value("eyes", 100.0)
+    after = _wait_for_preview(controller)
+    assert np.array_equal(after.image, before.image)
+
+
+def test_reset_liquify_rests_the_face_sliders_too(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _shown(controller, _blotted_folder(tmp_path))
+    _with_found_face(controller)
+    controller.set_face_shape_value("chin", -40.0)
+    controller.add_liquify_stroke([(0.3, 0.3)] * 4, liquify.TOOL_BLOAT, 0.05, 1.0)
+    controller.reset_crop()
+    assert controller.face_shape.chin == -40.0
+
+    controller.reset_liquify()
+    assert controller.face_shape.is_default and controller.liquify_strokes == ()
+    controller.undo()
+    assert controller.face_shape.chin == -40.0 and len(controller.liquify_strokes) == 1
+
+
+def test_the_photo_as_it_was_found_has_no_face_sliders(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _photo, before = _shown(controller, _blotted_folder(tmp_path))
+    _with_found_face(controller)
+    controller.set_face_shape_value("eyes", 100.0)
+    _wait_for_preview(controller)
+    controller.set_comparing(True)
+    found = _wait_for_preview(controller)
+    assert _blot_area(found.image) == pytest.approx(_blot_area(before.image), abs=3)

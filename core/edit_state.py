@@ -337,8 +337,8 @@ class Edit:
         parameter file go away (PLAN.md 7.1). The lens correction is compared
         with *reference* rather than with off, since a RAW photo starts with
         it on (PLAN.md 2.2). A mended spot is a change like any other, and
-        so is a skin range shaped by the brush (PLAN.md 2.10) and a liquify
-        stroke (PLAN.md 2.11).
+        so is a skin range shaped by the brush (PLAN.md 2.10), a liquify
+        stroke and a face slider moved (PLAN.md 2.11).
         """
         return (
             self.adjustments.is_untouched(reference.adjustments)
@@ -347,6 +347,7 @@ class Edit:
             and not self.geometry.spots
             and self.geometry.skin.is_default
             and not self.geometry.liquify
+            and self.geometry.face_shape.is_default
         )
 
 

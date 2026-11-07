@@ -242,6 +242,15 @@ class Geometry:
     #: The liquify brush's strokes (PLAN.md 2.11 and 6 step 1.7), held like
     #: the spots and for their reasons, on the same frame.
     liquify: tuple[liquify_module.Stroke, ...] = ()
+    #: The face sliders of liquify (PLAN.md 2.11 L-11) and the faces they
+    #: were set on, held for the same reasons; the strokes are laid over
+    #: what they make.
+    face_shape: liquify_module.FaceShape = liquify_module.DEFAULT_FACE_SHAPE
+
+    @property
+    def liquified(self) -> bool:
+        """Return whether liquify moves anything: a stroke, or a face slider."""
+        return bool(self.liquify) or self.face_shape.shapes_anything
 
     @property
     def is_default(self) -> bool:
@@ -309,6 +318,7 @@ class Geometry:
             "spots": healing.spots_to_list(self.spots),
             "skin": self.skin.to_dict(),
             "liquify": liquify_module.strokes_to_list(self.liquify),
+            "face_shape": self.face_shape.to_dict(),
         }
 
     @classmethod
@@ -333,6 +343,7 @@ class Geometry:
             spots=healing.spots_from_list(data.get("spots")),
             skin=SkinRange.from_dict(data.get("skin")),
             liquify=liquify_module.strokes_from_list(data.get("liquify")),
+            face_shape=liquify_module.FaceShape.from_dict(data.get("face_shape")),
         )
 
 
@@ -426,8 +437,10 @@ def shown_point(
     the frame :func:`apply` makes of it. The liquify strokes come first, as
     they do in :func:`apply`: they carry the point with what they push.
     """
-    if geometry.liquify:
-        (point,) = liquify_module.shown_points((point,), geometry.liquify, size)
+    if geometry.liquified:
+        (point,) = liquify_module.shown_points(
+            (point,), geometry.liquify, size, geometry.face_shape
+        )
     matrix, frame = _frame_matrix(size, geometry, crop)
     x = point[0] * size[0] - 0.5
     y = point[1] * size[1] - 0.5
@@ -449,8 +462,10 @@ def source_point(
     y = point[1] * frame[1] - 0.5
     source_x, source_y, _ = np.linalg.inv(matrix) @ np.array((x, y, 1.0))
     found = float((source_x + 0.5) / size[0]), float((source_y + 0.5) / size[1])
-    if geometry.liquify:
-        (found,) = liquify_module.source_points((found,), geometry.liquify, size)
+    if geometry.liquified:
+        (found,) = liquify_module.source_points(
+            (found,), geometry.liquify, size, geometry.face_shape
+        )
     return found
 
 
@@ -971,9 +986,10 @@ def apply(photo: DecodedPhoto, geometry: Geometry | None, crop: bool = True) -> 
     if geometry is not None:
         photo = lens_module.correct(photo, geometry.lens)
         photo = healing.heal(photo, geometry.spots)
-        photo = liquify_module.warp(photo, geometry.liquify)
+        size = photo.size
+        photo = liquify_module.warp(photo, geometry.liquify, geometry.face_shape)
         skin = liquify_module.moved_skin(
-            _skin_or_none(geometry.skin), geometry.liquify, photo.size
+            _skin_or_none(geometry.skin), geometry.liquify, size, geometry.face_shape
         )
         if photo.skin != skin:
             photo = replace(photo, skin=skin)
@@ -1082,7 +1098,9 @@ def framed_skin(
     framed photos from one stroke of the brush to the next puts the newest
     range on them with this instead of framing them again.
     """
-    skin = liquify_module.moved_skin(_skin_or_none(geometry.skin), geometry.liquify, size)
+    skin = liquify_module.moved_skin(
+        _skin_or_none(geometry.skin), geometry.liquify, size, geometry.face_shape
+    )
     if skin is None or not skin.strokes or geometry.is_default:
         return skin
     if not crop and geometry.quarter_turns == 0 and not geometry.mirrored and geometry.angle == 0.0:

@@ -292,6 +292,7 @@ class MainWindow(QMainWindow):
         panel = self.liquify_panel
         panel.reset_requested.connect(self.controller.reset_liquify)
         panel.leave_requested.connect(self.leave_liquify)
+        panel.face_value_set.connect(self.controller.set_face_shape_value)
         panel.tool_changed.connect(lambda _tool: self._show_liquify_brush())
         panel.brush_size_set.connect(lambda _radius, _dragging: self._show_liquify_brush())
         overlay = self.preview.canvas.liquify
@@ -902,6 +903,7 @@ class MainWindow(QMainWindow):
     def _on_faces_ready(self, count: int | None) -> None:
         """Say how many faces were found, and show the skin found beside them."""
         self.portrait_panel.set_faces(count)
+        self.liquify_panel.set_faces(count)
         if self._portrait_mode and count:
             self.controller.request_skin_shown()
 
@@ -951,6 +953,8 @@ class MainWindow(QMainWindow):
         self.toolbar.liquify_button.setChecked(True)
         panel = self.liquify_panel
         panel.set_strokes(len(self.controller.liquify_strokes))
+        panel.set_face_shape(self.controller.face_shape)
+        panel.set_faces(self._faces_count())
         self.inspector.hide()
         panel.show()
         self.preview.canvas.liquify.set_open(True)
@@ -1397,6 +1401,7 @@ class MainWindow(QMainWindow):
             self.controller.request_skin_shown()
         if self._liquify_mode:
             self.liquify_panel.set_strokes(len(geometry_now.liquify))
+            self.liquify_panel.set_face_shape(geometry_now.face_shape)
             self._show_liquify_brush()
         self.preview.canvas.update()
 

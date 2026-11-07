@@ -2509,3 +2509,20 @@ def test_the_liquify_key_and_what_it_turns_off(window: MainWindow) -> None:
     window._on_shortcut("shortcut.undo", lambda: called.append("undo"))
     window._liquify_mode = False
     assert called == ["undo"]
+
+
+def test_the_face_sliders_reach_the_controller_and_follow_the_faces(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.enter_liquify()
+    panel = window.liquify_panel
+    window._on_faces_ready(0)
+    assert not panel.face_rows["eyes"].isEnabled()
+    window._on_faces_ready(1)
+    assert panel.face_rows["eyes"].isEnabled()
+    panel.face_value_set.emit("mouth", 30.0, False)
+    assert window.controller.face_shape.mouth == 30.0
+    window.controller.undo()
+    assert panel.face_rows["mouth"].value == 0.0

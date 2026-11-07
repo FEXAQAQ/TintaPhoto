@@ -3,7 +3,8 @@
 Takes the inspector's place, at the same width and in the same style, as the
 portrait's panel does: a bar naming the mode, the seven tools of the brush,
 its size and strength, a line saying how to paint or how many strokes there
-are, and an action row along the bottom.
+are, the five face sliders (L-11) with how many faces they found, and an
+action row along the bottom.
 
 The panel only says what was chosen: the controller keeps the strokes with
 the photo, and the photo's overlay paints them.
@@ -58,6 +59,18 @@ STRENGTH_SPEC: Final[SliderSpec] = SliderSpec(
     fill_from=liquify.STRENGTH_MIN * STRENGTH_SCALE,
 )
 
+#: The face sliders (L-11): −100 to +100, resting at 0.
+FACE_SPECS: Final[dict[str, SliderSpec]] = {
+    name: SliderSpec(
+        name=name,
+        label_key=f"liquify.face.{name}",
+        minimum=-liquify.FACE_LIMIT,
+        maximum=liquify.FACE_LIMIT,
+        default=0.0,
+    )
+    for name in liquify.FACE_NAMES
+}
+
 #: The tools in the rows the panel lays them out in (PLAN.md 3.16).
 TOOL_ROWS: Final[tuple[tuple[str, ...], ...]] = (
     (liquify.TOOL_PUSH, liquify.TOOL_BLOAT, liquify.TOOL_PUCKER),
@@ -97,7 +110,10 @@ class LiquifyPanel(QWidget):
     #: The brush size changed: the radius as a fraction of the long edge,
     #: and whether a drag is still going on.
     brush_size_set = Signal(float, bool)
-    #: Every stroke taken off the photo.
+    #: One face slider moved: its name, its value, and whether a drag is
+    #: still going on.
+    face_value_set = Signal(str, float, bool)
+    #: Every stroke taken off the photo and the face sliders put to rest.
     reset_requested = Signal()
     #: Back to editing.
     leave_requested = Signal()
@@ -110,6 +126,9 @@ class LiquifyPanel(QWidget):
         self._brush_size = liquify.RADIUS_DEFAULT
         self._strength = liquify.STRENGTH_DEFAULT
         self._strokes = 0
+        self._face = liquify.DEFAULT_FACE_SHAPE
+        self._faces: int | None = None
+        self.face_rows: dict[str, SliderRow] = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -122,6 +141,7 @@ class LiquifyPanel(QWidget):
         body.addSpacing(theme.SPACE_SM)
         body.addWidget(self._build_tool_group(content))
         body.addWidget(self._build_brush_group(content))
+        body.addWidget(self._build_face_group(content))
         body.addStretch(1)
         outer.addWidget(scrolled(content, "TabPage", self), 1)
         outer.addWidget(self._build_action_row())
@@ -130,6 +150,7 @@ class LiquifyPanel(QWidget):
         self.set_brush_size(self._brush_size)
         self.set_strength(self._strength)
         self._show_strokes()
+        self._show_faces()
 
     # -- building --------------------------------------------------------
 
@@ -187,6 +208,22 @@ class LiquifyPanel(QWidget):
         group.add_row(self.strokes_caption)
         return group
 
+    def _build_face_group(self, parent: QWidget) -> ControlGroup:
+        """The five face sliders, and how many faces they work on."""
+        group = ControlGroup("liquify.group.face", parent=parent)
+        self._groups.append(group)
+        for name in liquify.FACE_NAMES:
+            row = SliderRow(FACE_SPECS[name], group)
+            row.value_changed.connect(self._on_face_row)
+            self.face_rows[name] = row
+            group.add_row(row)
+        #: How many faces were found, and what that means for the sliders.
+        self.faces_caption = QLabel("", group)
+        self.faces_caption.setProperty("role", "caption")
+        self.faces_caption.setWordWrap(True)
+        group.add_row(self.faces_caption)
+        return group
+
     def _build_action_row(self) -> QWidget:
         """The row along the bottom, as on every tab of the inspector."""
         row = QWidget(self)
@@ -242,6 +279,20 @@ class LiquifyPanel(QWidget):
         self._strokes = max(0, count)
         self._show_strokes()
 
+    def set_face_shape(self, face: liquify.FaceShape) -> None:
+        """Show the photo's face sliders without announcing them."""
+        self._face = face
+        for name, row in self.face_rows.items():
+            row.blockSignals(True)
+            row.set_value(face.value(name))
+            row.blockSignals(False)
+        self._show_strokes()
+
+    def set_faces(self, count: int | None) -> None:
+        """Say how many faces the photo holds, or ``None`` while looking."""
+        self._faces = count
+        self._show_faces()
+
     def set_brush_size(self, radius: float) -> None:
         """Show *radius* on the size slider without announcing it."""
         self._brush_size = liquify.clamp_radius(radius)
@@ -267,7 +318,26 @@ class LiquifyPanel(QWidget):
         self.reset_button.retranslate()
         self.leave_button.retranslate()
         self.leave_button.setToolTip(tooltip("liquify.leave", "shortcut.liquify"))
+        for name, row in self.face_rows.items():
+            row.set_spec(FACE_SPECS[name])
+        self.set_face_shape(self._face)
         self._show_strokes()
+        self._show_faces()
+
+    def _show_faces(self) -> None:
+        count = self._faces
+        if count is None:
+            caption = tr("adjust.faces.looking")
+        elif count == 0:
+            caption = tr("liquify.faces.none")
+        elif count == 1:
+            caption = tr("adjust.faces.one")
+        else:
+            caption = tr("adjust.faces.many", count=count)
+        self.faces_caption.setText(caption)
+        # With no face there is nothing for the sliders to shape (L-11).
+        for row in self.face_rows.values():
+            row.setEnabled(bool(count))
 
     def _show_strokes(self) -> None:
         count = self._strokes
@@ -278,7 +348,7 @@ class LiquifyPanel(QWidget):
         else:
             caption = tr("liquify.strokes.many", count=count)
         self.strokes_caption.setText(caption)
-        self.reset_button.setEnabled(count > 0)
+        self.reset_button.setEnabled(count > 0 or not self._face.is_default)
 
     # -- reacting --------------------------------------------------------
 
@@ -290,6 +360,12 @@ class LiquifyPanel(QWidget):
         self._brush_size = liquify.clamp_radius(value / BRUSH_SIZE_SCALE)
         self._set_titles_dimmed(dragging)
         self.brush_size_set.emit(self._brush_size, dragging)
+
+    def _on_face_row(self, name: str, value: float, dragging: bool) -> None:
+        self._face = self._face.with_value(name, value)
+        self._show_strokes()
+        self._set_titles_dimmed(dragging)
+        self.face_value_set.emit(name, value, dragging)
 
     def _on_strength(self, _name: str, value: float, dragging: bool) -> None:
         self._strength = liquify.clamp_strength(value / STRENGTH_SCALE)

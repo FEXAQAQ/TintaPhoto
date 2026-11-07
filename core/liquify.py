@@ -26,6 +26,11 @@ Strokes are held like the spots of :mod:`core.healing`: in fractions of the
 photo after its lens correction and before it is turned or cropped, so they
 stay on what they shaped. They are put after the spots, so a mended spot
 moves with what is pushed around it.
+
+The face sliders (:class:`FaceShape`, PLAN.md 2.11 L-11) make a field of
+their own from the faces found on the photo - the eyes, the tip of the nose,
+the corners of the mouth - and the strokes are laid over it, so the brush
+can finish what the sliders began.
 """
 
 from __future__ import annotations
@@ -169,6 +174,48 @@ INVERSE_TOLERANCE: Final[float] = 1e-7
 INVERSE_SEARCH_NODES: Final[int] = 40000
 INVERSE_SEARCH_POINTS: Final[int] = 256
 
+# --------------------------------------------------------------------------
+# The face sliders (PLAN.md 2.11 L-11 and 6 step 1.7)
+# --------------------------------------------------------------------------
+
+#: The five sliders, in the order the panel shows them.
+FACE_NAMES: Final[tuple[str, ...]] = ("eyes", "face_width", "chin", "nose", "mouth")
+#: Every face slider runs from −100 to +100 and rests at 0.
+FACE_LIMIT: Final[float] = 100.0
+#: The most faces a parameter file keeps.
+FACES_MAX: Final[int] = 32
+#: What each slider does at 100. The sizes are in eye distances (d, from
+#: one eye to the other) or in S, the size of the face (eyes to mouth, see
+#: :mod:`core.faces`); every one stays well short of folding the picture.
+#:
+#: * eyes: each eye swells or shrinks about itself, within 0.45 d; at 100
+#:   the middle of the eye is fetched from a fifth nearer, 1.25 times the
+#:   size;
+FACE_EYE_REACH: Final[float] = 0.45
+FACE_EYE_RATE: Final[float] = 0.2
+#: * nose: the nose widens or narrows across the face, about a point a
+#:   little above its tip, within 0.6 d across and 0.5 S along, so the
+#:   wings, about 0.3 d out, are moved by about a fifth of their distance;
+FACE_NOSE_RAISE: Final[float] = 0.15
+FACE_NOSE_REACH: Final[tuple[float, float]] = (0.6, 0.5)
+FACE_NOSE_RATE: Final[float] = 0.35
+#: * mouth: the corners move out or in, within 2.2 times half the mouth
+#:   across and 0.8 times along, which moves a corner by about a fifth of
+#:   half the mouth;
+FACE_MOUTH_REACH: Final[tuple[float, float]] = (2.2, 0.8)
+FACE_MOUTH_RATE: Final[float] = 0.35
+#: * face width: the lower face widens or narrows toward its middle line,
+#:   about a point a quarter S below the nose, within 1.6 times half the
+#:   face's box across and 1.4 S along; the cheeks move by about 7 %;
+FACE_WIDTH_LOWER: Final[float] = 0.25
+FACE_WIDTH_REACH: Final[tuple[float, float]] = (1.6, 1.4)
+FACE_WIDTH_RATE: Final[float] = 0.18
+#: * chin: the chin, 0.85 S below the mouth, moves down or up by up to
+#:   0.15 S, within 0.9 S across and 0.75 S along.
+FACE_CHIN_DROP: Final[float] = 0.85
+FACE_CHIN_REACH: Final[tuple[float, float]] = (0.9, 0.75)
+FACE_CHIN_RATE: Final[float] = 0.15
+
 
 @dataclass(frozen=True)
 class Stroke:
@@ -230,6 +277,125 @@ class Stroke:
             radius=clamp_radius(radius),
             strength=clamp_strength(strength),
         )
+
+
+@dataclass(frozen=True)
+class FaceMarks:
+    """Where one face's features are, as the face sliders were set on it.
+
+    The six points of :class:`core.faces.Face` - the two eyes, the tip of the
+    nose, the two corners of the mouth and the middle of the detector's box
+    - in fractions of the photo after its lens correction, and the box's
+    width and height in S. Kept with the sliders rather than looked for each
+    time, so that the preview, a window of the full size photo and the
+    export shape the face alike, and so that the photo needs no face search
+    to be framed.
+    """
+
+    points: tuple[Point, ...]
+    width: float = 2.0
+    height: float = 2.7
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the face as it is stored (PLAN.md 7.1)."""
+        return {
+            "points": [[x, y] for x, y in self.points],
+            "width": self.width,
+            "height": self.height,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "FaceMarks | None":
+        """Build a face from stored data, or return ``None`` if it is not one."""
+        if not isinstance(data, dict):
+            return None
+        raw = data.get("points")
+        if not isinstance(raw, list) or len(raw) != 6:
+            return None
+        points: list[Point] = []
+        for item in raw:
+            if not isinstance(item, list | tuple) or len(item) != 2:
+                return None
+            x, y = _as_float(item[0]), _as_float(item[1])
+            if x is None or y is None:
+                return None
+            points.append((_fraction(x), _fraction(y)))
+        width = _as_float(data.get("width"))
+        height = _as_float(data.get("height"))
+        return cls(
+            points=tuple(points),
+            width=2.0 if width is None or width <= 0 else width,
+            height=2.7 if height is None or height <= 0 else height,
+        )
+
+
+@dataclass(frozen=True)
+class FaceShape:
+    """The face sliders and the faces they work on (PLAN.md 2.11 L-11).
+
+    Each slider runs from −100 to +100; every face is shaped alike.
+    """
+
+    eyes: float = 0.0
+    face_width: float = 0.0
+    chin: float = 0.0
+    nose: float = 0.0
+    mouth: float = 0.0
+    faces: tuple[FaceMarks, ...] = ()
+
+    @property
+    def is_default(self) -> bool:
+        """Return whether every slider rests, which shapes nothing."""
+        return all(getattr(self, name) == 0.0 for name in FACE_NAMES)
+
+    @property
+    def shapes_anything(self) -> bool:
+        """Return whether a slider is moved and there is a face for it."""
+        return not self.is_default and bool(self.faces)
+
+    def value(self, name: str) -> float:
+        """Return the slider *name*."""
+        return float(getattr(self, name))
+
+    def with_value(self, name: str, value: float) -> "FaceShape":
+        """Return these sliders with *name* at *value*, held within range."""
+        if name not in FACE_NAMES:
+            raise KeyError(name)
+        return replace(self, **{name: _face_value(value)})
+
+    def with_faces(self, faces: tuple[FaceMarks, ...]) -> "FaceShape":
+        """Return these sliders working on *faces*."""
+        return replace(self, faces=tuple(faces[:FACES_MAX]))
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the sliders and their faces as they are stored (PLAN.md 7.1)."""
+        stored: dict[str, Any] = {name: self.value(name) for name in FACE_NAMES}
+        stored["faces"] = [face.to_dict() for face in self.faces]
+        return stored
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "FaceShape":
+        """Build the sliders from stored data; anything odd rests at 0."""
+        if not isinstance(data, dict):
+            return cls()
+        values = {}
+        for name in FACE_NAMES:
+            number = _as_float(data.get(name))
+            values[name] = 0.0 if number is None else _face_value(number)
+        raw = data.get("faces")
+        faces: tuple[FaceMarks, ...] = ()
+        if isinstance(raw, list):
+            read = (FaceMarks.from_dict(item) for item in raw[:FACES_MAX])
+            faces = tuple(face for face in read if face is not None)
+        return cls(faces=faces, **values)
+
+
+DEFAULT_FACE_SHAPE: Final[FaceShape] = FaceShape()
+
+
+def _face_value(value: float) -> float:
+    """Return a face slider held between −100 and +100."""
+    return max(-FACE_LIMIT, min(FACE_LIMIT, float(value)))
 
 
 def strokes_to_list(strokes: tuple[Stroke, ...]) -> list[dict[str, Any]]:
@@ -362,37 +528,56 @@ class Field:
     box: tuple[int, int, int, int]
 
 
-_cache: OrderedDict[tuple[tuple[Stroke, ...], Grid], Field | None] = OrderedDict()
+_CacheKey = tuple[tuple[Stroke, ...], Grid, "FaceShape | None"]
+_cache: OrderedDict[_CacheKey, Field | None] = OrderedDict()
 _cache_lock = threading.Lock()
 
 
-def field(strokes: tuple[Stroke, ...], size: tuple[int, int]) -> Field | None:
+def field(
+    strokes: tuple[Stroke, ...],
+    size: tuple[int, int],
+    face: FaceShape = DEFAULT_FACE_SHAPE,
+) -> Field | None:
     """Return the field *strokes* make on a photo of *size*, or ``None`` if they move nothing.
 
-    The field is put together stroke by stroke from the longest run of the
-    same strokes already worked out, so adding a stroke costs only that
-    stroke and taking one back (undo) usually costs nothing.
+    The face sliders, when *face* moves any, make the field the strokes are
+    laid over. The field is put together stroke by stroke from the longest
+    run of the same strokes already worked out on the same face sliders, so
+    adding a stroke costs only that stroke and taking one back (undo)
+    usually costs nothing.
     """
-    if not strokes:
+    shaping = face if face.shapes_anything else None
+    if not strokes and shaping is None:
         return None
     grid = grid_for(size)
-    key = (strokes, grid)
+    key: _CacheKey = (strokes, grid, shaping)
     start: NDArray[np.float32] | None = None
+    started = False
     done = 0
     with _cache_lock:
         if key in _cache:
             _cache.move_to_end(key)
             return _cache[key]
-        for (kept, kept_grid), kept_field in _cache.items():
+        for (kept, kept_grid, kept_face), kept_field in _cache.items():
             count = len(kept)
-            if kept_grid == grid and done < count <= len(strokes) and strokes[:count] == kept:
+            if (
+                kept_grid == grid
+                and kept_face == shaping
+                and done <= count <= len(strokes)
+                and (not started or done < count)
+                and strokes[:count] == kept
+            ):
                 done = count
+                started = True
                 start = None if kept_field is None else kept_field.values
-    values = (
-        np.zeros((2, grid.nodes[1], grid.nodes[0]), dtype=np.float32)
-        if start is None
-        else start.copy()
-    )
+    if started:
+        values = (
+            np.zeros((2, grid.nodes[1], grid.nodes[0]), dtype=np.float32)
+            if start is None
+            else start.copy()
+        )
+    else:
+        values = _face_values(grid, shaping)
     result = _built(values, grid, strokes[done:])
     with _cache_lock:
         _cache[key] = result
@@ -461,6 +646,139 @@ def _apply_stroke(values: NDArray[np.float32], grid: Grid, stroke: Stroke) -> No
             share = step / count
             centre = (start[0] + (end[0] - start[0]) * share, start[1] + (end[1] - start[1]) * share)
             _dab(values, grid, stroke.tool, centre, radius, stroke.strength, (0.0, 0.0))
+
+
+def _face_values(grid: Grid, face: FaceShape | None) -> NDArray[np.float32]:
+    """Return the field the face sliders make on *grid*, zero where they reach nothing.
+
+    Each feature is a small warp of its own about a point of the face,
+    measured along the face's own axes - across, from one eye to the other,
+    and down, from the eyes toward the mouth - so a tilted head is shaped
+    along its own lines. Their shifts are added: the features hardly
+    overlap, and none is strong enough for the sum to fold.
+    """
+    values = np.zeros((2, grid.nodes[1], grid.nodes[0]), dtype=np.float32)
+    if face is None:
+        return values
+    extent_x, extent_y = grid.extent
+    step = grid.step[0]
+    for marks in face.faces:
+        if len(marks.points) < 5:
+            continue
+        points = np.array(
+            [(x * extent_x, y * extent_y) for x, y in marks.points[:5]], dtype=np.float64
+        )
+        left_eye, right_eye, nose, left_mouth, right_mouth = points
+        across = right_eye - left_eye
+        eye_distance = float(np.hypot(*across))
+        if eye_distance <= 0.0:
+            continue
+        across /= eye_distance
+        eyes = (left_eye + right_eye) / 2.0
+        mouth = (left_mouth + right_mouth) / 2.0
+        down = mouth - eyes
+        down -= across * float(down @ across)
+        length = float(np.hypot(*down))
+        down = np.array((-across[1], across[0])) if length <= 0.0 else down / length
+        size = max(float(np.hypot(*(mouth - eyes))), 0.8 * eye_distance)
+        half_mouth = max(float(np.hypot(*(right_mouth - left_mouth))) / 2.0, 0.2 * eye_distance)
+
+        reach = max(
+            FACE_WIDTH_REACH[0] * marks.width * size / 2.0,
+            (FACE_CHIN_DROP + FACE_CHIN_REACH[1]) * size + float(np.hypot(*(mouth - nose))),
+            FACE_WIDTH_REACH[1] * size,
+        ) + size
+        first_column = max(0, math.floor((nose[0] - reach) / step))
+        last_column = min(grid.nodes[0], math.ceil((nose[0] + reach) / step) + 1)
+        first_row = max(0, math.floor((nose[1] - reach) / step))
+        last_row = min(grid.nodes[1], math.ceil((nose[1] + reach) / step) + 1)
+        if first_column >= last_column or first_row >= last_row:
+            continue
+        xs = np.arange(first_column, last_column, dtype=np.float64) * step
+        ys = np.arange(first_row, last_row, dtype=np.float64) * step
+        nodes_x, nodes_y = np.meshgrid(xs, ys)
+        shift_x = np.zeros_like(nodes_x)
+        shift_y = np.zeros_like(nodes_y)
+
+        def local(centre: NDArray[np.float64]) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+            """Return each node's place from *centre* across and down the face."""
+            dx = nodes_x - centre[0]
+            dy = nodes_y - centre[1]
+            return dx * across[0] + dy * across[1], dx * down[0] + dy * down[1]
+
+        def weight(
+            along: NDArray[np.float64], below: NDArray[np.float64], wide: float, tall: float
+        ) -> NDArray[np.float64]:
+            reach_t = np.sqrt((along / wide) ** 2 + (below / tall) ** 2)
+            return falloff(reach_t.astype(np.float32)).astype(np.float64)
+
+        amount = face.eyes / FACE_LIMIT
+        if amount:
+            radius = FACE_EYE_REACH * eye_distance
+            for eye in (left_eye, right_eye):
+                along, below = local(eye)
+                rate = -FACE_EYE_RATE * amount * weight(along, below, radius, radius)
+                shift_x += rate * (nodes_x - eye[0])
+                shift_y += rate * (nodes_y - eye[1])
+
+        def widen(
+            centre: NDArray[np.float64], wide: float, tall: float, rate: float
+        ) -> None:
+            """Fetch from nearer the middle line (widening) or farther (narrowing)."""
+            along, below = local(centre)
+            moved = -rate * weight(along, below, wide, tall) * along
+            shift_x[...] += moved * across[0]
+            shift_y[...] += moved * across[1]
+
+        amount = face.nose / FACE_LIMIT
+        if amount:
+            widen(
+                nose - FACE_NOSE_RAISE * size * down,
+                FACE_NOSE_REACH[0] * eye_distance,
+                FACE_NOSE_REACH[1] * size,
+                FACE_NOSE_RATE * amount,
+            )
+        amount = face.mouth / FACE_LIMIT
+        if amount:
+            widen(
+                mouth,
+                FACE_MOUTH_REACH[0] * half_mouth,
+                FACE_MOUTH_REACH[1] * half_mouth,
+                FACE_MOUTH_RATE * amount,
+            )
+        amount = face.face_width / FACE_LIMIT
+        if amount:
+            widen(
+                nose + FACE_WIDTH_LOWER * size * down,
+                FACE_WIDTH_REACH[0] * marks.width * size / 2.0,
+                FACE_WIDTH_REACH[1] * size,
+                FACE_WIDTH_RATE * amount,
+            )
+        amount = face.chin / FACE_LIMIT
+        if amount:
+            chin = mouth + FACE_CHIN_DROP * size * down
+            along, below = local(chin)
+            moved = -FACE_CHIN_RATE * amount * size * weight(
+                along, below, FACE_CHIN_REACH[0] * size, FACE_CHIN_REACH[1] * size
+            )
+            shift_x += moved * down[0]
+            shift_y += moved * down[1]
+
+        patch = values[:, first_row:last_row, first_column:last_column]
+        patch[0] += shift_x.astype(np.float32)
+        patch[1] += shift_y.astype(np.float32)
+
+    # Hold the edges, as every dab does.
+    down_nodes, across_nodes = values.shape[1:]
+    xs = np.arange(across_nodes, dtype=np.float32) * np.float32(step)
+    ys = np.arange(down_nodes, dtype=np.float32) * np.float32(step)
+    values[0] = np.clip(xs[None, :] + values[0], 0.0, extent_x) - xs[None, :]
+    values[1] = np.clip(ys[:, None] + values[1], 0.0, extent_y) - ys[:, None]
+    values[0, :, 0] = 0.0
+    values[0, :, -1] = 0.0
+    values[1, 0, :] = 0.0
+    values[1, -1, :] = 0.0
+    return values
 
 
 def falloff(distance: NDArray[np.float32]) -> NDArray[np.float32]:
@@ -627,7 +945,11 @@ def _sample(
 # --------------------------------------------------------------------------
 
 
-def warp(photo: "DecodedPhoto", strokes: tuple[Stroke, ...]) -> "DecodedPhoto":
+def warp(
+    photo: "DecodedPhoto",
+    strokes: tuple[Stroke, ...],
+    face: FaceShape = DEFAULT_FACE_SHAPE,
+) -> "DecodedPhoto":
     """Return *photo* taken through the field its strokes make (PLAN.md 6 step 1.7).
 
     The picture, its clipped mask and a JPEG's original encoded pixels are
@@ -635,12 +957,13 @@ def warp(photo: "DecodedPhoto", strokes: tuple[Stroke, ...]) -> "DecodedPhoto":
     find each face where it now is. Only the part the brush reached is
     resampled: everywhere else every pixel is exactly as it was, which keeps
     a JPEG shown and exported pixel for pixel there (PLAN.md section 6, "JPG
-    原圖直通"). A photo with no strokes comes back as it is.
+    原圖直通"). A photo with no strokes and no face slider moved comes back
+    as it is.
     """
-    if not strokes:
+    if not strokes and not face.shapes_anything:
         return photo
     height, width = photo.image.shape[:2]
-    shape = field(strokes, (width, height))
+    shape = field(strokes, (width, height), face)
     if shape is None:
         return photo
     image = warp_values(photo.image, shape, cv2.INTER_CUBIC)
@@ -651,8 +974,8 @@ def warp(photo: "DecodedPhoto", strokes: tuple[Stroke, ...]) -> "DecodedPhoto":
     faces = photo.faces
     if faces:
         faces = tuple(
-            replace(face, points=shown_points(face.points, strokes, (width, height)))
-            for face in faces
+            replace(found, points=shown_points(found.points, strokes, (width, height), face))
+            for found in faces
         )
     return replace(photo, image=image, clipped=clipped, encoded=encoded, faces=faces)
 
@@ -743,7 +1066,10 @@ def _pixel(node: int, nodes: int, pixels: int, rounding: Any) -> int:
 
 
 def source_points(
-    points: Sequence[Point], strokes: tuple[Stroke, ...], size: tuple[int, int]
+    points: Sequence[Point],
+    strokes: tuple[Stroke, ...],
+    size: tuple[int, int],
+    face: FaceShape = DEFAULT_FACE_SHAPE,
 ) -> tuple[Point, ...]:
     """Return where on the photo the picture at *points* is fetched from.
 
@@ -751,7 +1077,7 @@ def source_points(
     after the strokes, and so is the answer, on the photo before them: what
     a click on the shaped picture means for a spot or the skin brush.
     """
-    shape = field(strokes, size)
+    shape = field(strokes, size, face)
     if shape is None or not points:
         return tuple((float(x), float(y)) for x, y in points)
     across, down = shape.grid.extent
@@ -761,7 +1087,10 @@ def source_points(
 
 
 def shown_points(
-    points: Sequence[Point], strokes: tuple[Stroke, ...], size: tuple[int, int]
+    points: Sequence[Point],
+    strokes: tuple[Stroke, ...],
+    size: tuple[int, int],
+    face: FaceShape = DEFAULT_FACE_SHAPE,
 ) -> tuple[Point, ...]:
     """Return where the strokes show what is at *points* on the photo.
 
@@ -772,7 +1101,7 @@ def shown_points(
     when it lands nearer. Where the brush squeezed a part away entirely the
     nearest point that fetches from it is given.
     """
-    shape = field(strokes, size)
+    shape = field(strokes, size, face)
     if shape is None or not points:
         return tuple((float(x), float(y)) for x, y in points)
     across, down = shape.grid.extent
@@ -876,7 +1205,10 @@ def _nearest_node(shape: Field, wanted: NDArray[np.float64]) -> NDArray[np.float
 
 
 def moved_skin(
-    skin: "SkinRange | None", strokes: tuple[Stroke, ...], size: tuple[int, int]
+    skin: "SkinRange | None",
+    strokes: tuple[Stroke, ...],
+    size: tuple[int, int],
+    face: FaceShape = DEFAULT_FACE_SHAPE,
 ) -> "SkinRange | None":
     """Return the portrait brush's strokes moved to where the liquify strokes show them.
 
@@ -884,12 +1216,12 @@ def moved_skin(
     spots, so it stays on the skin when the skin is pushed around; its
     radii are left as they are.
     """
-    if skin is None or not skin.strokes or not strokes or field(strokes, size) is None:
+    if skin is None or not skin.strokes or field(strokes, size, face) is None:
         return skin
     return replace(
         skin,
         strokes=tuple(
-            replace(stroke, points=shown_points(stroke.points, strokes, size))
+            replace(stroke, points=shown_points(stroke.points, strokes, size, face))
             for stroke in skin.strokes
         ),
     )

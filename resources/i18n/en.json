@@ -517,6 +517,13 @@
   "liquify.strokes.many": "{count} strokes",
   "liquify.reset": "Reset liquify",
   "liquify.leave": "Done",
+  "liquify.group.face": "Face",
+  "liquify.face.eyes": "Eyes",
+  "liquify.face.face_width": "Face width",
+  "liquify.face.chin": "Chin",
+  "liquify.face.nose": "Nose",
+  "liquify.face.mouth": "Mouth",
+  "liquify.faces.none": "No face found, so the face sliders cannot be used",
   "export.watermark": "Watermark",
   "export.watermark_unset": "Set it up under Watermark in the toolbar",
   "export.watermark_join": " · "

@@ -1639,13 +1639,14 @@ class Controller(QObject):
         """Put the crop and rotation back to the whole photo (PLAN.md 3.2).
 
         The lens correction, the mended spots, the portrait's skin range and
-        the liquify strokes are not the crop tab's and are left as they are.
+        liquify are not the crop tab's and are left as they are.
         """
         fresh = Geometry(
             lens=self._geometry.lens,
             spots=self._geometry.spots,
             skin=self._geometry.skin,
             liquify=self._geometry.liquify,
+            face_shape=self._geometry.face_shape,
         )
         if self._cropping:
             fresh = replace(fresh, crop=geometry.start_crop(self.photo_size, fresh))
@@ -1878,12 +1879,13 @@ class Controller(QObject):
     def _liquify_frame(self) -> tuple[tuple[int, int], Geometry, bool]:
         """Return the frame a new liquify stroke is placed on.
 
-        The new stroke comes after the ones already there, so its points are
-        where the picture shows things now: taken back through the turn and
-        the crop but not through the strokes before it.
+        The new stroke comes after the ones already there and after the face
+        sliders, so its points are where the picture shows things now: taken
+        back through the turn and the crop but not through what liquify has
+        already done.
         """
         size, shape, crop = self._spot_frame()
-        return size, replace(shape, liquify=()), crop
+        return size, replace(shape, liquify=(), face_shape=liquify.DEFAULT_FACE_SHAPE), crop
 
     def add_liquify_stroke(
         self,
@@ -1921,14 +1923,45 @@ class Controller(QObject):
         self._set_liquify(self._geometry.liquify + (stroke,))
 
     def reset_liquify(self) -> None:
-        """Take every liquify stroke off the photo, as one step (L-07)."""
-        if self.current is not None and self._geometry.liquify:
-            self._set_liquify(())
+        """Take every liquify stroke off the photo and rest the face sliders, as one step (L-07)."""
+        shape = self._geometry
+        if self.current is not None and (shape.liquify or not shape.face_shape.is_default):
+            self.set_geometry(
+                replace(shape, liquify=(), face_shape=liquify.DEFAULT_FACE_SHAPE)
+            )
+            self.geometry_changed.emit(self._geometry)
 
     def _set_liquify(self, strokes: tuple[liquify.Stroke, ...]) -> None:
         """Give the photo these strokes, the way any change of geometry is given."""
         self.set_geometry(replace(self._geometry, liquify=strokes))
         self.geometry_changed.emit(self._geometry)
+
+    @property
+    def face_shape(self) -> liquify.FaceShape:
+        """Return the face sliders of the photo now open (L-11)."""
+        return self._geometry.face_shape
+
+    def set_face_shape_value(self, name: str, value: float, dragging: bool = False) -> None:
+        """Move one face slider (L-11), on every face found on the photo.
+
+        The faces are taken as they were found now, on the photo with its lens
+        corrected, and kept with the sliders, so the photo is shaped the same
+        wherever it is developed. Like any slider, a drag only updates the
+        preview and letting go is one step of history.
+        """
+        if self.current is None or name not in liquify.FACE_NAMES:
+            return
+        found = self.faces_of_current() or ()
+        marks = tuple(
+            liquify.FaceMarks(points=face.points, width=face.width, height=face.height)
+            for face in found
+        )
+        shape = self._geometry.face_shape.with_value(name, value)
+        if marks:
+            shape = shape.with_faces(marks)
+        self.set_geometry(replace(self._geometry, face_shape=shape), dragging)
+        if not dragging:
+            self.geometry_changed.emit(self._geometry)
 
     def draft_liquify(
         self,
@@ -2256,12 +2289,17 @@ class Controller(QObject):
         """Return the geometry a preview for *purpose* is framed with.
 
         The photo as it was found keeps its crop (PLAN.md 3.3) but not its
-        mended spots or its liquify strokes: comparing is how the mending
-        and the reshaping are checked (A-32, L-08).
+        mended spots or its liquify: comparing is how the mending and the
+        reshaping are checked (A-32, L-08).
         """
-        if purpose == _BEFORE and (self._geometry.spots or self._geometry.liquify):
-            return replace(self._geometry, spots=(), liquify=())
-        return self._geometry
+        shape = self._geometry
+        if purpose == _BEFORE and (
+            shape.spots or shape.liquify or not shape.face_shape.is_default
+        ):
+            return replace(
+                shape, spots=(), liquify=(), face_shape=liquify.DEFAULT_FACE_SHAPE
+            )
+        return shape
 
     def _submit_whole(
         self,

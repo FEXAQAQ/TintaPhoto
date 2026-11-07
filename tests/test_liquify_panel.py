@@ -30,10 +30,11 @@ def test_it_is_as_wide_as_the_inspector(panel: LiquifyPanel) -> None:
     assert panel.width() == theme.PANEL_WIDTH
 
 
-def test_the_tools_come_first_then_the_brush(panel: LiquifyPanel) -> None:
+def test_the_tools_come_first_then_the_brush_then_the_face(panel: LiquifyPanel) -> None:
     assert [group.header.text() for group in panel.groups()] == [
         tr("liquify.group.tools"),
         tr("liquify.group.brush"),
+        tr("liquify.group.face"),
     ]
     assert panel.strength_row.y() > panel.brush_size_row.y()
 
@@ -130,3 +131,49 @@ def test_a_language_change_keeps_what_was_chosen(panel: LiquifyPanel) -> None:
     assert panel.brush_size == pytest.approx(0.1)
     assert panel.strength == pytest.approx(0.3)
     assert panel.tool_buttons[liquify.TOOL_SMOOTH].text() == tr("liquify.tool.smooth")
+
+
+# -- the face sliders (L-11) -------------------------------------------------
+
+
+def test_the_face_sliders_run_from_minus_to_plus_a_hundred(panel: LiquifyPanel) -> None:
+    assert list(panel.face_rows) == list(liquify.FACE_NAMES)
+    tops = [row.y() for row in panel.face_rows.values()]
+    assert tops == sorted(tops)
+    for name, row in panel.face_rows.items():
+        assert row.value == 0.0
+        assert row.spec.minimum == -100.0 and row.spec.maximum == 100.0
+        assert row.spec.label_key == f"liquify.face.{name}"
+
+
+def test_the_face_sliders_wait_for_a_face(panel: LiquifyPanel) -> None:
+    panel.set_faces(None)
+    assert panel.faces_caption.text() == tr("adjust.faces.looking")
+    assert not any(row.isEnabled() for row in panel.face_rows.values())
+    panel.set_faces(0)
+    assert panel.faces_caption.text() == tr("liquify.faces.none")
+    assert not any(row.isEnabled() for row in panel.face_rows.values())
+    panel.set_faces(2)
+    assert panel.faces_caption.text() == tr("adjust.faces.many", count=2)
+    assert all(row.isEnabled() for row in panel.face_rows.values())
+
+
+def test_a_face_slider_says_what_changed(panel: LiquifyPanel) -> None:
+    seen: list[tuple[str, float, bool]] = []
+    panel.face_value_set.connect(lambda name, value, dragging: seen.append((name, value, dragging)))
+    panel.set_faces(1)
+    panel.face_rows["eyes"].set_value(40.0, announce=True)
+    assert seen[-1] == ("eyes", pytest.approx(40.0), False)
+    assert panel.reset_button.isEnabled()  # a slider moved is something to reset
+
+
+def test_undo_shows_the_face_sliders_without_announcing_them(panel: LiquifyPanel) -> None:
+    seen: list[object] = []
+    panel.face_value_set.connect(lambda *args: seen.append(args))
+    panel.set_face_shape(liquify.FaceShape(chin=-30.0))
+    assert panel.face_rows["chin"].value == pytest.approx(-30.0)
+    assert panel.reset_button.isEnabled()
+    panel.set_face_shape(liquify.DEFAULT_FACE_SHAPE)
+    assert not panel.reset_button.isEnabled()
+    assert not seen
+
