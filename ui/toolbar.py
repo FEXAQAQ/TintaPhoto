@@ -1,7 +1,7 @@
 """The 44 px toolbar across the top of the window (PLAN.md 3.1).
 
-Left: application menu, undo, redo, the info card, the portrait, the
-collage and the watermark. Centre: folder name and file name of the
+Left: application menu, undo, redo, the info card, the portrait, liquify,
+the collage and the watermark. Centre: folder name and file name of the
 current photo. Right: the export button, the only filled button in the whole
 interface.
 """
@@ -45,6 +45,12 @@ class Toolbar(QWidget):
             icons.ICON_PORTRAIT, "toolbar.portrait", "shortcut.portrait", self
         )
         self.portrait_button.setCheckable(True)
+        #: Opens liquify (PLAN.md 3.16); checked while it is open, like the
+        #: portrait.
+        self.liquify_button = IconButton(
+            icons.ICON_LIQUIFY, "toolbar.liquify", "shortcut.liquify", self
+        )
+        self.liquify_button.setCheckable(True)
         # Checked while the collage is open: the one place in the toolbar
         # that shows a current state (PLAN.md 3.13).
         self.collage_button = IconButton(
@@ -83,6 +89,7 @@ class Toolbar(QWidget):
         layout.addSpacing(theme.SPACE_XS)
         layout.addWidget(self.info_button)
         layout.addWidget(self.portrait_button)
+        layout.addWidget(self.liquify_button)
         layout.addWidget(self.collage_button)
         layout.addWidget(self.watermark_button)
         layout.addStretch(1)
@@ -115,6 +122,7 @@ class Toolbar(QWidget):
             self.undo_button,
             self.redo_button,
             self.portrait_button,
+            self.liquify_button,
             self.collage_button,
             self.watermark_button,
             self.info_button,

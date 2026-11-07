@@ -51,6 +51,7 @@ from core import (
     geometry,
     healing,
     lens,
+    liquify,
     metadata,
     pipeline,
     presets,
@@ -113,6 +114,9 @@ _GROUP_SPOT_SOURCE: Final[None] = None
 #: Showing the skin the portrait sliders work on (PLAN.md 3.15): only the
 #: newest is wanted.
 _GROUP_SKIN_SHOWN = "skin-shown"
+#: The draft of a liquify stroke being painted (PLAN.md 3.16): only the
+#: newest, the stroke as far as it has got, is wanted.
+_GROUP_LIQUIFY_DRAFT = "liquify-draft"
 #: How many times a look thumbnail's side the photo is developed at along
 #: its long edge, so that even a 3:1 panorama still has the side across its
 #: short one.
@@ -480,6 +484,17 @@ class Controller(QObject):
         #: that holding the before and after key is instant the second time.
         self._developed: _KeptPreview | None = None
         self._before: _KeptPreview | None = None
+        #: What is on screen for the photo now open, the whole photo or a
+        #: window of it, as last developed in full: what the draft of a
+        #: liquify stroke is painted onto (PLAN.md 3.16).
+        self._on_screen: Preview | None = None
+        #: The picture the stroke being painted is drafted on, taken when it
+        #: starts, and how many strokes have been drafted, so that a draft
+        #: still on its way when the stroke ends is not shown over the photo
+        #: developed for it.
+        self._liquify_base: Preview | None = None
+        self._liquify_stroke = 0
+        self.preview_ready.connect(self._remember_on_screen)
 
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -1146,6 +1161,8 @@ class Controller(QObject):
         self._cropping = False
         self._before = None
         self._developed = None
+        self._on_screen = None
+        self._end_liquify_draft()
         self._framed.clear()
         self._lensed.clear()
         self._detailed.clear()
@@ -1850,6 +1867,149 @@ class Controller(QObject):
         """Hand the skin on screen over, if it is still the photo's."""
         if path == self.current:
             self.skin_shown.emit(skin)
+
+    # -- liquify (PLAN.md 2.11 and 3.16) ---------------------------------
+
+    @property
+    def liquify_strokes(self) -> tuple[liquify.Stroke, ...]:
+        """Return the liquify strokes of the photo now open."""
+        return self._geometry.liquify
+
+    def _liquify_frame(self) -> tuple[tuple[int, int], Geometry, bool]:
+        """Return the frame a new liquify stroke is placed on.
+
+        The new stroke comes after the ones already there, so its points are
+        where the picture shows things now: taken back through the turn and
+        the crop but not through the strokes before it.
+        """
+        size, shape, crop = self._spot_frame()
+        return size, replace(shape, liquify=()), crop
+
+    def add_liquify_stroke(
+        self,
+        points: Sequence[tuple[float, float]],
+        tool: str,
+        radius: float,
+        strength: float,
+    ) -> None:
+        """Reshape the photo along a stroke of the liquify brush (L-05).
+
+        *points* is the path the pointer took, in fractions of the frame on
+        screen, *radius* the brush's, a fraction of the photo's long edge,
+        and *strength* from 0 to 1. One stroke is one step of history; a
+        stroke that moves nothing - a click of the push - is not one.
+        """
+        self._end_liquify_draft()
+        if self.current is None or not points or tool not in liquify.TOOLS:
+            return
+        size, shape, crop = self._liquify_frame()
+        on_photo = [geometry.source_point(point, size, shape, crop) for point in points]
+        on_photo = [(min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0)) for x, y in on_photo]
+        if shape.mirrored:
+            # Held before the mirror, where a turn goes the other way (3.16).
+            tool = liquify.mirrored_tool(tool)
+        radius = liquify.clamp_radius(radius)
+        stroke = liquify.Stroke(
+            tool=tool,
+            points=liquify.thinned(tool, on_photo, radius, size),
+            radius=radius,
+            strength=liquify.clamp_strength(strength),
+        )
+        if liquify.field((stroke,), size) is None:
+            self._show_on_screen_again()
+            return
+        self._set_liquify(self._geometry.liquify + (stroke,))
+
+    def reset_liquify(self) -> None:
+        """Take every liquify stroke off the photo, as one step (L-07)."""
+        if self.current is not None and self._geometry.liquify:
+            self._set_liquify(())
+
+    def _set_liquify(self, strokes: tuple[liquify.Stroke, ...]) -> None:
+        """Give the photo these strokes, the way any change of geometry is given."""
+        self.set_geometry(replace(self._geometry, liquify=strokes))
+        self.geometry_changed.emit(self._geometry)
+
+    def draft_liquify(
+        self,
+        points: Sequence[tuple[float, float]],
+        tool: str,
+        radius: float,
+        strength: float,
+    ) -> None:
+        """Show the stroke being painted at once, put roughly on what is on screen.
+
+        The same arguments as :meth:`add_liquify_stroke`. The stroke goes onto
+        the picture last developed in full - kept from the stroke's first
+        point, so each draft is the whole stroke so far on the same picture -
+        in the background, and only the newest draft is kept (PLAN.md 3.16).
+        Letting go develops the photo properly.
+        """
+        path = self.current
+        if path is None or not points or tool not in liquify.TOOLS or self._comparing:
+            return
+        if self._liquify_base is None:
+            shown = self._on_screen
+            if shown is None or shown.path != path:
+                return
+            self._liquify_base = shown
+        base = self._liquify_base
+        image = base.image
+        height, width = image.shape[:2]
+        frame = base.frame if base.frame is not None else (width, height)
+        left, top, right, bottom = (
+            base.region if base.region is not None else (0.0, 0.0, 1.0, 1.0)
+        )
+        across = max(right - left, 1e-9)
+        down = max(bottom - top, 1e-9)
+        on_image = tuple(((x - left) / across, (y - top) / down) for x, y in points)
+        # The radius on screen is a fraction of the frame's long edge; the
+        # picture may be a window of the frame, at a resolution of its own.
+        pixels = self.shown_radius(radius) * max(frame) * width / (across * frame[0])
+        reach = pixels / max(width, height, 1)
+        stroke = liquify.Stroke(
+            tool=tool,
+            points=liquify.thinned(tool, on_image, reach, (width, height)),
+            radius=reach,
+            strength=liquify.clamp_strength(strength),
+        )
+        number = self._liquify_stroke
+
+        def drafted(picture: NDArray[np.uint8] = image) -> NDArray[np.uint8]:
+            """Put the stroke on the picture, on whichever thread takes this on."""
+            return liquify.draft(picture, stroke)
+
+        self._submit(
+            drafted,
+            _GROUP_LIQUIFY_DRAFT,
+            partial(self._on_liquify_drafted, base=base, number=number),
+            path,
+        )
+
+    def _on_liquify_drafted(
+        self, path: Path, image: NDArray[np.uint8], base: Preview, number: int
+    ) -> None:
+        """Show a draft, if its stroke is still being painted on this photo."""
+        if path != self.current or number != self._liquify_stroke or self._comparing:
+            return
+        self.preview_ready.emit(replace(base, image=image, draft=True))
+
+    def _end_liquify_draft(self) -> None:
+        """Forget the stroke being drafted; a draft still on its way is not shown."""
+        self._liquify_base = None
+        self._liquify_stroke += 1
+
+    def _remember_on_screen(self, preview: Preview) -> None:
+        """Keep what is now on screen, developed in full, for drafting on."""
+        if preview.draft or preview.before or preview.backdrop or preview.provisional:
+            return
+        self._on_screen = preview
+
+    def _show_on_screen_again(self) -> None:
+        """Put back what was on screen before a draft that came to nothing."""
+        shown = self._on_screen
+        if shown is not None and shown.path == self.current:
+            self.preview_ready.emit(shown)
 
     # -- undo, redo and reset --------------------------------------------
 

@@ -145,6 +145,12 @@ SMOOTH_BLUR_NODES: Final[float] = 4.0
 #: How often the interface adds a point while the brush is held (PLAN.md
 #: 3.16): the rates above are per point.
 TICKS_PER_SECOND: Final[int] = 30
+#: The draft of a stroke being painted is worked out on a coarser grid:
+#: this many nodes across the brush's radius, which keeps a dab the same
+#: few hundred nodes whatever the brush's size, and never fewer than
+#: :data:`DRAFT_GRID_LEAST` along the long edge.
+DRAFT_NODES_PER_RADIUS: Final[int] = 8
+DRAFT_GRID_LEAST: Final[int] = 128
 #: Fields kept for the strokes most recently asked about: twelve undo steps
 #: of a 24 megapixel photo, about 70 MB.
 CACHE_SIZE: Final[int] = 12
@@ -295,9 +301,10 @@ def thinned(
 class Grid:
     """The nodes a field is held on, for a photo of a given shape.
 
-    The nodes are the same distance apart both ways, a :data:`GRID_LONG`
-    th of the long edge, and positions on the grid are measured in that
-    long edge: node (row *i*, column *j*) sits at ``(j * step, i * step)``.
+    The nodes are the same distance apart both ways, :data:`GRID_LONG` of
+    them along the long edge unless a draft asks for fewer, and positions on
+    the grid are measured in that long edge: node (row *i*, column *j*) sits
+    at ``(j * step, i * step)``.
     The first and last nodes are on the photo's edges, so a fraction *x* of
     the width is ``x * extent[0]`` on the grid.
     """
@@ -306,30 +313,37 @@ class Grid:
     nodes: tuple[int, int]
 
     @property
+    def per_unit(self) -> int:
+        """Return how many node spacings the long edge holds."""
+        return max(self.nodes) - 1
+
+    @property
     def step(self) -> tuple[float, float]:
         """Return how far apart the nodes are, across and down."""
-        step = 1.0 / (GRID_LONG - 1)
+        step = 1.0 / self.per_unit
         return step, step
 
     @property
     def extent(self) -> tuple[float, float]:
         """Return the grid's width and height: one of them is 1."""
-        step = 1.0 / (GRID_LONG - 1)
+        step = 1.0 / self.per_unit
         return (self.nodes[0] - 1) * step, (self.nodes[1] - 1) * step
 
 
-def grid_for(size: tuple[int, int]) -> Grid:
+def grid_for(size: tuple[int, int], long_nodes: int = GRID_LONG) -> Grid:
     """Return the grid for a photo of *size* (width, height).
 
     It depends only on the photo's shape, to the nearest node, so the
     proxy, the screen sized preview and the full size photo of the same
     picture share one grid and one field. The short edge's shape is off by
-    half a node at most, a twentieth of a per cent.
+    half a node at most, a twentieth of a per cent. A draft asks for
+    *long_nodes* fewer than :data:`GRID_LONG`.
     """
     width, height = max(int(size[0]), 1), max(int(size[1]), 1)
     long_edge = max(width, height)
-    across = max(2, round((GRID_LONG - 1) * width / long_edge) + 1)
-    down = max(2, round((GRID_LONG - 1) * height / long_edge) + 1)
+    spacings = max(2, int(long_nodes)) - 1
+    across = max(2, round(spacings * width / long_edge) + 1)
+    down = max(2, round(spacings * height / long_edge) + 1)
     return Grid(nodes=(across, down))
 
 
@@ -379,15 +393,31 @@ def field(strokes: tuple[Stroke, ...], size: tuple[int, int]) -> Field | None:
         if start is None
         else start.copy()
     )
-    for stroke in strokes[done:]:
-        _apply_stroke(values, grid, stroke)
-    result = _finished(values, grid)
+    result = _built(values, grid, strokes[done:])
     with _cache_lock:
         _cache[key] = result
         _cache.move_to_end(key)
         while len(_cache) > CACHE_SIZE:
             _cache.popitem(last=False)
     return result
+
+
+def build_field(strokes: Sequence[Stroke], grid: Grid) -> Field | None:
+    """Return the field *strokes* make on *grid*, worked out afresh and kept nowhere.
+
+    What the draft of a stroke still being painted uses (PLAN.md 3.16): it
+    changes with every point, so keeping it would only push the fields worth
+    keeping out of the cache.
+    """
+    values = np.zeros((2, grid.nodes[1], grid.nodes[0]), dtype=np.float32)
+    return _built(values, grid, strokes)
+
+
+def _built(values: NDArray[np.float32], grid: Grid, strokes: Sequence[Stroke]) -> Field | None:
+    """Add *strokes* to *values* in place and return the field they make."""
+    for stroke in strokes:
+        _apply_stroke(values, grid, stroke)
+    return _finished(values, grid)
 
 
 def _finished(values: NDArray[np.float32], grid: Grid) -> Field | None:
@@ -572,7 +602,7 @@ def _sample(
     drift.
     """
     across, down = grid.nodes
-    nodes_per_unit = np.float32(GRID_LONG - 1)
+    nodes_per_unit = np.float32(grid.per_unit)
     column = np.clip(xs * nodes_per_unit, 0.0, across - 1)
     row = np.clip(ys * nodes_per_unit, 0.0, down - 1)
     left = np.minimum(column.astype(np.intp), across - 2)
@@ -646,7 +676,7 @@ def warp_values(values: NDArray[Any], shape: Field, interpolation: int) -> NDArr
     extent_x, extent_y = shape.grid.extent
     to_pixels_x = np.float32(width / extent_x)
     to_pixels_y = np.float32(height / extent_y)
-    nodes_per_unit = np.float32(GRID_LONG - 1)
+    nodes_per_unit = np.float32(shape.grid.per_unit)
     columns = np.arange(left, right, dtype=np.float32)
     # The field is read bilinearly, one way and then the other, which is
     # the same sum as :func:`_sample` takes, for far fewer look ups.
@@ -681,6 +711,24 @@ def warp_values(values: NDArray[Any], shape: Field, interpolation: int) -> NDArr
             still = still[..., None]
         out[strip:end, left:right] = np.where(still, values[strip:end, left:right], moved)
     return out
+
+
+def draft(values: NDArray[Any], stroke: Stroke) -> NDArray[Any]:
+    """Return *values* with *stroke* put on it at once, roughly (PLAN.md 3.16).
+
+    *values* is a picture already developed - what is on screen - and the
+    stroke is in its own fractions and long edge. What the hand sees while it
+    paints; letting go develops the photo properly. The grid is only as fine
+    as the brush needs (:data:`DRAFT_NODES_PER_RADIUS`), and the picture is
+    read bilinearly.
+    """
+    height, width = values.shape[:2]
+    nodes = math.ceil(DRAFT_NODES_PER_RADIUS / max(stroke.radius, 1e-6)) + 1
+    grid = grid_for((width, height), min(GRID_LONG, max(DRAFT_GRID_LEAST, nodes)))
+    shape = build_field((stroke,), grid)
+    if shape is None:
+        return values
+    return warp_values(values, shape, cv2.INTER_LINEAR)
 
 
 def _pixel(node: int, nodes: int, pixels: int, rounding: Any) -> int:

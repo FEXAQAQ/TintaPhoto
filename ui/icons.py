@@ -75,6 +75,9 @@ ICON_STAMP: Final[str] = "stamp"
 #: A face in a viewfinder's corners: the toolbar button that opens the
 #: portrait (PLAN.md 3.15). Lucide's "scan-face".
 ICON_PORTRAIT: Final[str] = "portrait"
+#: Three waves, the picture flowing under the brush: the toolbar's liquify
+#: (PLAN.md 3.16), drawn here after Lucide's "waves".
+ICON_LIQUIFY: Final[str] = "liquify"
 
 
 def icons_dir() -> Path:

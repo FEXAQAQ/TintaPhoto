@@ -2412,3 +2412,100 @@ def test_the_portrait_keys(window: MainWindow) -> None:
         "shortcut.portrait", "shortcut.portrait_add", "shortcut.portrait_remove",
         "shortcut.portrait_show",
     )] == ["P", "B", "E", "M"]
+
+
+# -- liquify (PLAN.md 2.11, 3.16) --------------------------------------------
+
+
+def test_liquify_needs_a_photo(window: MainWindow) -> None:
+    window.toggle_liquify()
+    assert not window.in_liquify
+    assert not window.toolbar.liquify_button.isChecked()
+
+
+def test_liquify_takes_the_inspectors_place_with_its_brush_taken_up(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    toolbar = window.toolbar
+    assert toolbar.liquify_button.x() > toolbar.portrait_button.x()
+    assert toolbar.liquify_button.x() < toolbar.collage_button.x()
+    window.toggle_liquify()
+    qt_app.processEvents()  # type: ignore[attr-defined]
+    assert window.in_liquify
+    assert toolbar.liquify_button.isChecked()
+    assert window.liquify_panel.isVisible() and not window.inspector.isVisible()
+    assert toolbar.title_label.text().endswith("a.jpg")
+    assert window.preview.canvas.liquify.active
+
+    window.on_escape()
+    qt_app.processEvents()  # type: ignore[attr-defined]
+    assert not window.in_liquify and not window.preview.canvas.liquify.active
+    assert window.inspector.isVisible() and not window.liquify_panel.isVisible()
+
+
+def test_a_stroke_on_the_photo_reshapes_it_with_the_panels_tool(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    from core import liquify
+
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.enter_liquify()
+    window.liquify_panel.tool_buttons[liquify.TOOL_BLOAT].click()
+    window.liquify_panel.set_strength(0.8)
+    window.preview.canvas.liquify.stroke_painted.emit([(0.5, 0.5)] * 6)
+    (stroke,) = window.controller.liquify_strokes
+    assert stroke.tool == liquify.TOOL_BLOAT and stroke.strength == pytest.approx(0.8)
+    assert window.liquify_panel.reset_button.isEnabled()
+    assert window.liquify_panel.strokes_caption.text() == tr("liquify.strokes.one")
+    window.controller.undo()
+    assert window.controller.liquify_strokes == ()
+    assert not window.liquify_panel.reset_button.isEnabled()
+
+
+def test_the_brackets_size_the_liquify_brush(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.enter_liquify()
+    size = window.liquify_panel.brush_size
+    window.resize_spot_brush(True)
+    assert window.liquify_panel.brush_size == pytest.approx(size * 1.25)
+
+
+def test_liquify_and_the_other_modes_take_turns(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.enter_liquify()
+    window.enter_portrait()
+    assert window.in_portrait and not window.in_liquify
+    assert not window.preview.canvas.liquify.active
+    window.enter_liquify()
+    assert window.in_liquify and not window.in_portrait
+    window.enter_watermark()
+    assert window.in_watermark and not window.in_liquify
+    window.enter_liquify()
+    assert window.in_liquify and not window.in_watermark
+    window.enter_collage()
+    assert not window.in_liquify
+    window.toolbar.liquify_button.click()
+    assert window.in_liquify and not window.in_collage
+    assert window.liquify_panel.isVisible() and not window.collage_panel.isVisible()
+
+
+def test_the_liquify_key_and_what_it_turns_off(window: MainWindow) -> None:
+    handlers = window.shortcut_handlers()
+    assert handlers["shortcut.liquify"] == window.toggle_liquify
+    assert tr("shortcut.liquify") == "L"
+    window._liquify_mode = True
+    called: list[str] = []
+    window._on_shortcut("shortcut.spot_tool", lambda: called.append("spot"))
+    window._on_shortcut("shortcut.crop", lambda: called.append("crop"))
+    window._on_shortcut("shortcut.undo", lambda: called.append("undo"))
+    window._liquify_mode = False
+    assert called == ["undo"]

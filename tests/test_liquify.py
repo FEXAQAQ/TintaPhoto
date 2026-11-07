@@ -431,3 +431,26 @@ def test_a_stroke_counts_as_an_edit_and_stops_the_original_being_copied(tmp_path
     source = tmp_path / "photo.jpg"
     assert exporter.can_copy_original(source, reference.adjustments, Geometry(), options)
     assert not exporter.can_copy_original(source, reference.adjustments, shaped.geometry, options)
+
+
+# -- the draft (PLAN.md 3.16) ------------------------------------------------
+
+
+def test_a_draft_moves_a_picture_on_screen_the_way_the_stroke_will() -> None:
+    picture = (np.clip(_dot(SIZE, (0.3, 0.5), 8), 0, 1) * 255).astype(np.uint8)
+    stroke = _line(liquify.TOOL_PUSH, (0.3, 0.5), (0.45, 0.5), 10, radius=0.1)
+    drafted = liquify.draft(picture, stroke)
+    assert drafted.dtype == np.uint8 and drafted.shape == picture.shape
+    developed = liquify.warp(_photo(_dot(SIZE, (0.3, 0.5), 8)), (stroke,)).image
+    assert _centroid(drafted.astype(np.float32)) == pytest.approx(_centroid(developed), abs=0.01)
+    assert liquify.draft(picture, Stroke(tool=liquify.TOOL_PUSH, points=((0.5, 0.5),))) is picture
+
+
+def test_a_draft_grid_is_only_as_fine_as_the_brush_needs() -> None:
+    assert max(liquify.grid_for((3000, 2000), 129).nodes) == 129
+    assert liquify.grid_for((3000, 2000), 129).nodes == (129, 86)
+    with liquify._cache_lock:
+        kept = len(liquify._cache)
+    liquify.draft(np.zeros((200, 300, 3), np.uint8), _held(liquify.TOOL_BLOAT, (0.5, 0.5), 5))
+    with liquify._cache_lock:
+        assert len(liquify._cache) == kept  # drafts are kept nowhere

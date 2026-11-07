@@ -223,6 +223,9 @@ SKIN_REMOVE_WASH: Final[str] = "#000000"
 SKIN_REMOVE_ALPHA: Final[int] = 112
 #: Half the length of the + or − drawn in the brush's middle.
 SKIN_BRUSH_MARK: Final[int] = 4
+#: The liquify brush (PLAN.md 3.16): the spot brush's circle with a dot in
+#: its middle, this many pixels across, where the brush pushes from.
+LIQUIFY_BRUSH_DOT: Final[int] = 4
 #: How near the pointer has to be to take hold of the collage's seam, either
 #: side of it (PLAN.md 3.13).
 COLLAGE_SEAM_GRAB: Final[int] = 8
@@ -633,7 +636,7 @@ QToolTip {{
     padding: {SPACE_XS}px {SPACE_SM}px;
 }}
 
-#Inspector, #CollagePanel, #WatermarkPanel, #PortraitPanel {{
+#Inspector, #CollagePanel, #WatermarkPanel, #PortraitPanel, #LiquifyPanel {{
     background-color: {BG_PANEL};
     border-left: {BORDER_WIDTH}px solid {BORDER};
 }}

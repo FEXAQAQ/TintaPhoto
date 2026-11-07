@@ -25,7 +25,7 @@ from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer  # noqa: E402
 
 from app import controller as controller_module  # noqa: E402
 from app.controller import DRAFT_MINIMUM_LONG_EDGE, Controller  # noqa: E402
-from core import geometry, sidecar  # noqa: E402
+from core import geometry, liquify, sidecar  # noqa: E402
 from core.geometry import Geometry, Rect  # noqa: E402
 from core.edit_state import Edit, EditState  # noqa: E402
 from core.exporter import ExportOptions  # noqa: E402
@@ -2447,3 +2447,114 @@ def test_the_range_is_kept_by_both_resets_and_cleared_by_its_own(
     assert controller.skin.is_default
     controller.undo()
     assert not controller.skin.auto and len(controller.skin.strokes) == 1
+
+
+# -- liquify (PLAN.md 2.11, 3.16) --------------------------------------------
+
+
+def _blot_column(image: np.ndarray) -> float:
+    """Return where across the dark blot sits on the middle row, in pixels."""
+    row = image[image.shape[0] // 2].astype(float).mean(axis=1)
+    darkness = np.clip(140.0 - row, 0.0, None)
+    return float((np.arange(row.size) * darkness).sum() / darkness.sum())
+
+
+def test_a_liquify_stroke_moves_the_photo_as_one_step_and_is_stored(
+    controller: Controller, tmp_path: Path
+) -> None:
+    photo, before = _shown(controller, _blotted_folder(tmp_path))
+    assert _blot_column(before.image) == pytest.approx(120, abs=1.5)
+
+    controller.add_liquify_stroke(
+        [(0.5, 0.5), (0.55, 0.5), (0.6, 0.5)], liquify.TOOL_PUSH, 0.08, 1.0
+    )
+    after = _wait_for_preview(controller)
+    assert _blot_column(after.image) > 135
+    assert np.array_equal(after.image[5, 5], before.image[5, 5])
+    assert controller.can_undo
+
+    controller.flush()
+    stored = sidecar.read(photo, controller.state, controller._store)
+    assert stored is not None and len(stored.geometry.liquify) == 1
+    controller.undo()
+    assert controller.liquify_strokes == ()
+
+
+def test_a_click_of_the_push_is_not_a_step(controller: Controller, folder: Path) -> None:
+    _shown(controller, folder)
+    controller.add_liquify_stroke([(0.5, 0.5)], liquify.TOOL_PUSH, 0.08, 1.0)
+    assert controller.liquify_strokes == ()
+    assert not controller.can_undo
+
+
+def test_a_twirl_on_a_mirrored_photo_turns_the_way_it_is_seen(
+    controller: Controller, folder: Path
+) -> None:
+    _shown(controller, folder)
+    controller.set_geometry(Geometry(mirrored=True))
+    controller.add_liquify_stroke([(0.3, 0.5)] * 5, liquify.TOOL_TWIRL_CW, 0.08, 1.0)
+    (stroke,) = controller.liquify_strokes
+    assert stroke.tool == liquify.TOOL_TWIRL_CCW
+    # Held before the mirror: the left of the screen is the right of the photo.
+    assert stroke.points[0] == pytest.approx((0.7, 0.5), abs=0.01)
+
+
+def test_a_new_stroke_lands_where_the_picture_shows_things_now(
+    controller: Controller, folder: Path
+) -> None:
+    _shown(controller, folder)
+    push = [(0.3, 0.5), (0.4, 0.5), (0.5, 0.5)]
+    controller.add_liquify_stroke(push, liquify.TOOL_PUSH, 0.1, 1.0)
+    controller.add_liquify_stroke([(0.5, 0.5)] * 3, liquify.TOOL_BLOAT, 0.05, 0.5)
+    first, second = controller.liquify_strokes
+    # Not taken back through the first stroke, which it comes after.
+    assert second.points[0] == pytest.approx((0.5, 0.5), abs=1e-6)
+    assert first.radius == pytest.approx(0.1) and second.strength == pytest.approx(0.5)
+
+
+def test_liquify_is_kept_by_both_resets_and_cleared_by_its_own(
+    controller: Controller, folder: Path
+) -> None:
+    _shown(controller, folder)
+    controller.add_liquify_stroke([(0.5, 0.5)] * 4, liquify.TOOL_PUCKER, 0.08, 1.0)
+    controller.reset_crop()
+    controller.reset()
+    assert len(controller.liquify_strokes) == 1
+
+    controller.reset_liquify()
+    assert controller.liquify_strokes == ()
+    controller.undo()
+    assert len(controller.liquify_strokes) == 1
+
+
+def test_the_photo_as_it_was_found_has_no_liquify(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _shown(controller, _blotted_folder(tmp_path))
+    controller.add_liquify_stroke([(0.5, 0.5), (0.6, 0.5)], liquify.TOOL_PUSH, 0.08, 1.0)
+    _wait_for_preview(controller)
+    controller.set_comparing(True)
+    before = _wait_for_preview(controller)
+    assert _blot_column(before.image) == pytest.approx(120, abs=1.5)
+
+
+def test_a_stroke_being_painted_is_drafted_on_the_picture_on_screen(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _photo, before = _shown(controller, _blotted_folder(tmp_path))
+    controller.draft_liquify([(0.5, 0.5), (0.6, 0.5)], liquify.TOOL_PUSH, 0.08, 1.0)
+    (draft,) = wait_for(controller.preview_ready)
+    assert draft.draft
+    assert draft.frame == before.frame and draft.region == before.region
+    assert _blot_column(draft.image) > 135
+    assert controller.liquify_strokes == ()  # nothing is kept until it is let go
+
+    # A draft still on its way when the stroke ends is not shown.
+    base = controller._liquify_base
+    number = controller._liquify_stroke
+    controller.add_liquify_stroke([(0.5, 0.5), (0.6, 0.5)], liquify.TOOL_PUSH, 0.08, 1.0)
+    shown: list = []
+    connection = controller.preview_ready.connect(shown.append)
+    controller._on_liquify_drafted(controller.current, draft.image, base, number)
+    controller.preview_ready.disconnect(connection)
+    assert not shown

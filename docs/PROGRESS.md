@@ -15,7 +15,8 @@
   **PLAN.md 已補上濾鏡**（2.2、3.1、6、7.1.5、8、13.3 節），文件也不再出現相機廠牌。
   F1 完成：三個濾鏡已從素材擬合出來，同相機 ΔE 0.78 ～ 0.92、
   跨相機 1.56 ～ 1.73。見「濾鏡功能 F1」、「濾鏡功能 F2」
-- **最後更新**：2026-11-07（最後一項工作：液化（階段 19）L1 核心，不加版號（使用者還看不到）。使用者要求做液化並請我規劃，看過三個方案後說「照建議開工」：獨立的液化模式（L）、七種工具全做、臉部液化等手動筆刷驗收後再決定。這次只做核心：`core/liquify.py`、`Geometry.liquify`、取景與點的換算、測試，PLAN.md 補上 2.11、3.16、步驟 1.7、7.1、8、階段 19、第 12 節。見文末「液化（階段 19）」）
+- **最後更新**：2026-11-07（最後一項工作：液化（階段 19）L2 液化模式，0.37.0。使用者說「開始做 L2」。工具列人像右邊的液化按鈕／L、液化面板（七種工具排成三、二、二，大小、力道）、照片上的筆刷、拖曳中的草稿、[ ] 改大小、與人像／浮水印／拼貼直接互相切換。見文末「液化（階段 19）」的 L2）
+  在此之前：液化（階段 19）L1 核心，不加版號（使用者還看不到）。使用者要求做液化並請我規劃，看過三個方案後說「照建議開工」：獨立的液化模式（L）、七種工具全做、臉部液化等手動筆刷驗收後再決定。這次只做核心：`core/liquify.py`、`Geometry.liquify`、取景與點的換算、測試，PLAN.md 補上 2.11、3.16、步驟 1.7、7.1、8、階段 19、第 12 節。見文末「液化（階段 19）」）
   在此之前：拼貼的「社群 1／社群 2」改名「社群 I／社群 T」，0.36.1。使用者先問能不能直接寫兩個平台的名稱，說明可行但和 CLAUDE.md 第 6 節「不寫平台名稱」衝突後，使用者決定維持原樣，接著提議改用字母；一個字母不算平台名稱，規則不變。只改 `collage.platform.social_1`／`social_2` 兩個翻譯值（中英文），內部代號 `social_1`／`social_2` 與設定檔不變。PLAN 第 2.8 節 K-01、3.13 節與階段 8 已同步）
   在此之前：拼貼改為 2～4 張與六種畫布，0.36.0。使用者要求「雙圖拼貼」改名「拼貼」、可以自己選拼幾張（橫直都能分 2～4 塊），工作中途又要求支援兩組社群的畫布尺寸。決定（使用者選，皆照建議）：3～4 張時接縫在畫布上拖、每塊至少 10%、拖到鄰居就停（不推著走）、雙擊任一條回到平均，接縫滑桿只在 2 張顯示；連動支援 3～4 張，第 2 張以後各自對齊第 1 張，3～4 張時面板多「對齊　第 2｜3｜4 張」；照片列與縮放滑桿一律用數字編號。畫布選法：看過下拉選單／兩排按鈕／先選社群再選尺寸三種，選「先選社群再選尺寸」，介面寫「社群 1／社群 2」不寫平台名稱。`core/collage.py`：`Layout` 的 `orientation`、`seam` 換成 `platform`、`canvas`、`count`、`seams`；`CANVAS_SIZES` 六種、`PLATFORM_CANVASES` 兩組（各組第一個是最推薦）、預設社群 2 的 16:9；新 `with_platform()`（換組時共有的尺寸保留，否則取該組第一個）、`even_seams()`、`seam_range()`、`with_seam()`、`seam_at()`；`PIECE_MIN` 2 張 0.2（等於原本 20%～80%）、3～4 張 0.1；`cells()` 回傳 count 塊；`linked_placement()` 的 `alignment` 改為 `alignments` 序列，每一張對齊後都要蓋滿自己那塊；`render()` 只用前 count 張（原本多給會 IndexError）；`SLOTS` = 4、`SINGLE_SUFFIXES` 加 `_c`、`_d`。`app/collage_controller.py`：`count`、`paths` 只回傳使用中的幾塊（多的照片留著）、`aligning_slot`／`set_aligning_slot()`、每張各自的 alignment、`complete` 只看使用中的幾塊、匯出進度依張數分配。`app/settings.py`：存 `platform`、`canvas`、`count`、`seams`；舊的 `orientation` portrait → 4:5、其他 → 16:9，舊的 `seam` → 一條接縫。`ui/collage_panel.py`：社群、畫布（每組一排 Segmented，只顯示目前那組）、張數、畫布說明小字、4 列照片、4 支縮放、對齊目標；`ui/collage_view.py`：多條接縫（`_seam_near` 找最近的一條）、對齊時只畫第 1 張與被對齊的那張、拖多張進來其餘依序放進空的塊。`ui/main_window.py`：版面改變時也刷新照片列與匯出按鈕；完成提示「和 N 張單張」。翻譯：刪 `collage.orientation*`、`collage.slot.left` 等方位鍵，加 `collage.platform*`、`collage.canvas*`、`collage.canvas_use.*`、`collage.count*`、`collage.slot`、`collage.zoom.1～4`、`collage.align_target*`。測試：test_collage 加 3～4 張尺寸、所有畫布 × 分割 × 張數都排得出、間距不改畫布、接縫順序與最小寬度、拖到鄰居停住、4 張各落自己那塊、多給的照片不畫、4 張連動對齊不留白、3 張連動各露自己那部分、六種畫布尺寸、換組規則；test_collage_window 加張數顯示列與塊、等每塊都放好才能匯出、張數改少照片留著、三條接縫拖曳與雙擊、選第 3 張對齊只動它、2 張沒有對齊選擇、4 張輪播 _a～_d、換組顯示該組畫布、設定記住與舊設定換算。以真實視窗截圖確認 4 張橫式與 3 張 3:4 上下連動的面板（1.91:1 按鈕放得下）。PLAN 第 1、2.8（K-01～K-03、K-08～K-13）、2.9 W-10、2.10 R-12、3.13、6（拼貼）、7.3、10（檔案說明）節與階段 8 驗收已同步，全文「雙圖拼貼」改為「拼貼」；README 中英文也改了。還沒做：實機拖接縫與 4 張連動對齊的手感；README 的拼貼動圖仍是舊的兩張版本）
   在此之前：參數檔改存程式資料夾，0.35.0。使用者覺得照片旁的 `.jpg.json` 讓資料夾很亂，要求存在程式本身。決定（使用者選）：照片旁的舊檔「放著就好，以新的為主」——照讀、不寫、不搬、不刪；只以完整路徑對應，搬資料夾後找不回來也沒關係（不加檔名＋大小＋時間比對）。`core/sidecar.py`：一律寫進 store（`%APPDATA%\TintaPhoto\edits\`，檔名 = 路徑雜湊，沿用原本替代存放的 `store_key`）；`sidecar_path` 改名 `legacy_path`（只讀）、`fallback_path` 改名 `stored_path`；`existing_path` 順序：store 的 `.json` → store 的 `.cleared` 標記（有就視為沒有參數檔）→ 照片旁舊檔；`delete()` 在照片旁有舊檔時留 `.cleared` 標記，避免重設後舊檔的調整跑回來，`_store()` 寫入成功時拿掉標記；新 `adopt(old, new)` 在控制器啟動時把 0.34 以前的 `%LOCALAPPDATA%\TintaPhoto\sidecars\` 搬進新位置（同名時保留新的）。`store` 參數改為必填，`SaveResult.fallback` 拿掉。`app/paths.py`：`sidecar_dir()`、`earlier_sidecar_dir()` 取代 `fallback_sidecar_dir()`。控制器拿掉「資料夾無法寫入」的提示；`Settings.warn_read_only`、設定對話框那一列、翻譯鍵 `notice.parameters_stored_elsewhere`／`settings.warn_read_only` 刪除（舊設定檔的這個鍵讀到就丟掉）。測試：`tests/conftest.py` 加 autouse `scratch_profile`，每個測試的 %APPDATA%／%LOCALAPPDATA% 指到暫存資料夾，測試不會寫進真正的程式資料夾；test_sidecar 改寫並加舊檔照讀不動、重設後不跑回來、再調整、搬舊 store；test_controller 加照片資料夾不多檔案、舊檔開得起來且不被動到、啟動時接收舊 store。PLAN 第 1、2.2（鏡頭說明）、2.4 E-02、3.10、7.1 節與階段 3 已同步；CLAUDE.md 第 4 節參數檔那一條、README 中英文也改了）
@@ -5564,4 +5565,34 @@ app 樣式表的通用 `QPushButton` 最小高度會把標籤撐成 27 px，所�
 - 同一處疊很多全力道筆跡（例如力道 100 推 7 倍半徑長之後再力道 100 膨脹 3 秒）會摺疊：網格解析度不夠表現 130:1 的壓縮。單一工具全力道、或一般力道疊在一起都不會（測試有涵蓋）。已記在 PLAN 第 12 節
 - 大筆刷（半徑 0.25）一筆約 0.5 秒：L2 的草稿要用較粗的網格或別的辦法才跟得上滑鼠
 - 推移、膨脹、旋轉每一下的速率是先訂的起始值，要在 L2 實機塗過再調
+
+**L2 液化模式（2026-11-07，0.37.0）**：
+- `core/liquify.py`：`Grid` 改以自己的節點數算間距（`per_unit`），`grid_for(size, long_nodes)` 可以要較粗的網格；新 `build_field()`（不進快取）與 `draft(values, stroke)`：草稿的網格依筆刷取「半徑內 8 個節點」（`DRAFT_NODES_PER_RADIUS`），長邊至少 128（`DRAFT_GRID_LEAST`），雙線性取樣。草稿不進快取，否則每個點都會把正式的位移場擠出去
+- `app/controller.py`：
+  - `add_liquify_stroke(points, tool, radius, strength)`：螢幕上的點經 `geometry.source_point()` 換回照片，但用拿掉液化的 geometry（新的一筆接在舊的之後，座標是「液化後、轉向前」的畫面）；翻轉過的照片把順時針、逆時針對調；不移動任何東西的一筆（只點一下的推移）不加，並把畫面換回原本的樣子
+  - `reset_liquify()`、`liquify_strokes`
+  - `draft_liquify()`：第一個點時記下 `_on_screen`（最後一張完整的預覽，整張或放大的那一塊），把整筆到目前為止的筆跡換成那張圖自己的比例與半徑，在背景 `liquify.draft()`，群組 `liquify-draft` 只留最新的；`_liquify_stroke` 計數，放開時加一，還在路上的草稿就不顯示；換照片時清掉
+  - `_remember_on_screen()` 接在自己的 `preview_ready` 上，記下不是草稿、不是修圖前、不是背景、不是相機預覽的那張
+- `ui/liquify_panel.py`（新）：標題列、工具群組（`ToolChoice`，`choice` 樣式、`QButtonGroup` 互斥；寬度用 `QSizePolicy.Ignored`，每排平分寬度，一開始用 `QGridLayout` 跨欄，三顆的那排中間那顆比較寬，改成一排一個 `QHBoxLayout`）、筆刷群組（大小 5～250、力道 1～100）、說明／已液化 N 筆、底部「重設液化」「完成」
+- `ui/liquify_overlay.py`（新）：筆刷圓與中心點；推移跟著滑鼠記點（至少 2 px 或 0.1 半徑），其他工具按下就開始每 33 ms 記一次滑鼠位置（`TICK_MS`）；每加一點發 `stroke_changed`（草稿），放開發 `stroke_painted`
+- `ui/preview_view.py`：`canvas.liquify`，畫、按、拖、放、離開、游標十字、雙擊不縮放
+- `ui/main_window.py`：`toggle/enter/leave_liquify`、`in_liquify`；進入人像、浮水印、拼貼時先離開液化，反之亦然；開資料夾時離開；Esc 離開；`[ ]` 改液化筆刷；Tab 不收面板；快捷鍵：人像模式擋掉的那些在液化也擋（`_NOT_IN_PORTRAIT`），拼貼與浮水印模式裡 L 照常可用
+- `ui/toolbar.py`：`liquify_button`（人像與拼貼之間）；`ui/icons.py` `ICON_LIQUIFY`、`resources/icons/liquify.svg`（三條波浪，自己畫的，仿 Lucide 風格）；`ui/shortcuts.py` 加 `shortcut.liquify`（L）；`ui/theme.py` 加 `LIQUIFY_BRUSH_DOT`、`#LiquifyPanel` 樣式；中英文字串
+- 版號 0.37.0（`app/paths.py`、`tintaphoto.iss`）、CHANGELOG、DEVLOG、README（美膚格子補一句液化、快捷鍵表加「人像／液化」）
+- PLAN.md：R-12 加上液化 L；3.16 補上排列間距與草稿細節；階段 19 的 L2 打勾、驗收更新
+- 測試：新 `tests/test_liquify_panel.py`（9 項）、`tests/test_liquify_overlay.py`（5 項）；`test_liquify.py` 加草稿 2 項；`test_controller.py` 加 7 項；`test_main_window.py` 加 6 項
+- 實機（離線視窗、`人像皮膚測試` 的一張複製到暫存資料夾，參數檔導到暫存的 APPDATA）：推移拖 80 px 出 10 張草稿，放開 0.05 秒換成正式結果；按住膨脹 0.5 秒記了 11 個點（離線環境的計時器約 22 Hz）；前後對比顯示液化前；復原正確。中英文、100%／150% 截圖確認面板與工具列
+
+**3.8 設計品質驗收（L2）**：
+- 色碼、字級、間距都來自 `theme.py`（新的只有 `LIQUIFY_BRUSH_DOT`）
+- 按鈕高 `BUTTON_HEIGHT`、間距 `SPACE_SM`，同一排寬度相同（測試檢查）
+- 工具按鈕用 `choice` 樣式（懸停、按下、停用沿用），工具列按鈕用 `IconButton`
+- 工具列按鈕提示「液化（L）」；工具按鈕的提示寫這個工具做什麼
+- 150% 截圖沒有模糊、裁切或跑版
+
+**未解決（L2）**：
+- 實機手感：大照片、大筆刷時草稿跟不跟得上滑鼠，推移、膨脹、旋轉每一下的速率合不合適，要使用者在真的視窗裡試
+- 草稿畫在螢幕上的那張圖上，放大檢視時邊緣會被固定住（只是草稿，放開後就正確）
+- 臉部液化（L3）等使用者驗收 L2 後決定
+- 完整 pytest 第一次跑在中途崩潰（只剩 faulthandler 的堆疊尾巴，看不到是哪一項），第二次 2337 項全過；和之前記錄的偶發崩潰應是同一個問題，還沒查
 

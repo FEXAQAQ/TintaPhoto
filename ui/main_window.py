@@ -56,6 +56,7 @@ from ui.filmstrip import Filmstrip, FilmstripTab
 from ui.histogram_widget import clipping_overlay
 from ui.about_dialog import AboutDialog
 from ui.collage_panel import CollagePanel
+from ui.liquify_panel import LiquifyPanel
 from ui.portrait_panel import BRUSH_ADD, BRUSH_REMOVE, PortraitPanel
 from ui.watermark_panel import WatermarkPanel
 from ui.collage_view import CollageCanvas
@@ -111,6 +112,8 @@ class MainWindow(QMainWindow):
         self._watermark_mode = False
         #: Whether the portrait is open (PLAN.md 3.15).
         self._portrait_mode = False
+        #: Whether liquify is open (PLAN.md 3.16).
+        self._liquify_mode = False
         #: What the watermark on screen was last drawn for, so that a new
         #: preview of the same photo does not draw it again.
         self._watermark_drawn: tuple[object, tuple[int, int]] | None = None
@@ -185,6 +188,10 @@ class MainWindow(QMainWindow):
         self.portrait_panel = PortraitPanel(middle)
         middle_layout.addWidget(self.portrait_panel)
         self.portrait_panel.hide()
+        #: In the inspector's place while liquify is open (PLAN.md 3.16).
+        self.liquify_panel = LiquifyPanel(middle)
+        middle_layout.addWidget(self.liquify_panel)
+        self.liquify_panel.hide()
 
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -278,6 +285,19 @@ class MainWindow(QMainWindow):
         self._connect_collage()
         self._connect_watermark()
         self._connect_portrait()
+        self._connect_liquify()
+
+    def _connect_liquify(self) -> None:
+        """Join the liquify panel and brush to the controller (PLAN.md 3.16)."""
+        panel = self.liquify_panel
+        panel.reset_requested.connect(self.controller.reset_liquify)
+        panel.leave_requested.connect(self.leave_liquify)
+        panel.tool_changed.connect(lambda _tool: self._show_liquify_brush())
+        panel.brush_size_set.connect(lambda _radius, _dragging: self._show_liquify_brush())
+        overlay = self.preview.canvas.liquify
+        overlay.stroke_changed.connect(self._on_liquify_stroke_changed)
+        overlay.stroke_painted.connect(self._on_liquify_painted)
+        self.toolbar.liquify_button.clicked.connect(self.toggle_liquify)
 
     def _connect_portrait(self) -> None:
         """Join the portrait's panel and brush to the controller (PLAN.md 3.15)."""
@@ -463,6 +483,7 @@ class MainWindow(QMainWindow):
         # for what was opened.
         self.leave_watermark()
         self.leave_portrait()
+        self.leave_liquify()
         self.filmstrip.set_photos(photos)
         self.controller.request_thumbnails(photos)
         self._show_recent_folders()
@@ -806,6 +827,7 @@ class MainWindow(QMainWindow):
             return
         self.leave_watermark()
         self.leave_collage()
+        self.leave_liquify()
         if self.controller.cropping:
             self.finish_crop()
         self.set_spot_tool(False)
@@ -899,6 +921,83 @@ class MainWindow(QMainWindow):
             points, panel.brush_size, adding=brush == BRUSH_ADD, snap=panel.snap
         )
 
+    # -- liquify (PLAN.md 2.11, 3.16) ------------------------------------
+
+    def toggle_liquify(self) -> None:
+        """Open liquify, or go back to editing if it is open (L)."""
+        if self._liquify_mode:
+            self.leave_liquify()
+        else:
+            self.enter_liquify()
+
+    def enter_liquify(self) -> None:
+        """Put the liquify panel in the inspector's place, its brush on the photo.
+
+        As for the portrait: the tools that take the click on the photo are
+        put down, a crop in progress is finished, and another mode, if open,
+        is left first (L-01). Undo and redo go on working.
+        """
+        if self._liquify_mode or self.controller.current is None:
+            self.toolbar.liquify_button.setChecked(self._liquify_mode)
+            return
+        self.leave_portrait()
+        self.leave_watermark()
+        self.leave_collage()
+        if self.controller.cropping:
+            self.finish_crop()
+        self.set_spot_tool(False)
+        self.set_picking_white_balance(False)
+        self._liquify_mode = True
+        self.toolbar.liquify_button.setChecked(True)
+        panel = self.liquify_panel
+        panel.set_strokes(len(self.controller.liquify_strokes))
+        self.inspector.hide()
+        panel.show()
+        self.preview.canvas.liquify.set_open(True)
+        self._show_liquify_brush()
+        self.preview.canvas.setFocus()
+
+    def leave_liquify(self) -> None:
+        """Go back to editing; the strokes stay with each photo."""
+        if not self._liquify_mode:
+            return
+        self._liquify_mode = False
+        canvas = self.preview.canvas
+        canvas.liquify.set_open(False)
+        canvas.refresh_cursor()
+        canvas.update()
+        self.toolbar.liquify_button.setChecked(False)
+        self.liquify_panel.hide()
+        if not self.is_inspector_collapsed():
+            self.inspector.show()
+        self.preview.setFocus()
+
+    @property
+    def in_liquify(self) -> bool:
+        """Return whether liquify is open."""
+        return self._liquify_mode
+
+    def _show_liquify_brush(self) -> None:
+        """Give the photo's brush what the panel says, at the size it is on screen."""
+        panel = self.liquify_panel
+        canvas = self.preview.canvas
+        has_photo = self.controller.current is not None
+        canvas.liquify.set_brush(
+            panel.tool, self.controller.shown_radius(panel.brush_size) if has_photo else 0.0
+        )
+        canvas.refresh_cursor()
+        canvas.update()
+
+    def _on_liquify_stroke_changed(self, points: list[tuple[float, float]]) -> None:
+        """Show the stroke being painted as a draft (PLAN.md 3.16)."""
+        panel = self.liquify_panel
+        self.controller.draft_liquify(points, panel.tool, panel.brush_size, panel.strength)
+
+    def _on_liquify_painted(self, points: list[tuple[float, float]]) -> None:
+        """Reshape the photo along the stroke just painted."""
+        panel = self.liquify_panel
+        self.controller.add_liquify_stroke(points, panel.tool, panel.brush_size, panel.strength)
+
     # -- the watermark (PLAN.md 2.9, 3.14) -------------------------------
 
     def toggle_watermark(self) -> None:
@@ -920,6 +1019,7 @@ class MainWindow(QMainWindow):
             self.toolbar.watermark_button.setChecked(self._watermark_mode)
             return
         self.leave_portrait()
+        self.leave_liquify()
         self.leave_collage()
         if self.controller.cropping:
             self.finish_crop()
@@ -1027,6 +1127,7 @@ class MainWindow(QMainWindow):
         if self._collage_mode:
             return
         self.leave_portrait()
+        self.leave_liquify()
         self.leave_watermark()
         if self.controller.cropping:
             self.finish_crop()
@@ -1092,6 +1193,7 @@ class MainWindow(QMainWindow):
         """
         has_photo = self.controller.current is not None
         self.toolbar.portrait_button.setEnabled(has_photo)
+        self.toolbar.liquify_button.setEnabled(has_photo)
         self.toolbar.watermark_button.setEnabled(has_photo)
 
     def choose_collage_photo(self, slot: int) -> None:
@@ -1293,6 +1395,9 @@ class MainWindow(QMainWindow):
             self.portrait_panel.set_skin(geometry_now.skin)
             self._show_portrait_brush()
             self.controller.request_skin_shown()
+        if self._liquify_mode:
+            self.liquify_panel.set_strokes(len(geometry_now.liquify))
+            self._show_liquify_brush()
         self.preview.canvas.update()
 
     def _on_lens_set(self, settings: LensSettings, dragging: bool) -> None:
@@ -1457,13 +1562,20 @@ class MainWindow(QMainWindow):
     def resize_spot_brush(self, larger: bool) -> None:
         """Make the brush, or the selected spot, a step larger or smaller ([ and ]).
 
-        In the portrait it is the portrait's brush (PLAN.md 3.15).
+        In the portrait it is the portrait's brush (PLAN.md 3.15), and in
+        liquify the liquify brush (3.16).
         """
         if self._portrait_mode:
             panel = self.portrait_panel
             factor = SPOT_SIZE_STEP if larger else 1.0 / SPOT_SIZE_STEP
             panel.set_brush_size(panel.brush_size * factor)
             self._show_portrait_brush()
+            return
+        if self._liquify_mode:
+            liquify_panel = self.liquify_panel
+            factor = SPOT_SIZE_STEP if larger else 1.0 / SPOT_SIZE_STEP
+            liquify_panel.set_brush_size(liquify_panel.brush_size * factor)
+            self._show_liquify_brush()
             return
         if not self.spot_tool_on:
             return
@@ -1878,6 +1990,7 @@ class MainWindow(QMainWindow):
             "shortcut.portrait_add": lambda: self.toggle_portrait_brush(BRUSH_ADD),
             "shortcut.portrait_remove": lambda: self.toggle_portrait_brush(BRUSH_REMOVE),
             "shortcut.portrait_show": self.toggle_portrait_showing,
+            "shortcut.liquify": self.toggle_liquify,
             "shortcut.settings": self.open_settings,
             "shortcut.fullscreen": self.toggle_full_screen,
             "shortcut.zoom_in": canvas.zoom_in,
@@ -1916,6 +2029,8 @@ class MainWindow(QMainWindow):
             return
         if not self._portrait_mode and key in _PORTRAIT_ONLY:
             return
+        if self._liquify_mode and key in _NOT_IN_PORTRAIT:
+            return
         handler()
 
     def _show_tab(self, tab: InspectorTab) -> None:
@@ -1948,6 +2063,8 @@ class MainWindow(QMainWindow):
             self.portrait_panel.set_brush(None)
         elif self._portrait_mode:
             self.leave_portrait()
+        elif self._liquify_mode:
+            self.leave_liquify()
         elif self._collage_mode and self.collage_canvas.aligning:
             # Esc ends the nearer thing first: aligning, then the collage.
             self.collage_panel.set_aligning(False)
@@ -2065,9 +2182,9 @@ class MainWindow(QMainWindow):
             return False
         if event.key() not in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
             return False
-        if self._watermark_mode or self._portrait_mode:
-            # Neither the watermark's panel nor the portrait's is the
-            # inspector the key folds away, so Tab moves between its
+        if self._watermark_mode or self._portrait_mode or self._liquify_mode:
+            # None of the watermark's, the portrait's or the liquify panel
+            # is the inspector the key folds away, so Tab moves between its
             # controls as usual.
             return False
         self.toggle_focus_mode()
@@ -2193,7 +2310,7 @@ class MainWindow(QMainWindow):
 
 #: What the keyboard still does while the collage is open: everything else
 #: acts on the photo being edited, which the collage covers (PLAN.md 3.13).
-#: The portrait and the watermark keys leave the collage for that mode.
+#: The portrait, liquify and watermark keys leave the collage for that mode.
 _COLLAGE_SHORTCUTS: frozenset[str] = frozenset(
     {
         "shortcut.toggle_filmstrip",
@@ -2203,16 +2320,18 @@ _COLLAGE_SHORTCUTS: frozenset[str] = frozenset(
         "shortcut.collage",
         "shortcut.watermark",
         "shortcut.portrait",
+        "shortcut.liquify",
         "shortcut.settings",
         "shortcut.fullscreen",
         "shortcut.crop_cancel",
     }
 )
 
-#: What does nothing while the portrait is open (PLAN.md 3.15): the keys
-#: that work on the editing panel it covers, or that take the click on the
-#: photo away from its brush. Everything else - history, stepping through
-#: the photos, zooming, exporting - goes on as in the editor.
+#: What does nothing while the portrait is open (PLAN.md 3.15), or liquify
+#: (3.16): the keys that work on the editing panel it covers, or that take
+#: the click on the photo away from its brush. Everything else - history,
+#: stepping through the photos, zooming, exporting - goes on as in the
+#: editor.
 _NOT_IN_PORTRAIT: frozenset[str] = frozenset(
     {
         "shortcut.white_balance_pick",
@@ -2253,6 +2372,7 @@ _WATERMARK_SHORTCUTS: frozenset[str] = frozenset(
     {
         "shortcut.watermark",
         "shortcut.portrait",
+        "shortcut.liquify",
         "shortcut.collage",
         "shortcut.crop_cancel",
         "shortcut.toggle_filmstrip",
