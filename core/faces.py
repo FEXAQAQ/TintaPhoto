@@ -659,6 +659,33 @@ BODY_CHIN: Final[float] = 0.6
 #: How far from a face its skin may reach, in S: across, below and above
 #: the middle of the face.
 BODY_REACH: Final[tuple[float, float, float]] = (6.0, 12.0, 3.0)
+#: Clothes, crossed arms and hands cut a body's skin into pieces: the chest
+#: from the belly, the belly from the legs. A piece the colour of skin that
+#: is not joined to what was found is taken too where it is at least
+#: BODY_HOP_LEAST square S, lies within BODY_HOP_GAP S of it, and is like it:
+#: its median colour within BODY_HOP_COLOUR stops of red and blue of the
+#: skin found and its texture (the median slope of brightness after a blur
+#: of BODY_HOP_BLUR pixels) at most BODY_HOP_TEXTURE times as rough; or, as
+#: smooth as the skin found or smoother, within BODY_HOP_SMOOTH_COLOUR
+#: stops - a belly in the sun beside a chest in shade. Ground, gravel, bark
+#: and leaves the colour of skin are two to twelve times as rough (measured
+#: on the user's portraits, 2026-11-07). As across an edge, a piece brighter
+#: than the skin found is lit (BODY_LIT_SHARE, BODY_LIT_MARGIN) is a wall or
+#: a cloth; pieces of skin measured 0.4 to 1.3 stops below it. Pieces taken
+#: count as found for the next of BODY_HOP_ROUNDS rounds, so the legs follow
+#: the belly.
+BODY_HOP_LEAST: Final[float] = 0.3
+BODY_HOP_GAP: Final[float] = 1.2
+BODY_HOP_COLOUR: Final[float] = 0.12
+BODY_HOP_TEXTURE: Final[float] = 1.6
+BODY_HOP_SMOOTH_COLOUR: Final[float] = 0.24
+BODY_HOP_BLUR: Final[float] = 0.7
+BODY_HOP_ROUNDS: Final[int] = 4
+#: How far below the middle of a face such pieces may lie, in S, in place of
+#: BODY_REACH's: the legs of a person seen whole lie twenty faces below it.
+#: Only pieces taken this way reach so far - the skin joined to the face
+#: stops at BODY_REACH - or the feet would run on into a pavement.
+BODY_HOP_BELOW: Final[float] = 22.0
 #: A photo whose skin has hardly any colour is black and white, or nearly:
 #: colour cannot tell skin from anything else there, so only the face is
 #: taken. In stops of red and blue against green, from grey.
@@ -669,6 +696,85 @@ BODY_LEAST_COLOUR: Final[float] = 0.12
 BODY_CORE_SHARE: Final[float] = 0.85
 #: The mask beyond the face is softened by this many S.
 BODY_SOFTEN: Final[float] = 0.04
+
+
+def _reach(
+    placements: list[Placement], shape: tuple[int, ...], below: float
+) -> NDArray[np.bool_]:
+    """Return where skin may lie around *placements*: BODY_REACH, *below* S downwards."""
+    reach = np.zeros(shape[:2], dtype=np.uint8)
+    for placement in placements:
+        sideways = BODY_REACH[0] * placement.size
+        down = below * placement.size
+        above = BODY_REACH[2] * placement.size
+        cx, cy = placement.centre
+        cv2.ellipse(
+            reach,
+            (int(round(cx)), int(round(cy + (down - above) / 2.0))),
+            (int(round(sideways)), int(round((down + above) / 2.0))),
+            0.0, 0.0, 360.0, 1, -1,
+        )
+    return reach > 0
+
+
+def _hop(
+    body: NDArray[np.bool_],
+    pieces: NDArray[np.bool_],
+    red: NDArray[np.float32],
+    blue: NDArray[np.float32],
+    brightness: NDArray[np.float32],
+    least: float,
+) -> NDArray[np.bool_]:
+    """Return *body* with the *pieces* of skin cut off from it that are like it.
+
+    See BODY_HOP_LEAST and the constants after it. *least* is the size of
+    the smallest face, in pixels.
+    """
+    count, labels, stats, _centres = cv2.connectedComponentsWithStats(
+        (pieces & ~body).astype(np.uint8), connectivity=4
+    )
+    if count <= 1 or not body.any():
+        return body
+    texture = np.abs(
+        cv2.Laplacian(cv2.GaussianBlur(brightness, (0, 0), BODY_HOP_BLUR), cv2.CV_32F)
+    )
+    own_red = float(np.median(red[body]))
+    own_blue = float(np.median(blue[body]))
+    own_texture = max(float(np.median(texture[body])), _EPSILON)
+    lit = float(np.percentile(brightness[body], BODY_LIT_SHARE)) + BODY_LIT_MARGIN
+    large = stats[:, cv2.CC_STAT_AREA] >= BODY_HOP_LEAST * least * least
+    large[0] = False
+    taken = body.copy()
+    tried = np.zeros(count, dtype=bool)
+    for _round in range(BODY_HOP_ROUNDS):
+        away = cv2.distanceTransform((~taken).astype(np.uint8), cv2.DIST_L2, 5)
+        near = away <= np.float32(BODY_HOP_GAP * least)
+        within = np.zeros(count, dtype=bool)
+        within[np.unique(labels[near])] = True
+        added = False
+        for piece in np.nonzero(within & large & ~tried)[0]:
+            tried[piece] = True
+            left, top = stats[piece, cv2.CC_STAT_LEFT], stats[piece, cv2.CC_STAT_TOP]
+            box = (
+                slice(top, top + stats[piece, cv2.CC_STAT_HEIGHT]),
+                slice(left, left + stats[piece, cv2.CC_STAT_WIDTH]),
+            )
+            part = labels[box] == piece
+            apart = max(
+                abs(float(np.median(red[box][part])) - own_red),
+                abs(float(np.median(blue[box][part])) - own_blue),
+            )
+            rough = float(np.median(texture[box][part])) / own_texture
+            if float(np.median(brightness[box][part])) > lit:
+                continue
+            if (apart <= BODY_HOP_COLOUR and rough <= BODY_HOP_TEXTURE) or (
+                apart <= BODY_HOP_SMOOTH_COLOUR and rough <= 1.0
+            ):
+                taken[box] |= part
+                added = True
+        if not added:
+            break
+    return taken
 
 
 def is_coloured(tone: SkinTone) -> bool:
@@ -775,17 +881,10 @@ def body_mask(
         float(np.percentile(lit_skin, BODY_LIT_SHARE)) if lit_skin.size else float("inf")
     )
 
-    # Where the skin may reach: around each face, mostly below it.
-    reach = np.zeros(red.shape, dtype=np.uint8)
-    for placement in coloured:
-        sideways, below, above = (r * placement.size for r in BODY_REACH)
-        cx, cy = placement.centre
-        cv2.ellipse(
-            reach,
-            (int(round(cx)), int(round(cy + (below - above) / 2.0))),
-            (int(round(sideways)), int(round((below + above) / 2.0))),
-            0.0, 0.0, 360.0, 1, -1,
-        )
+    # Where the skin may reach: around each face, mostly below it; pieces
+    # cut off from it by clothes reach further down.
+    reach = _reach(coloured, red.shape, BODY_REACH[1])
+    further = _reach(coloured, red.shape, BODY_HOP_BELOW)
     # The head is closed but for an opening under the chin as wide as the
     # neck: the skin beyond the face sets out from there and only there.
     rows, columns = np.indices(red.shape, dtype=np.float32)
@@ -807,7 +906,7 @@ def body_mask(
         )
         closed |= head & ~under
         opening |= head & under
-    ground = (like > 0.5) & (reach > 0) & ~closed
+    ground = (like > 0.5) & further & ~closed
 
     # Edges: where brightness or colour slope steeply between pixels that
     # are both the colour of skin. Where skin meets hair or a cloth the
@@ -831,7 +930,6 @@ def body_mask(
             # The bright side of the edge lies within a couple of pixels.
             steep &= cv2.dilate(too_bright.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
         edge |= steep
-    barrier = edge & ground
     least = min(p.size for p in coloured)
     radius = max(1, int(round(BODY_BRIDGE * least / 2.0)))
     disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
@@ -840,7 +938,8 @@ def body_mask(
     # or the corner between a shoulder and a skin coloured wall would be.
     bright_ground = (ground & too_bright).astype(np.uint8)
     bridged &= ground | (cv2.dilate(bright_ground, disc) == 0)
-    candidate = (bridged & ~barrier & (reach > 0) & ~closed).astype(np.uint8)
+    pieces = bridged & ~(edge & ground) & further & ~closed
+    candidate = (pieces & reach).astype(np.uint8)
     seed = (mask > 0.5) & opening & (candidate > 0)
     count, labels = cv2.connectedComponents(candidate, connectivity=4)
     if count <= 1 or not seed.any():
@@ -848,7 +947,7 @@ def body_mask(
     joined = np.zeros(count, dtype=bool)
     joined[np.unique(labels[seed])] = True
     joined[0] = False
-    body = joined[labels]
+    body = _hop(joined[labels], pieces, red, blue, brightness, least)
     # Edge pixels lying along the skin belong to it; their colour decides.
     body = cv2.dilate(body.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
     beyond = np.where(body, fill_holes(like, BODY_HOLE_FILL * least), np.float32(0.0))

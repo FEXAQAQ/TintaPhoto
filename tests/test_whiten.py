@@ -259,3 +259,42 @@ def test_faces_are_looked_for_when_only_whitening_wants_them() -> None:
     attached = face_detector.attach(photo, JPEG.with_value("whiten", 30.0), None, given)
     assert attached.faces == given
     assert face_detector.attach(photo, JPEG, None, given) is photo
+
+
+def _cut_by_a_cloth(rough: bool = False) -> DecodedPhoto:
+    """The test person with a blue cloth across the chest, as a bikini's top cuts it.
+
+    The skin carries a little grain, as skin does. With *rough*, the part
+    below the cloth is grained like gravel or a pavement the colour of skin.
+    """
+    photo = _photo()
+    rng = np.random.default_rng(7)
+    grain = rng.normal(1.0, 0.02, photo.image.shape[:2]).astype(np.float32)
+    image = photo.image * grain[..., None]
+    person = _person_area()
+    below = person.copy()
+    below[:500] = False
+    if rough:
+        speckle = cv2.GaussianBlur(rng.normal(1.0, 0.35, photo.image.shape[:2]), (0, 0), 1.0)
+        image[below] *= np.clip(speckle, 0.4, 1.6).astype(np.float32)[below][..., None]
+    band = person.copy()
+    band[:470] = False
+    band[500:] = False
+    image[band] = _linear(BACKGROUND)
+    return replace(photo, image=image.astype(np.float32))
+
+
+def test_skin_cut_off_by_clothes_is_taken_too() -> None:
+    """2026-11-07: a belly below a bikini's top was left out, the chest above it whitened."""
+    body = _body(_cut_by_a_cloth())
+    assert body[440, 200] > 0.9  # above the cloth
+    for x, y in ((200, 550), (120, 580), (300, 580)):
+        assert body[y, x] > 0.9, (x, y)
+    assert body[485, 200] < 0.1  # the cloth itself
+    assert body[30, 30] == 0.0
+
+
+def test_a_rough_surface_the_colour_of_skin_past_a_gap_is_left_out() -> None:
+    body = _body(_cut_by_a_cloth(rough=True))
+    assert body[440, 200] > 0.9
+    assert body[550, 200] < 0.1
