@@ -603,10 +603,11 @@ def _handle(guide: liquify.FaceGuide, name: str) -> tuple[float, float]:
     return guide.handles[liquify.HANDLES.index(name)]
 
 
-def test_the_guide_has_eight_points_and_where_each_slider_works() -> None:
+def test_the_guide_has_ten_points_and_where_each_slider_works() -> None:
     guide = liquify.face_guide(FACE, SIZE)
     assert guide is not None
-    assert len(guide.handles) == len(liquify.HANDLES) == 8
+    assert len(guide.handles) == len(liquify.HANDLES) == 10
+    assert len(guide.reaches["face_width"]) == 3  # the cheeks and both corners of the jaw
     assert np.allclose(guide.handles[:5], FACE.points[:5])
     assert set(guide.reaches) == set(liquify.FACE_NAMES)
     assert len(guide.reaches["eyes"]) == 2
@@ -679,3 +680,52 @@ def test_points_placed_by_hand_survive_being_stored() -> None:
     assert "chin" not in plain and "cheeks" not in plain and "edited" not in plain
     odd = liquify.FaceMarks.from_dict({**plain, "chin": [0.5], "cheeks": [[0.1, 0.1]], "edited": 1})
     assert odd is not None and odd.chin is None and odd.cheeks is None and not odd.edited
+
+
+# -- the jaw (PLAN.md 2.11 L-12) --------------------------------------------
+
+
+def test_the_jaw_lies_on_the_curve_from_cheek_to_cheek_through_the_chin() -> None:
+    guide = liquify.face_guide(FACE, SIZE)
+    assert guide is not None
+    left_cheek, right_cheek = _handle(guide, "left_cheek"), _handle(guide, "right_cheek")
+    chin = _handle(guide, "chin")
+    left_jaw, right_jaw = _handle(guide, "left_jaw"), _handle(guide, "right_jaw")
+    # Between each cheek and the chin, below the cheek and above the chin.
+    assert left_cheek[0] < left_jaw[0] < chin[0] < right_jaw[0] < right_cheek[0]
+    assert left_cheek[1] < left_jaw[1] < chin[1]
+    # A face square to the camera has its jaw square too.
+    assert left_jaw[1] == pytest.approx(right_jaw[1], abs=1e-6)
+    assert chin[0] - left_jaw[0] == pytest.approx(right_jaw[0] - chin[0], abs=1e-6)
+
+
+def test_dragging_a_corner_of_the_jaw_keeps_the_other_and_the_cheeks_as_shown() -> None:
+    guide = liquify.face_guide(FACE, SIZE)
+    assert guide is not None
+    moved = liquify.moved_handle(FACE, "left_jaw", (0.4, 0.62), SIZE)
+    assert moved.edited and moved.jaws is not None
+    assert moved.jaws[0] == (0.4, 0.62)
+    assert moved.jaws[1] == pytest.approx(_handle(guide, "right_jaw"))
+    # Moving a cheek writes the jaw down where it was shown, so it stays put.
+    cheek = liquify.moved_handle(FACE, "left_cheek", (0.3, 0.5), SIZE)
+    assert cheek.jaws is not None
+    assert cheek.jaws[0] == pytest.approx(_handle(guide, "left_jaw"))
+    stored = liquify.FaceMarks.from_dict(moved.to_dict())
+    assert stored == moved
+    assert liquify.FaceMarks.from_dict({**FACE.to_dict(), "jaws": [[0.1, 0.2]]}).jaws is None
+
+
+def test_slimming_draws_the_jaw_in_and_leaves_the_chin_where_it_is() -> None:
+    guide = liquify.face_guide(FACE, SIZE)
+    assert guide is not None
+    left_jaw, right_jaw = _handle(guide, "left_jaw"), _handle(guide, "right_jaw")
+    chin = _handle(guide, "chin")
+    slim = _shaped(face_width=-100.0)
+    (left, right, tip) = liquify.shown_points((left_jaw, right_jaw, chin), (), SIZE, slim)
+    assert left[0] > left_jaw[0] + 0.002 and right[0] < right_jaw[0] - 0.002
+    assert tip[0] == pytest.approx(chin[0], abs=1e-4)
+    # The corner of the jaw is drawn in further than with the cheeks alone.
+    placed = replace(FACE, jaws=((0.2, 0.9), (0.8, 0.9)))  # jaw put far out of the way
+    (cheeks_only,) = liquify.shown_points((left_jaw,), (), SIZE, replace(slim, faces=(placed,)))
+    assert left[0] - left_jaw[0] > cheeks_only[0] - left_jaw[0]
+

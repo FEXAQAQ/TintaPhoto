@@ -108,7 +108,7 @@ def test_every_point_has_a_name_and_a_place_to_go(qt_app: object) -> None:
     overlay = _overlay()
     for handle, key in overlay.names(0).items():
         assert tr(key) != key, handle
-    for feature in ("eye", "nose", "mouth", "chin", "cheek"):
+    for feature in ("eye", "nose", "mouth", "chin", "cheek", "jaw"):
         key = f"liquify.handle.{feature}.where"
         assert tr(key) != key
 
@@ -132,3 +132,11 @@ def test_a_face_slider_in_hand_is_outlined_with_arrows_and_a_line(qt_app: object
     assert any(image.pixelColor(x, top).alpha() > 0 for x in range(250, 350))  # the line at the top
     overlay.clear_spotlight()
     assert overlay.spotlit == ""
+
+
+def test_the_corners_of_the_jaw_are_named_by_their_side(qt_app: object) -> None:
+    overlay = _overlay()
+    names = overlay.names(0)
+    assert names["left_jaw"] == "liquify.handle.jaw_left"
+    assert names["right_jaw"] == "liquify.handle.jaw_right"
+    assert len(names) == len(liquify.HANDLES)

@@ -210,14 +210,25 @@ FACE_MOUTH_RATE: Final[float] = 0.35
 FACE_WIDTH_LOWER: Final[float] = 0.25
 FACE_WIDTH_REACH: Final[tuple[float, float]] = (1.6, 1.4)
 FACE_WIDTH_RATE: Final[float] = 0.18
+#:   and the jaw follows: about each corner of the jaw, within 0.7 S, the
+#:   face is drawn toward (or pushed from) the line down the middle of the
+#:   face through the chin, so narrowing slims along the jaw line and leaves
+#:   the tip of the chin where it is;
+FACE_JAW_REACH: Final[tuple[float, float]] = (0.7, 0.7)
+FACE_JAW_RATE: Final[float] = 0.12
+#:   until they are placed by hand the corners of the jaw lie on the curve
+#:   from cheek to cheek through the chin, a quarter of the way along from
+#:   each end.
+FACE_JAW_ALONG: Final[float] = 0.25
 #: * chin: the chin, 0.85 S below the mouth, moves down or up by up to
 #:   0.15 S, within 0.9 S across and 0.75 S along.
 FACE_CHIN_DROP: Final[float] = 0.85
 FACE_CHIN_REACH: Final[tuple[float, float]] = (0.9, 0.75)
 FACE_CHIN_RATE: Final[float] = 0.15
 #: The points of a face that can be dragged (PLAN.md 2.11 L-12), in order:
-#: the five the detector finds, then the chin and the two cheeks, which are
-#: worked out from the face's size until they are moved by hand.
+#: the five the detector finds, then the chin, the two cheeks and the two
+#: corners of the jaw, which are worked out from the face's size until they
+#: are moved by hand.
 HANDLES: Final[tuple[str, ...]] = (
     "left_eye",
     "right_eye",
@@ -227,6 +238,8 @@ HANDLES: Final[tuple[str, ...]] = (
     "chin",
     "left_cheek",
     "right_cheek",
+    "left_jaw",
+    "right_jaw",
 )
 #: Which slider each point is where for.
 HANDLE_FEATURES: Final[dict[str, str]] = {
@@ -238,6 +251,8 @@ HANDLE_FEATURES: Final[dict[str, str]] = {
     "chin": "chin",
     "left_cheek": "face_width",
     "right_cheek": "face_width",
+    "left_jaw": "face_width",
+    "right_jaw": "face_width",
 }
 #: The narrowest the cheeks are taken to be apart, in S, so that two cheeks
 #: dragged on top of each other still leave a face width to work with.
@@ -322,10 +337,12 @@ class FaceMarks:
     points: tuple[Point, ...]
     width: float = 2.0
     height: float = 2.7
-    #: The tip of the chin and the two cheeks where the hand put them
-    #: (L-12), or ``None`` while they are worked out from the face's size.
+    #: The tip of the chin, the two cheeks and the two corners of the jaw
+    #: where the hand put them (L-12), or ``None`` while they are worked out
+    #: from the face's size.
     chin: Point | None = None
     cheeks: tuple[Point, Point] | None = None
+    jaws: tuple[Point, Point] | None = None
     #: Whether any point was moved by hand: such a face is kept as it is
     #: rather than found again.
     edited: bool = False
@@ -341,6 +358,8 @@ class FaceMarks:
             stored["chin"] = [self.chin[0], self.chin[1]]
         if self.cheeks is not None:
             stored["cheeks"] = [[x, y] for x, y in self.cheeks]
+        if self.jaws is not None:
+            stored["jaws"] = [[x, y] for x, y in self.jaws]
         if self.edited:
             stored["edited"] = True
         return stored
@@ -364,18 +383,15 @@ class FaceMarks:
         width = _as_float(data.get("width"))
         height = _as_float(data.get("height"))
         chin = _stored_point(data.get("chin"))
-        raw_cheeks = data.get("cheeks")
-        cheeks: tuple[Point, Point] | None = None
-        if isinstance(raw_cheeks, list) and len(raw_cheeks) == 2:
-            left, right = _stored_point(raw_cheeks[0]), _stored_point(raw_cheeks[1])
-            if left is not None and right is not None:
-                cheeks = (left, right)
+        cheeks = _stored_pair(data.get("cheeks"))
+        jaws = _stored_pair(data.get("jaws"))
         return cls(
             points=tuple(points),
             width=2.0 if width is None or width <= 0 else width,
             height=2.7 if height is None or height <= 0 else height,
             chin=chin,
             cheeks=cheeks,
+            jaws=jaws,
             edited=data.get("edited") is True,
         )
 
@@ -489,6 +505,15 @@ def _face_frame(marks: FaceMarks, extent: tuple[float, float]) -> _FaceFrame | N
         right_cheek = middle + half_width * across
     else:
         left_cheek, right_cheek = at(marks.cheeks[0]), at(marks.cheeks[1])
+    if marks.jaws is None:
+        # On the one curve from cheek to cheek that passes through the chin.
+        bend = 2.0 * chin - (left_cheek + right_cheek) / 2.0
+        t = FACE_JAW_ALONG
+        left_jaw = (1 - t) ** 2 * left_cheek + 2 * t * (1 - t) * bend + t**2 * right_cheek
+        t = 1.0 - FACE_JAW_ALONG
+        right_jaw = (1 - t) ** 2 * left_cheek + 2 * t * (1 - t) * bend + t**2 * right_cheek
+    else:
+        left_jaw, right_jaw = at(marks.jaws[0]), at(marks.jaws[1])
     return _FaceFrame(
         points={
             "left_eye": left_eye,
@@ -499,6 +524,8 @@ def _face_frame(marks: FaceMarks, extent: tuple[float, float]) -> _FaceFrame | N
             "chin": chin,
             "left_cheek": left_cheek,
             "right_cheek": right_cheek,
+            "left_jaw": left_jaw,
+            "right_jaw": right_jaw,
         },
         across=across,
         down=down,
@@ -543,8 +570,11 @@ def _reaches(frame: _FaceFrame) -> dict[str, list[_Reach]]:
                 FACE_MOUTH_REACH[1] * frame.half_mouth,
             )
         ],
+        # The cheeks first: the arrows of the outline are drawn on it.
         "face_width": [
-            (cheeks, FACE_WIDTH_REACH[0] * half_width, FACE_WIDTH_REACH[1] * size)
+            (cheeks, FACE_WIDTH_REACH[0] * half_width, FACE_WIDTH_REACH[1] * size),
+            (points["left_jaw"], FACE_JAW_REACH[0] * size, FACE_JAW_REACH[1] * size),
+            (points["right_jaw"], FACE_JAW_REACH[0] * size, FACE_JAW_REACH[1] * size),
         ],
         "chin": [(points["chin"], FACE_CHIN_REACH[0] * size, FACE_CHIN_REACH[1] * size)],
     }
@@ -554,7 +584,7 @@ def _reaches(frame: _FaceFrame) -> dict[str, list[_Reach]]:
 class FaceGuide:
     """One face as the point editor draws it (PLAN.md 3.16), in fractions of the photo.
 
-    *handles* are the eight points of :data:`HANDLES`. *reaches* says, for
+    *handles* are the ten points of :data:`HANDLES`. *reaches* says, for
     each slider, where it works: each ellipse as its middle, the end of its
     axis across the face and the end of its axis down the face.
     """
@@ -564,7 +594,7 @@ class FaceGuide:
 
 
 def face_guide(marks: FaceMarks, size: tuple[int, int]) -> FaceGuide | None:
-    """Return where *marks* puts the eight points and the sliders' reach on a photo of *size*."""
+    """Return where *marks* puts the ten points and the sliders' reach on a photo of *size*."""
     grid = grid_for(size)
     extent_x, extent_y = grid.extent
     frame = _face_frame(marks, grid.extent)
@@ -595,9 +625,10 @@ def moved_handle(
 ) -> FaceMarks:
     """Return *marks* with *handle* dragged to *point* (fractions of a photo of *size*).
 
-    The five points the detector found move by themselves; the chin and the
-    cheeks, until they are moved, follow the face they were worked out from
-    and so are written down as they stand the first time one of them is.
+    The five points the detector found move by themselves; the chin, the
+    cheeks and the jaw, until they are moved, follow the face they were
+    worked out from and so are written down as they stand the first time one
+    of a pair is - the other of the pair stays where it was shown.
     """
     point = (_fraction(point[0]), _fraction(point[1]))
     index = HANDLES.index(handle)
@@ -608,13 +639,28 @@ def moved_handle(
     if handle == "chin":
         return replace(marks, chin=point, edited=True)
     guide = face_guide(marks, size)
-    cheeks = marks.cheeks
-    if cheeks is None:
-        if guide is None:
-            return marks
-        cheeks = (guide.handles[6], guide.handles[7])
-    cheeks = (point, cheeks[1]) if handle == "left_cheek" else (cheeks[0], point)
-    return replace(marks, cheeks=cheeks, edited=True)
+    if guide is None:
+        return marks
+    shown = dict(zip(HANDLES, guide.handles))
+    if handle in ("left_cheek", "right_cheek"):
+        cheeks = marks.cheeks or (shown["left_cheek"], shown["right_cheek"])
+        cheeks = (point, cheeks[1]) if handle == "left_cheek" else (cheeks[0], point)
+        # The jaw was worked out from the cheeks; it stays where it was shown.
+        jaws = marks.jaws or (shown["left_jaw"], shown["right_jaw"])
+        return replace(marks, cheeks=cheeks, jaws=jaws, edited=True)
+    jaws = marks.jaws or (shown["left_jaw"], shown["right_jaw"])
+    jaws = (point, jaws[1]) if handle == "left_jaw" else (jaws[0], point)
+    return replace(marks, jaws=jaws, edited=True)
+
+
+def _stored_pair(data: Any) -> tuple[Point, Point] | None:
+    """Return two stored points, left then right, or ``None`` if they are not two points."""
+    if not isinstance(data, list) or len(data) != 2:
+        return None
+    left, right = _stored_point(data[0]), _stored_point(data[1])
+    if left is None or right is None:
+        return None
+    return left, right
 
 
 def _stored_point(data: Any) -> Point | None:
@@ -956,7 +1002,17 @@ def _face_values(grid: Grid, face: FaceShape | None) -> NDArray[np.float32]:
             widen(reaches["mouth"][0], FACE_MOUTH_RATE * amount)
         amount = face.face_width / FACE_LIMIT
         if amount:
-            widen(reaches["face_width"][0], FACE_WIDTH_RATE * amount)
+            cheeks_reach, *jaw_reaches = reaches["face_width"]
+            widen(cheeks_reach, FACE_WIDTH_RATE * amount)
+            chin = frame.points["chin"]
+            for jaw, wide, tall in jaw_reaches:
+                # Weighed about the corner of the jaw, moved toward the line
+                # down the middle of the face through the chin.
+                along, below = local(jaw)
+                from_middle, _ = local(chin)
+                moved = -FACE_JAW_RATE * amount * weight(along, below, wide, tall) * from_middle
+                shift_x += moved * across[0]
+                shift_y += moved * across[1]
         amount = face.chin / FACE_LIMIT
         if amount:
             chin, wide, tall = reaches["chin"][0]

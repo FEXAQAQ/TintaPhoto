@@ -5,10 +5,10 @@ be told apart at a glance:
 
 * each feature has its own mark - a ring for the eyes, a triangle for the
   tip of the nose, squares for the corners of the mouth, a ring with a dot
-  for the chin and diamonds for the cheeks - and every point is named
-  beside it, left and right as they are on screen;
+  for the chin and diamonds for the cheeks and the corners of the jaw - and
+  every point is named beside it, left and right as they are on screen;
 * lines join the eyes and the corners of the mouth, and a dashed curve runs
-  from cheek to cheek through the chin, the outline of the lower face;
+  through the five points of the lower face - cheek, jaw, chin, jaw, cheek;
 * the point under the pointer, or the one being dragged, is filled in, the
   reach of the slider it is for is outlined, and a line on the photo says
   where it belongs.
@@ -48,6 +48,7 @@ _PAIRS: Final[tuple[tuple[str, str, str], ...]] = (
     ("left_eye", "right_eye", "eye"),
     ("left_mouth", "right_mouth", "mouth"),
     ("left_cheek", "right_cheek", "cheek"),
+    ("left_jaw", "right_jaw", "jaw"),
 )
 #: The sliders that widen and narrow across the face; the chin moves along
 #: it instead.
@@ -62,6 +63,7 @@ _MARKS: Final[dict[str, str]] = {
     "mouth": "square",
     "chin": "target",
     "cheek": "diamond",
+    "jaw": "diamond",
 }
 
 
@@ -215,15 +217,11 @@ class FaceOverlay(QObject):
             lines.moveTo(handles[_INDEX[first]])
             lines.lineTo(handles[_INDEX[second]])
         self._stroke(painter, lines)
-        left = handles[_INDEX["left_cheek"]]
-        right = handles[_INDEX["right_cheek"]]
-        chin = handles[_INDEX["chin"]]
-        # The one curve from cheek to cheek that passes through the chin.
-        bend = chin * 2.0 - (left + right) / 2.0
-        jaw = QPainterPath()
-        jaw.moveTo(left)
-        jaw.quadTo(bend, right)
-        self._stroke(painter, jaw, Qt.PenStyle.DashLine)
+        outline = [
+            handles[_INDEX[name]]
+            for name in ("left_cheek", "left_jaw", "chin", "right_jaw", "right_cheek")
+        ]
+        self._stroke(painter, _through(outline), Qt.PenStyle.DashLine)
 
     def _draw_spotlight(self, painter: QPainter, photo: QRectF) -> None:
         """Outline where one face slider works, with arrows for which way, and say what it does."""
@@ -235,9 +233,11 @@ class FaceOverlay(QObject):
         font = QFont(painter.font())
         font.setPixelSize(theme.FONT_SIZE_LABEL)
         painter.setFont(font)
-        for centre, across, down in reaches:
+        for index, (centre, across, down) in enumerate(reaches):
             self._draw_reach(painter, photo, centre, across, down, Qt.PenStyle.DashLine)
-            if value:
+            # The face width's arrows stand on the cheeks' ellipse only: about
+            # the jaw the face moves toward its middle, not out from the corner.
+            if value and (feature != "face_width" or index == 0):
                 self._draw_arrows(painter, photo, feature, value, centre, across, down)
         self._draw_hint(painter, photo, text)
         painter.restore()
@@ -458,3 +458,23 @@ def _add_arrow(path: QPainterPath, start: QPointF, pointing: QPointF, length: fl
     path.moveTo(back + across)
     path.lineTo(tip)
     path.lineTo(back - across)
+
+
+def _through(points: list[QPointF]) -> QPainterPath:
+    """Return a smooth curve through every one of *points*, in order.
+
+    Each stretch is a cubic whose ends lean the way the points on either
+    side go, so the curve bends evenly and passes through every point.
+    """
+    path = QPainterPath()
+    if not points:
+        return path
+    path.moveTo(points[0])
+    for index in range(len(points) - 1):
+        before = points[max(index - 1, 0)]
+        start = points[index]
+        end = points[index + 1]
+        after = points[min(index + 2, len(points) - 1)]
+        path.cubicTo(start + (end - before) / 6.0, end - (after - start) / 6.0, end)
+    return path
+
