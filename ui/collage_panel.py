@@ -5,9 +5,10 @@ naming the mode, three groups that fold away like the inspector's, and an
 action row along the bottom. The panel only says what was chosen; the
 collage controller keeps it and the canvas draws it.
 
-The groups follow the order the choices are made in: the shape of the canvas
-and where it is split, then the photos - how they fit, whether they are one
-scene, how far each is zoomed and how the second is aligned - then the gap.
+The groups follow the order the choices are made in: the shape of the canvas,
+how and into how many pieces it is split, then the photos - how they fit,
+whether they are one scene, how far each is zoomed and how the later ones are
+aligned against the first - then the gap.
 """
 
 from __future__ import annotations
@@ -80,7 +81,7 @@ def zoom_spec(label_key: str) -> SliderSpec:
 
 
 def alignment_scale_spec() -> SliderSpec:
-    """Return the slider that scales the second photo against the first."""
+    """Return the slider that scales the photo being aligned against the first."""
     return SliderSpec(
         name="alignment_scale",
         label_key="collage.align_scale",
@@ -93,16 +94,19 @@ def alignment_scale_spec() -> SliderSpec:
     )
 
 
-#: What each half is called, by how the canvas is split.
-_SLOT_LABELS: dict[str, tuple[str, str]] = {
-    collage.SPLIT_SIDE_BY_SIDE: ("collage.slot.left", "collage.slot.right"),
-    collage.SPLIT_STACKED: ("collage.slot.top", "collage.slot.bottom"),
-}
-#: The zoom slider of each half, named after the half.
-_ZOOM_LABELS: dict[str, tuple[str, str]] = {
-    collage.SPLIT_SIDE_BY_SIDE: ("collage.zoom.left", "collage.zoom.right"),
-    collage.SPLIT_STACKED: ("collage.zoom.top", "collage.zoom.bottom"),
-}
+#: The photo rows and their zoom sliders are numbered 1 to 4, left to right
+#: or top to bottom, whatever the count and the split (PLAN.md 3.13).
+_SLOT_LABEL: Final[str] = "collage.slot"
+
+
+def _zoom_label(slot: int) -> str:
+    """Return the name of the zoom slider of the photo in *slot*."""
+    return f"collage.zoom.{slot + 1}"
+
+
+def _count_value(count: int) -> str:
+    """Return the value of the count choice that stands for *count* pieces."""
+    return str(count)
 
 
 class CollagePanel(QWidget):
@@ -110,13 +114,15 @@ class CollagePanel(QWidget):
 
     #: The layout the controls now describe.
     layout_changed = Signal(object)
-    #: The user wants to pick the photo for a half, by its slot.
+    #: The user wants to pick the photo for a piece, by its slot.
     choose_requested = Signal(int)
     #: A zoom slider moved: the slot, and the zoom as a factor of the fit.
     zoom_changed = Signal(int, float)
-    #: Aligning the second photo was turned on or off.
+    #: Aligning was turned on or off.
     aligning_toggled = Signal(bool)
-    #: The second photo's scale against the first, as a factor.
+    #: Which linked photo after the first is being aligned, by its slot.
+    aligning_slot_changed = Signal(int)
+    #: The scale of the photo being aligned against the first, as a factor.
     alignment_scale_changed = Signal(float)
     #: Back to editing photos one at a time.
     leave_requested = Signal()
@@ -128,6 +134,7 @@ class CollagePanel(QWidget):
         self._layout = Layout()
         self._paths: tuple[Path | None, ...] = (None,) * collage.SLOTS
         self._row_labels: list[QLabel] = []
+        self._name_rows: list[list[QWidget]] = []
         self._fit_widgets: list[QWidget] = []
         self._linked_widgets: list[QWidget] = []
 
@@ -190,17 +197,25 @@ class CollagePanel(QWidget):
         return [label, switch]
 
     def _build_layout_group(self) -> ControlGroup:
-        """The shape of the canvas, how it is split and where."""
+        """The shape of the canvas, how it is split, into how many and where."""
         group = ControlGroup("collage.group.layout", parent=self)
-        self.orientation_choice = Segmented(
-            [
-                (collage.ORIENTATION_LANDSCAPE, "collage.orientation.landscape"),
-                (collage.ORIENTATION_PORTRAIT, "collage.orientation.portrait"),
-            ],
+        self.platform_choice = Segmented(
+            [(platform, f"collage.platform.{platform}") for platform in collage.PLATFORMS],
             group,
         )
-        self.orientation_choice.chosen.connect(lambda _value: self._changed())
-        self._labelled(group, "collage.orientation", self.orientation_choice)
+        self.platform_choice.chosen.connect(lambda _value: self._changed())
+        self._labelled(group, "collage.platform", self.platform_choice)
+
+        # One row of canvases for each platform; only the chosen one shows.
+        self.canvas_choices: dict[str, Segmented] = {}
+        self._canvas_rows: dict[str, list[QWidget]] = {}
+        for platform, canvases in collage.PLATFORM_CANVASES.items():
+            choice = Segmented(
+                [(canvas, f"collage.canvas.{canvas}") for canvas in canvases], group
+            )
+            choice.chosen.connect(lambda _value: self._changed())
+            self.canvas_choices[platform] = choice
+            self._canvas_rows[platform] = self._labelled(group, "collage.canvas", choice)
 
         self.split_choice = Segmented(
             [
@@ -212,6 +227,15 @@ class CollagePanel(QWidget):
         self.split_choice.chosen.connect(lambda _value: self._changed())
         self._labelled(group, "collage.split", self.split_choice)
 
+        self.count_choice = Segmented(
+            [(_count_value(count), f"collage.count.{count}") for count in collage.COUNTS],
+            group,
+        )
+        self.count_choice.chosen.connect(lambda _value: self._changed())
+        self._labelled(group, "collage.count", self.count_choice)
+
+        # Two pieces have one seam, which a slider moves; three or four are
+        # moved on the canvas, where each seam can be taken hold of.
         self.seam_slider = SliderRow(seam_spec(), group)
         self.seam_slider.value_changed.connect(lambda *_: self._changed())
         group.add_row(self.seam_slider)
@@ -244,6 +268,7 @@ class CollagePanel(QWidget):
             button.clicked.connect(lambda _checked=False, s=slot: self.choose_requested.emit(s))
             row.addWidget(button)
             self.choose_buttons.append(button)
+            self._name_rows.append([label, name, button])
             group.add_layout(row)
 
         self.linked_switch = Switch(group)
@@ -262,7 +287,7 @@ class CollagePanel(QWidget):
 
         self.zoom_sliders: list[SliderRow] = []
         for slot in range(collage.SLOTS):
-            slider = SliderRow(zoom_spec(_ZOOM_LABELS[collage.SPLIT_SIDE_BY_SIDE][slot]), group)
+            slider = SliderRow(zoom_spec(_zoom_label(slot)), group)
             slider.value_changed.connect(
                 lambda _name, value, _dragging, s=slot: self.zoom_changed.emit(s, value / _PERCENT)
             )
@@ -272,6 +297,17 @@ class CollagePanel(QWidget):
         self.aligning_switch = Switch(group)
         self.aligning_switch.toggled.connect(self._on_aligning)
         self._linked_widgets += self._switch_row(group, "collage.aligning", self.aligning_switch)
+        # Which photo is aligned against the first, when there is a choice.
+        self.align_target_choice = Segmented(
+            [(str(slot), f"collage.align_target.{slot + 1}") for slot in range(1, collage.SLOTS)],
+            group,
+        )
+        self.align_target_choice.chosen.connect(
+            lambda value: self.aligning_slot_changed.emit(int(value))
+        )
+        self._align_target_widgets = self._labelled(
+            group, "collage.align_target", self.align_target_choice
+        )
         self.alignment_slider = SliderRow(alignment_scale_spec(), group)
         self.alignment_slider.value_changed.connect(
             lambda _name, value, _dragging: self.alignment_scale_changed.emit(value / _PERCENT)
@@ -286,7 +322,7 @@ class CollagePanel(QWidget):
         return group
 
     def _build_spacing_group(self) -> ControlGroup:
-        """The gap between the halves and its colour."""
+        """The gap between the pieces and its colour."""
         group = ControlGroup("collage.group.spacing", parent=self)
         self.gap_slider = SliderRow(gap_spec(), group)
         self.gap_slider.value_changed.connect(lambda *_: self._changed())
@@ -322,32 +358,58 @@ class CollagePanel(QWidget):
 
     @property
     def layout_value(self) -> Layout:
-        """Return the layout the controls now describe."""
+        """Return the layout the controls now describe.
+
+        A different count starts from even pieces; with two, the seam is the
+        slider's; with more, the seams stay where the canvas left them.
+        """
+        count = int(self.count_choice.value)
+        if count != self._layout.count:
+            seams: tuple[float, ...] = ()
+        elif count == collage.COUNT_MIN:
+            seams = (self.seam_slider.value / _PERCENT,)
+        else:
+            seams = self._layout.seams
+        platform = self.platform_choice.value
+        if platform == self._layout.platform:
+            canvas = self.canvas_choices[platform].value
+        else:
+            canvas = collage.with_platform(self._layout, platform).canvas
         return Layout(
-            orientation=self.orientation_choice.value,
+            platform=platform,
+            canvas=canvas,
             split=self.split_choice.value,
             fit=self.fit_choice.value,
             gap=round(self.gap_slider.value),
             background=self.background_choice.value,
             linked=self.linked_switch.isChecked(),
-            seam=self.seam_slider.value / _PERCENT,
+            count=count,
+            seams=seams,
         ).sane()
 
     @property
     def aligning(self) -> bool:
-        """Return whether the second photo is being aligned."""
+        """Return whether a linked photo is being aligned."""
         return self.aligning_switch.isChecked() and self._layout.linked
 
     def set_layout(self, layout: Layout) -> None:
         """Show *layout* without announcing it."""
         layout = layout.sane()
         self._layout = layout
-        self.orientation_choice.set_value(layout.orientation)
+        self.platform_choice.set_value(layout.platform)
+        for platform, choice in self.canvas_choices.items():
+            visible = platform == layout.platform
+            for widget in self._canvas_rows[platform]:
+                widget.setVisible(visible)
+            if visible:
+                choice.set_value(layout.canvas)
         self.split_choice.set_value(layout.split)
+        self.count_choice.set_value(_count_value(layout.count))
         self.fit_choice.set_value(layout.fit)
         self.gap_slider.set_value(float(layout.gap))
         self.background_choice.set_value(layout.background)
-        self.seam_slider.set_value(layout.seam * _PERCENT)
+        if layout.count == collage.COUNT_MIN:
+            self.seam_slider.set_value(layout.seams[0] * _PERCENT)
         self.linked_switch.blockSignals(True)
         self.linked_switch.setChecked(layout.linked)
         self.linked_switch.blockSignals(False)
@@ -355,15 +417,18 @@ class CollagePanel(QWidget):
         self._show_names()
 
     def set_paths(self, paths: tuple[Path | None, ...]) -> None:
-        """Show which photo is in each half."""
+        """Show which photo is in each piece."""
         self._paths = tuple(paths)
         self._show_names()
 
-    def show_placements(self, zooms: tuple[float, float], alignment_scale: float) -> None:
-        """Show how far each photo is zoomed and the second scaled, without announcing."""
+    def show_placements(
+        self, zooms: tuple[float, ...], alignment_scale: float, aligning_slot: int = 1
+    ) -> None:
+        """Show each photo's zoom and the aligned one's scale, without announcing."""
         for slider, zoom in zip(self.zoom_sliders, zooms):
             slider.set_value(zoom * _PERCENT)
         self.alignment_slider.set_value(alignment_scale * _PERCENT)
+        self.align_target_choice.set_value(str(aligning_slot))
 
     def set_aligning(self, aligning: bool) -> None:
         """Turn aligning on or off from elsewhere, saying so."""
@@ -378,11 +443,17 @@ class CollagePanel(QWidget):
             widget.setVisible(linked)
         if not linked and self.aligning_switch.isChecked():
             self.aligning_switch.setChecked(False)
-        # Linked, one zoom moves both photos.
-        self.zoom_sliders[1].setVisible(not linked)
-        keys = _ZOOM_LABELS[self._layout.split]
-        self.zoom_sliders[0].set_spec(zoom_spec("collage.zoom" if linked else keys[0]))
-        self.zoom_sliders[1].set_spec(zoom_spec(keys[1]))
+        count = self._layout.count
+        self.seam_slider.setVisible(count == collage.COUNT_MIN)
+        # Linked, one zoom moves every photo.
+        for slot, slider in enumerate(self.zoom_sliders):
+            slider.setVisible(slot == 0 or (not linked and slot < count))
+        self.zoom_sliders[0].set_spec(zoom_spec("collage.zoom" if linked else _zoom_label(0)))
+        # With two photos only the second can be aligned, so there is no choice.
+        for widget in self._align_target_widgets:
+            widget.setVisible(linked and count > collage.COUNT_MIN)
+        for value, button in self.align_target_choice.buttons().items():
+            button.setVisible(int(value) < count)
         self._show_hint()
 
     def _show_hint(self) -> None:
@@ -396,12 +467,16 @@ class CollagePanel(QWidget):
 
     def _show_names(self) -> None:
         width, height = self._layout.canvas_size
-        self.size_label.setText(tr("export.pixels", width=width, height=height))
-        keys = _SLOT_LABELS[self._layout.split]
+        use = tr(f"collage.canvas_use.{self._layout.platform}.{self._layout.canvas}")
+        self.size_label.setText(
+            tr("collage.canvas_caption", use=use, size=tr("export.pixels", width=width, height=height))
+        )
         for slot, (label, name, button) in enumerate(
             zip(self._row_labels, self.name_labels, self.choose_buttons)
         ):
-            label.setText(tr(keys[slot]))
+            for widget in self._name_rows[slot]:
+                widget.setVisible(slot < self._layout.count)
+            label.setText(tr(_SLOT_LABEL, number=slot + 1))
             path = self._paths[slot] if slot < len(self._paths) else None
             if path is None:
                 name.setText(tr("collage.empty_slot"))
@@ -442,7 +517,6 @@ class CollagePanel(QWidget):
         layout = self.layout_value
         if layout == self._layout:
             return
-        self._layout = layout
-        self._show_mode()
-        self._show_names()
+        # Shown in full, since another platform shows another row of canvases.
+        self.set_layout(layout)
         self.layout_changed.emit(layout)

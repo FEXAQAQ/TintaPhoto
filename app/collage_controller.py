@@ -1,6 +1,6 @@
 """The collage's side of the controller layer (PLAN.md 2.8, 3.13).
 
-Holds the two photos, where each one sits and how the canvas is laid out,
+Holds the photos, where each one sits and how the canvas is laid out,
 and does the slow work - developing a photo for the screen, writing the
 finished collage - on background threads.
 
@@ -47,9 +47,9 @@ class CollageExportResult:
 #: Developing two photos at once is as much as the collage ever asks for.
 _THREADS: Final[int] = 2
 
-#: How far the export has got after each photo and after the canvas.
+#: How far the export has got at the start, over all the photos, and at the end.
 _PROGRESS_START: Final[float] = 0.05
-_PROGRESS_PER_PHOTO: Final[float] = 0.4
+_PROGRESS_PHOTOS: Final[float] = 0.8
 _PROGRESS_DONE: Final[float] = 1.0
 
 #: What a piece of work that is not about one slot is filed under.
@@ -67,7 +67,7 @@ class CollagePhoto:
 
 
 class CollageController(QObject):
-    """The two photos of the collage and everything done with them."""
+    """The photos of the collage and everything done with them."""
 
     #: A slot, and the photo now in it or ``None`` while one is on its way.
     photo_changed = Signal(int, object)
@@ -100,10 +100,12 @@ class CollageController(QObject):
         self._paths: list[Path | None] = [None] * collage.SLOTS
         self._photos: list[CollagePhoto | None] = [None] * collage.SLOTS
         self._placements: list[Placement] = [Placement()] * collage.SLOTS
-        #: Linked, one placement for both photos, and how the second is
-        #: aligned against the first (PLAN.md 2.8).
+        #: Linked, one placement for all photos, how each later one is
+        #: aligned against the first, and which of them is being aligned
+        #: (PLAN.md 2.8 K-11, K-12).
         self._shared = Placement()
-        self._alignment = UNALIGNED
+        self._alignments: list[Alignment] = [UNALIGNED] * collage.SLOTS
+        self._aligning_slot = 1
         self._exporting = False
 
     # -- what the collage holds ------------------------------------------
@@ -114,28 +116,53 @@ class CollageController(QObject):
         return self._layout
 
     @property
+    def count(self) -> int:
+        """Return how many pieces the canvas is split into."""
+        return self._layout.count
+
+    @property
     def paths(self) -> tuple[Path | None, ...]:
-        """Return the photo in each slot, first left or top."""
-        return tuple(self._paths)
+        """Return the photo in each piece in use, first left or top.
+
+        Photos put in pieces a smaller count leaves out are kept, and come
+        back when the count goes up again, but are not part of the collage.
+        """
+        return tuple(self._paths[: self.count])
+
+    @property
+    def aligning_slot(self) -> int:
+        """Return the linked photo the alignment tools move (PLAN.md 2.8 K-12)."""
+        return min(self._aligning_slot, self.count - 1)
+
+    def set_aligning_slot(self, slot: int) -> None:
+        """Choose which linked photo after the first the alignment tools move."""
+        slot = max(1, min(self.count - 1, int(slot)))
+        if slot == self._aligning_slot:
+            return
+        self._aligning_slot = slot
+        self.placement_changed.emit()
 
     def photo(self, slot: int) -> CollagePhoto | None:
         """Return the developed photo in *slot*, once it has arrived."""
         return self._photos[slot]
 
     def placement(self, slot: int) -> Placement:
-        """Return where the photo in *slot* sits; linked, both share one.
+        """Return where the photo in *slot* sits; linked, all share one.
 
-        Linked, the shared placement is zoomed in as far as it takes for the
-        aligned second photo to cover its half (PLAN.md 2.8 K-12).
+        Linked, the shared placement is zoomed in as far as it takes for
+        every aligned photo to cover its piece (PLAN.md 2.8 K-12).
         """
         if not self._layout.linked:
             return self._placements[slot]
-        sizes = [self.photo_size(index) for index in range(collage.SLOTS)]
-        return collage.linked_placement(self._layout, self._shared, sizes, self._alignment)
+        sizes = [self.photo_size(index) for index in range(self.count)]
+        alignments = [self.alignment(index) for index in range(self.count)]
+        return collage.linked_placement(self._layout, self._shared, sizes, alignments)
 
     def alignment(self, slot: int) -> Alignment:
-        """Return how the photo in *slot* is aligned; only the second ever is."""
-        return self._alignment if self._layout.linked and slot == 1 else UNALIGNED
+        """Return how the photo in *slot* is aligned; never the first one."""
+        if self._layout.linked and 1 <= slot < self.count:
+            return self._alignments[slot]
+        return UNALIGNED
 
     def photo_size(self, slot: int) -> tuple[int, int] | None:
         """Return the size of the photo in *slot*, once it has arrived."""
@@ -154,8 +181,8 @@ class CollageController(QObject):
 
     @property
     def complete(self) -> bool:
-        """Return whether both photos are in and ready to be written."""
-        return all(photo is not None for photo in self._photos)
+        """Return whether every piece has its photo, ready to be written."""
+        return all(photo is not None for photo in self._photos[: self.count])
 
     @property
     def exporting(self) -> bool:
@@ -172,11 +199,12 @@ class CollageController(QObject):
         self._layout = layout
         self._settings.collage.remember(layout)
         self.layout_changed.emit(layout)
-        # Linking or unlinking changes which placement is in force.
+        # Linking or unlinking, or a different count, changes which
+        # placement is in force.
         self.placement_changed.emit()
 
     def set_placement(self, slot: int, placement: Placement) -> None:
-        """Move or zoom the photo in *slot*; linked, both move together."""
+        """Move or zoom the photo in *slot*; linked, all move together."""
         if self._layout.linked:
             self._shared = placement
         else:
@@ -184,15 +212,18 @@ class CollageController(QObject):
         self.placement_changed.emit()
 
     def set_alignment(self, alignment: Alignment) -> None:
-        """Move or scale the second photo against the first (linked only)."""
-        self._alignment = alignment.sane()
+        """Move or scale the photo being aligned against the first (linked only)."""
+        self._alignments[self.aligning_slot] = alignment.sane()
         self.placement_changed.emit()
 
     def set_zoom(self, slot: int, zoom: float) -> None:
         """Zoom the photo in *slot* about the middle of what it is placed against."""
         size = self.photo_size(slot)
         if size is None:
-            size = self.photo_size(1 - slot)
+            size = next(
+                (found for index in range(self.count) if (found := self.photo_size(index))),
+                None,
+            )
         if size is None:
             return
         frame = collage.frame(self._layout, slot)
@@ -204,12 +235,13 @@ class CollageController(QObject):
         )
 
     def set_alignment_scale(self, scale: float) -> None:
-        """Scale the second photo about the middle of the canvas."""
-        rect = self.rect(1, aligned=False)
+        """Scale the photo being aligned about the middle of the canvas."""
+        slot = self.aligning_slot
+        rect = self.rect(slot, aligned=False)
         if rect is None:
             return
         centre = collage.canvas_cell(self._layout).centre
-        self.set_alignment(collage.rescaled(self._alignment, scale, centre, rect))
+        self.set_alignment(collage.rescaled(self.alignment(slot), scale, centre, rect))
 
     def load(self, slot: int, path: Path) -> None:
         """Put *path* in *slot*, developed with its own edit, in the background."""
@@ -219,22 +251,21 @@ class CollageController(QObject):
         self._paths[slot] = path
         self._photos[slot] = None
         self._placements[slot] = Placement()
-        if slot == 1:
-            self._alignment = UNALIGNED
+        self._alignments[slot] = UNALIGNED
         self.photo_changed.emit(slot, None)
         self._request(slot, path)
 
     def fill(self, paths: list[Path]) -> None:
-        """Put *paths* in the empty slots, in order, and leave the rest."""
+        """Put *paths* in the empty pieces in use, in order, and leave the rest."""
         for path in paths:
-            empty = [slot for slot in range(collage.SLOTS) if self._paths[slot] is None]
+            empty = [slot for slot in range(self.count) if self._paths[slot] is None]
             if not empty:
                 return
-            if path not in self._paths:
+            if path not in self.paths:
                 self.load(empty[0], path)
 
     def refresh(self) -> None:
-        """Develop both photos again, in case they were edited meanwhile.
+        """Develop every photo again, in case it was edited meanwhile.
 
         Called when the collage is opened again: the photo may have been
         adjusted in the editor since it was put here. Where it sits is kept.
@@ -273,13 +304,13 @@ class CollageController(QObject):
     # -- writing it ------------------------------------------------------
 
     def default_name(self) -> str:
-        """Return the name the collage is offered under: both photos' names."""
-        stems = [path.stem for path in self._paths if path is not None]
+        """Return the name the collage is offered under: all its photos' names."""
+        stems = [path.stem for path in self.paths if path is not None]
         return "_".join(stems) + collage.FILE_SUFFIX
 
     def default_folder(self) -> Path | None:
         """Return the folder of the first photo, where the collage is offered."""
-        for path in self._paths:
+        for path in self.paths:
             if path is not None:
                 return path.parent
         return None
@@ -292,7 +323,7 @@ class CollageController(QObject):
         """Write the collage to *target* in the background (X-07).
 
         With *singles*, each photo is also written on a canvas of its own,
-        for a carousel: the collage first, then the two photos (K-13).
+        for a carousel: the collage first, then each photo in order (K-13).
         """
         if self._exporting or not self.complete:
             return False
@@ -300,15 +331,15 @@ class CollageController(QObject):
         self.export_progress.emit(0.0)
         edits = [
             None if path is None else self._controller.remembered_edit(path)
-            for path in self._paths
+            for path in self.paths
         ]
         job = _ExportJob(
             controller=self._controller,
             layout=self._layout,
-            paths=list(self._paths),
+            paths=list(self.paths),
             edits=edits,
-            placements=[self.placement(slot) for slot in range(collage.SLOTS)],
-            alignments=[self.alignment(slot) for slot in range(collage.SLOTS)],
+            placements=[self.placement(slot) for slot in range(self.count)],
+            alignments=[self.alignment(slot) for slot in range(self.count)],
             options=options.sane(),
             target=target,
             singles=singles,
@@ -328,9 +359,11 @@ class CollageController(QObject):
         if not self.complete:
             return
         layout = self._layout
-        images = [None if photo is None else photo.image for photo in self._photos]
-        placements = [self.placement(slot) for slot in range(collage.SLOTS)]
-        alignments = [self.alignment(slot) for slot in range(collage.SLOTS)]
+        images = [
+            None if photo is None else photo.image for photo in self._photos[: self.count]
+        ]
+        placements = [self.placement(slot) for slot in range(self.count)]
+        alignments = [self.alignment(slot) for slot in range(self.count)]
 
         def estimate() -> int:
             canvas = collage.render(layout, images, placements, alignments)
@@ -405,9 +438,9 @@ class _ExportJob:
     def run(self) -> CollageExportResult | None:
         """Develop each photo at full size, lay them out and write the files.
 
-        One photo at a time, and only the half it fills - and its own canvas,
+        One photo at a time, and only the piece it fills - and its own canvas,
         for a carousel - is kept, so the memory needed is one developed photo
-        rather than two. Returns ``None`` rather than raising, so the
+        rather than all of them. Returns ``None`` rather than raising, so the
         progress is never left half way.
         """
         try:
@@ -440,7 +473,9 @@ class _ExportJob:
                     single = collage.render_single(self.layout, developed, placement)
                     singles.append(collage.encode(single, depth, dither))
                 del developed
-                self.progress(_PROGRESS_START + _PROGRESS_PER_PHOTO * (index + 1))
+                self.progress(
+                    _PROGRESS_START + _PROGRESS_PHOTOS * (index + 1) / max(1, len(self.paths))
+                )
             canvas = collage.encode(collage.compose(self.layout, halves), depth, dither)
             written = exporter.export_pixels(canvas, self.target, self.options).path
             # Named after the collage as it was written, so that a second

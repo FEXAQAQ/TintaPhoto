@@ -123,18 +123,18 @@ a rule-of-thirds grid.
 
 <sub>C O L L A G E</sub>
 
-### Two photos, one story
+### A few photos, one story
 
 </div>
 
 <img src="docs/media/en/collage.webp" width="100%" alt="Selecting two photos in the filmstrip, opening the collage, and widening the gap">
 
-`Ctrl`-click two photos in the filmstrip, press Two-photo collage, and they
+`Ctrl`-click a few photos in the filmstrip, press Collage, and they
 become a single post sized for social feeds.
-Landscape or portrait, split side by side or top and bottom, with the gap and
-background colour you like. Day and night shots of the same scene can be
+Two to four photos, side by side or top and bottom, on a 9:16, 3:4, 4:5, 1:1,
+16:9 or 1.91:1 canvas, with the gap and background colour you like. Day and night shots of the same scene can be
 overlaid, aligned and joined along a seam you drag. Export can also write the
-three images a carousel needs: the collage, and each photo on its own.
+images a carousel needs: the collage, and each photo on its own.
 
 <br>
 
@@ -238,7 +238,7 @@ Settings and presets are kept in `%APPDATA%\TintaPhoto` and the thumbnail cache 
 | Flip horizontally / vertically | `Shift+H` / `Shift+V` |
 | Copy / paste adjustments | `Ctrl+Shift+C` / `Ctrl+Shift+V` |
 | Save as preset | `Ctrl+Shift+N` |
-| Two-photo collage | Toolbar button |
+| Collage | Toolbar button |
 | 100% / zoom / fit | `Z` / `Ctrl++` `Ctrl+-` / `Ctrl+0` |
 | Pan a zoomed photo | Hold Space and drag |
 | Clipping warnings / histogram mode | `J` / `H` |

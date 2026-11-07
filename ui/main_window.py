@@ -317,7 +317,8 @@ class MainWindow(QMainWindow):
         panel.zoom_changed.connect(collage.set_zoom)
         panel.alignment_scale_changed.connect(collage.set_alignment_scale)
         panel.aligning_toggled.connect(self.collage_canvas.set_aligning)
-        collage.layout_changed.connect(panel.set_layout)
+        panel.aligning_slot_changed.connect(collage.set_aligning_slot)
+        collage.layout_changed.connect(self._on_collage_layout_changed)
         collage.placement_changed.connect(self._on_collage_placement_changed)
         collage.photo_changed.connect(self._on_collage_photo_changed)
         collage.error.connect(self.toast.show_message)
@@ -576,7 +577,7 @@ class MainWindow(QMainWindow):
         message = tr(key, name=result.path.name)
         singles = getattr(result, "singles", ())
         if singles:
-            message = tr("export.done_carousel", name=result.path.name)
+            message = tr("export.done_carousel", name=result.path.name, count=len(singles))
         self.toast.show_message(
             message,
             tr("export.reveal"),
@@ -1016,7 +1017,7 @@ class MainWindow(QMainWindow):
             self.enter_collage()
 
     def enter_collage(self) -> None:
-        """Lay two photos out on one canvas, in place of the preview.
+        """Lay two to four photos out on one canvas, in place of the preview.
 
         Photos chosen together in the filmstrip go straight in. Photos
         already in the collage are developed again, since they may have been
@@ -1033,7 +1034,7 @@ class MainWindow(QMainWindow):
         self.controller.flush()
         self.collage.refresh()
         chosen = self.filmstrip.selected_photos()
-        if len(chosen) >= collage_module.SLOTS:
+        if len(chosen) >= collage_module.COUNT_MIN:
             self.collage.fill(chosen)
         self._collage_mode = True
         # The collage exports itself, not photos ticked in the strip.
@@ -1107,12 +1108,21 @@ class MainWindow(QMainWindow):
         if chosen:
             self.collage.load(slot, Path(chosen))
 
+    def _on_collage_layout_changed(self, layout: object) -> None:
+        """Show the new layout; a different count shows other photos and readiness."""
+        self.collage_panel.set_layout(layout)
+        self.collage_panel.set_paths(self.collage.paths)
+        if self._collage_mode:
+            self._enable_export()
+
     def _on_collage_placement_changed(self) -> None:
         """Let the zoom and alignment sliders follow what the canvas did."""
         collage = self.collage
+        aligning = collage.aligning_slot
         self.collage_panel.show_placements(
-            (collage.placement(0).zoom, collage.placement(1).zoom),
-            collage.alignment(1).scale,
+            tuple(collage.placement(slot).zoom for slot in range(collage_module.SLOTS)),
+            collage.alignment(aligning).scale,
+            aligning,
         )
 
     def _on_collage_photo_changed(self, _slot: int, _photo: object) -> None:

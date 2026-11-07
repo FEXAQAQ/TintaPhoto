@@ -1,4 +1,4 @@
-"""Tests for the two photo collage (PLAN.md 2.8, 3.13)."""
+"""Tests for the collage of two to four photos (PLAN.md 2.8, 3.13)."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import pytest
 from core import collage
 from core.collage import Cell, Layout, Placement
 
-LANDSCAPE = collage.ORIENTATION_LANDSCAPE
-PORTRAIT = collage.ORIENTATION_PORTRAIT
+LANDSCAPE = collage.CANVAS_16X9
+PORTRAIT = collage.CANVAS_4X5
 SIDE = collage.SPLIT_SIDE_BY_SIDE
 STACKED = collage.SPLIT_STACKED
 
@@ -49,7 +49,7 @@ def _gradient(size: tuple[int, int]) -> np.ndarray:
 def test_without_a_gap_each_half_is_the_size_asked_for(
     orientation: str, split: str, half: tuple[int, int]
 ) -> None:
-    layout = Layout(orientation=orientation, split=split)
+    layout = Layout(canvas=orientation, split=split)
     first, second = collage.cells(layout)
     assert (first.width, first.height) == half
     assert (second.width, second.height) == half
@@ -62,7 +62,7 @@ def test_without_a_gap_each_half_is_the_size_asked_for(
 def test_the_gap_comes_out_of_the_halves_and_never_grows_the_canvas(
     orientation: str, split: str, gap: int
 ) -> None:
-    layout = Layout(orientation=orientation, split=split, gap=gap)
+    layout = Layout(canvas=orientation, split=split, gap=gap)
     width, height = layout.canvas_size
     first, second = collage.cells(layout)
     if split == SIDE:
@@ -78,7 +78,7 @@ def test_the_gap_comes_out_of_the_halves_and_never_grows_the_canvas(
 
 
 def test_values_out_of_range_are_brought_back() -> None:
-    layout = Layout(orientation="sideways", split="diagonal", fit="stretch", gap=99, background="red")
+    layout = Layout(canvas="sideways", split="diagonal", fit="stretch", gap=99, background="red")
     sane = layout.sane()
     assert sane == Layout(gap=collage.GAP_MAX)
     assert Layout(gap=-5).sane().gap == collage.GAP_MIN
@@ -192,7 +192,7 @@ def test_contain_leaves_bars_of_the_background_beside_the_photo() -> None:
 
 def test_the_same_placement_gives_the_same_collage_from_any_size_of_photo() -> None:
     """The preview works on a small copy and the export on the full photo."""
-    layout = Layout(orientation=PORTRAIT, split=SIDE)
+    layout = Layout(canvas=PORTRAIT, split=SIDE)
     placement = Placement(zoom=1.7, focus_x=0.3, focus_y=0.6)
     small = _gradient((900, 600))
     large = _gradient((3600, 2400))
@@ -245,7 +245,7 @@ def test_a_finished_collage_is_written_in_every_format(
     from core.exporter import ExportOptions
 
     options = ExportOptions(format=format_, bits=bits)
-    layout = Layout(orientation=PORTRAIT)
+    layout = Layout(canvas=PORTRAIT)
     canvas = collage.render(
         layout, [_gradient((300, 200)), None], [Placement(), Placement()], bits=options.depth
     )
@@ -270,7 +270,7 @@ def test_a_finished_collage_is_written_in_every_format(
 @pytest.mark.parametrize("seam", [0.2, 0.37, 0.5, 0.63, 0.8])
 @pytest.mark.parametrize("gap", [0, 1, 7, 20])
 def test_the_seam_moves_the_halves_but_never_the_canvas(seam: float, gap: int) -> None:
-    layout = Layout(seam=seam, gap=gap)
+    layout = Layout(seams=(seam,), gap=gap)
     first, second = collage.cells(layout)
     assert first.width + gap + second.width == 1920
     middle_of_gap = first.width + gap / 2
@@ -278,9 +278,9 @@ def test_the_seam_moves_the_halves_but_never_the_canvas(seam: float, gap: int) -
 
 
 def test_the_seam_stays_in_range() -> None:
-    assert Layout(seam=0.0).sane().seam == collage.SEAM_MIN
-    assert Layout(seam=5.0).sane().seam == collage.SEAM_MAX
-    assert Layout(seam=float("nan")).sane().seam == collage.SEAM_DEFAULT
+    assert Layout(seams=(0.0,)).sane().seams == (collage.SEAM_MIN,)
+    assert Layout(seams=(5.0,)).sane().seams == (collage.SEAM_MAX,)
+    assert Layout(seams=(float("nan"),)).sane().seams == (collage.SEAM_DEFAULT,)
 
 
 # -- linked: one scene shot twice ------------------------------------------------
@@ -305,10 +305,10 @@ def test_linked_each_half_shows_its_own_part_of_the_scene() -> None:
     unlinked_a = collage.render(Layout(), [a, None], [Placement(), Placement()])
     linked = collage.render(Layout(linked=True), [a, b], [Placement(), Placement()])
     whole_a = collage.render(
-        Layout(linked=True, seam=collage.SEAM_MAX), [a, None], [Placement(), Placement()]
+        Layout(linked=True, seams=(collage.SEAM_MAX,)), [a, None], [Placement(), Placement()]
     )
     whole_b = collage.render(
-        Layout(linked=True, seam=collage.SEAM_MIN), [None, b], [Placement(), Placement()]
+        Layout(linked=True, seams=(collage.SEAM_MIN,)), [None, b], [Placement(), Placement()]
     )
     left, right = collage.cells(Layout(linked=True))
     assert np.abs(linked[:, 10:900].astype(int) - whole_a[:, 10:900].astype(int)).max() <= 1
@@ -363,7 +363,9 @@ def test_aligning_never_leaves_a_bare_strip() -> None:
     layout = Layout(linked=True)
     size = (2000, 1333)
     alignment = collage.Alignment(shift_x=-0.03, shift_y=0.01, scale=0.95)
-    placement = collage.linked_placement(layout, Placement(), [size, size], alignment)
+    placement = collage.linked_placement(
+        layout, Placement(), [size, size], [collage.UNALIGNED, alignment]
+    )
     assert placement.zoom > 1.0
     left, top, width, height = collage.placed_rect(layout, 1, size, placement, alignment)
     half = collage.cells(layout)[1]
@@ -389,7 +391,8 @@ def test_a_placement_that_already_covers_is_left_alone() -> None:
     layout = Layout(linked=True)
     size = (2000, 1333)
     asked = Placement(zoom=1.5, focus_x=0.48, focus_y=0.52)
-    assert collage.linked_placement(layout, asked, [size, size], collage.Alignment(shift_x=0.01)) == asked
+    aligned = [collage.UNALIGNED, collage.Alignment(shift_x=0.01)]
+    assert collage.linked_placement(layout, asked, [size, size], aligned) == asked
 
 
 def _covers(rect, cell) -> bool:
@@ -408,7 +411,7 @@ def _covers(rect, cell) -> bool:
 @pytest.mark.parametrize("orientation", [LANDSCAPE, PORTRAIT])
 @pytest.mark.parametrize("linked", [False, True])
 def test_a_single_photo_takes_the_collage_size(orientation: str, linked: bool) -> None:
-    layout = Layout(orientation=orientation, linked=linked)
+    layout = Layout(canvas=orientation, linked=linked)
     single = collage.render_single(layout, _gradient((600, 400)), Placement())
     width, height = layout.canvas_size
     assert single.shape == (height, width, 3)
@@ -466,7 +469,9 @@ def test_a_linked_second_photo_leaves_its_alignment_out() -> None:
     layout = Layout(linked=True, background=collage.BACKGROUND_BLACK)
     size = (900, 600)
     alignment = collage.Alignment(shift_x=0.1, scale=0.85)
-    placement = collage.linked_placement(layout, Placement(), [size, size], alignment)
+    placement = collage.linked_placement(
+        layout, Placement(), [size, size], [collage.UNALIGNED, alignment]
+    )
     single = collage.render_single(layout, _solid((255, 255, 255), size), placement)
     assert single.min() > 0.99
 
@@ -475,3 +480,210 @@ def test_the_single_photos_are_not_named_like_a_taken_name() -> None:
     assert len(collage.SINGLE_SUFFIXES) == collage.SLOTS
     for suffix in collage.SINGLE_SUFFIXES:
         assert not suffix.lstrip("_").isdigit()
+
+
+# -- three or four photos (PLAN.md 2.8 K-02, 2026-11-07) ----------------------
+
+
+@pytest.mark.parametrize(
+    ("orientation", "split", "count", "piece"),
+    [
+        (LANDSCAPE, SIDE, 3, (640, 1080)),
+        (LANDSCAPE, SIDE, 4, (480, 1080)),
+        (LANDSCAPE, STACKED, 3, (1920, 360)),
+        (LANDSCAPE, STACKED, 4, (1920, 270)),
+        (PORTRAIT, SIDE, 3, (360, 1350)),
+        (PORTRAIT, SIDE, 4, (270, 1350)),
+        (PORTRAIT, STACKED, 3, (1080, 450)),
+    ],
+)
+def test_even_pieces_are_the_size_asked_for(
+    orientation: str, split: str, count: int, piece: tuple[int, int]
+) -> None:
+    layout = Layout(canvas=orientation, split=split, count=count, seams=())
+    pieces = collage.cells(layout)
+    assert len(pieces) == count
+    assert all((cell.width, cell.height) == piece for cell in pieces)
+
+
+def test_four_portrait_rows_share_the_odd_pixels() -> None:
+    pieces = collage.cells(Layout(canvas=PORTRAIT, split=STACKED, count=4, seams=()))
+    assert sorted(cell.height for cell in pieces) == [337, 337, 338, 338]
+    assert sum(cell.height for cell in pieces) == 1350
+
+
+@pytest.mark.parametrize("count", collage.COUNTS)
+@pytest.mark.parametrize("gap", [0, 1, 7, 20])
+@pytest.mark.parametrize("split", [SIDE, STACKED])
+@pytest.mark.parametrize("orientation", [LANDSCAPE, PORTRAIT])
+def test_the_gaps_never_change_the_canvas(
+    orientation: str, split: str, gap: int, count: int
+) -> None:
+    layout = Layout(canvas=orientation, split=split, gap=gap, count=count, seams=())
+    pieces = collage.cells(layout)
+    width, height = layout.canvas_size
+    if split == SIDE:
+        assert sum(cell.width for cell in pieces) + gap * (count - 1) == width
+        for before, after in zip(pieces, pieces[1:]):
+            assert after.x == before.x + before.width + gap
+    else:
+        assert sum(cell.height for cell in pieces) + gap * (count - 1) == height
+        for before, after in zip(pieces, pieces[1:]):
+            assert after.y == before.y + before.height + gap
+
+
+def test_a_count_that_cannot_be_drawn_is_two() -> None:
+    assert Layout(count=1).sane().count == 2
+    assert Layout(count=5).sane().count == 2
+    assert Layout(count="x").sane().count == 2  # type: ignore[arg-type]
+
+
+def test_seams_that_do_not_fit_the_count_are_even() -> None:
+    assert Layout(count=3, seams=(0.5,)).sane().seams == pytest.approx((1 / 3, 2 / 3))
+    assert Layout(count=4, seams=()).sane().seams == pytest.approx((0.25, 0.5, 0.75))
+    assert Layout(count=3, seams=("a", 0.6)).sane().seams == pytest.approx((1 / 3, 2 / 3))
+
+
+def test_seams_stay_in_order_and_leave_every_piece_room() -> None:
+    seams = Layout(count=4, seams=(0.05, 0.06, 0.99)).sane().seams
+    least = collage.PIECE_MIN[4]
+    edges = (0.0, *seams, 1.0)
+    for before, after in zip(edges, edges[1:]):
+        assert after - before >= least - 1e-9
+
+
+def test_a_dragged_seam_stops_at_its_neighbour() -> None:
+    layout = Layout(count=3, seams=())
+    moved = collage.with_seam(layout, 0, 0.9)
+    assert moved.seams[0] == pytest.approx(2 / 3 - collage.PIECE_MIN[3])
+    assert moved.seams[1] == pytest.approx(2 / 3)
+    moved = collage.with_seam(layout, 1, 0.0)
+    assert moved.seams == pytest.approx((1 / 3, 1 / 3 + collage.PIECE_MIN[3]))
+
+
+@pytest.mark.parametrize("count", collage.COUNTS)
+def test_seam_at_is_the_middle_of_each_gap(count: int) -> None:
+    layout = Layout(count=count, seams=(), gap=8)
+    pieces = collage.cells(layout)
+    for index in range(count - 1):
+        assert collage.seam_at(layout, index) == pieces[index].x + pieces[index].width + 4
+
+
+def test_four_photos_each_land_in_their_own_piece() -> None:
+    colours = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)]
+    layout = Layout(count=4, seams=(), background=collage.BACKGROUND_BLACK, gap=10)
+    result = collage.render(layout, [_solid(colour) for colour in colours], [Placement()] * 4)
+    assert result.shape == (1080, 1920, 3)
+    for cell, colour in zip(collage.cells(layout), colours):
+        centre_x, centre_y = cell.centre
+        assert tuple(int(value) for value in result[int(centre_y), int(centre_x)]) == colour
+    # The gaps between them are the background.
+    first = collage.cells(layout)[0]
+    assert result[540, first.x + first.width + 5].max() == 0
+
+
+def test_photos_past_the_count_are_not_drawn() -> None:
+    layout = Layout(count=2, background=collage.BACKGROUND_BLACK)
+    images = [_solid((255, 255, 255))] * 2 + [_solid((255, 0, 0))] * 2
+    result = collage.render(layout, images, [Placement()] * 4)
+    assert result.shape == (1080, 1920, 3)
+    assert (result[:, :, 1] == 255).all()
+
+
+def test_aligning_any_of_four_linked_photos_never_leaves_a_bare_strip() -> None:
+    layout = Layout(linked=True, count=4, seams=())
+    size = (2000, 1333)
+    alignments = [
+        collage.UNALIGNED,
+        collage.Alignment(shift_x=0.02, scale=0.97),
+        collage.Alignment(shift_y=-0.02),
+        collage.Alignment(shift_x=-0.03, shift_y=0.01, scale=0.95),
+    ]
+    placement = collage.linked_placement(layout, Placement(), [size] * 4, alignments)
+    assert placement.zoom > 1.0
+    for slot, cell in enumerate(collage.cells(layout)):
+        rect = collage.placed_rect(layout, slot, size, placement, alignments[slot])
+        assert _covers(rect, cell)
+    black = np.zeros((1333, 2000, 3), dtype=np.uint8)
+    result = collage.render(layout, [black] * 4, [placement] * 4, alignments)
+    assert result.max() == 0
+
+
+def test_linked_pieces_show_their_own_part_of_one_scene() -> None:
+    """Three photos of one scene: each piece is that part of its own photo."""
+    layout = Layout(linked=True, count=3, seams=())
+    a = _gradient((1600, 900))
+    b = (255 - a).astype(np.uint8)
+    linked = collage.render(layout, [a, b, a], [Placement()] * 3)
+    # Each photo alone, over far more of the canvas than its own piece.
+    whole_a = collage.render(Layout(linked=True, seams=(0.8,)), [a, None], [Placement()] * 2)
+    whole_b = collage.render(Layout(linked=True, seams=(0.2,)), [None, b], [Placement()] * 2)
+    last_a = collage.render(Layout(linked=True, seams=(0.2,)), [None, a], [Placement()] * 2)
+    for slot, whole in enumerate((whole_a, whole_b, last_a)):
+        cell = collage.cells(layout)[slot]
+        inner = slice(cell.x + 10, cell.x + cell.width - 10)
+        assert np.abs(linked[:, inner].astype(int) - whole[:, inner].astype(int)).max() <= 1
+
+
+# -- the canvases of each social group (PLAN.md 2.8 K-01, 2026-11-07) ---------
+
+
+@pytest.mark.parametrize(
+    ("canvas", "size"),
+    [
+        (collage.CANVAS_9X16, (1080, 1920)),
+        (collage.CANVAS_3X4, (1080, 1440)),
+        (collage.CANVAS_4X5, (1080, 1350)),
+        (collage.CANVAS_1X1, (1080, 1080)),
+        (collage.CANVAS_16X9, (1920, 1080)),
+        (collage.CANVAS_191X100, (1080, 566)),
+    ],
+)
+def test_every_canvas_has_its_size(canvas: str, size: tuple[int, int]) -> None:
+    platform = next(p for p, shown in collage.PLATFORM_CANVASES.items() if canvas in shown)
+    layout = Layout(platform=platform, canvas=canvas)
+    assert layout.sane().canvas == canvas
+    assert layout.canvas_size == size
+
+
+def test_each_group_offers_its_own_canvases_best_first() -> None:
+    assert collage.PLATFORM_CANVASES[collage.PLATFORM_1] == (
+        collage.CANVAS_3X4, collage.CANVAS_4X5, collage.CANVAS_1X1, collage.CANVAS_191X100
+    )
+    assert collage.PLATFORM_CANVASES[collage.PLATFORM_2] == (
+        collage.CANVAS_4X5, collage.CANVAS_9X16, collage.CANVAS_1X1, collage.CANVAS_16X9
+    )
+    assert set(collage.CANVASES) == {
+        canvas for shown in collage.PLATFORM_CANVASES.values() for canvas in shown
+    }
+
+
+def test_a_first_collage_is_sixteen_by_nine() -> None:
+    assert Layout().canvas_size == (1920, 1080)
+    assert Layout(platform="nowhere").sane().platform == collage.PLATFORM_DEFAULT
+
+
+def test_a_canvas_its_group_lacks_becomes_the_group_s_best() -> None:
+    layout = Layout(platform=collage.PLATFORM_1, canvas=collage.CANVAS_16X9).sane()
+    assert layout.canvas == collage.CANVAS_3X4
+
+
+def test_another_group_keeps_a_canvas_both_have() -> None:
+    square = Layout(platform=collage.PLATFORM_2, canvas=collage.CANVAS_1X1)
+    assert collage.with_platform(square, collage.PLATFORM_1).canvas == collage.CANVAS_1X1
+    wide = Layout(platform=collage.PLATFORM_2, canvas=collage.CANVAS_16X9)
+    moved = collage.with_platform(wide, collage.PLATFORM_1)
+    assert (moved.platform, moved.canvas) == (collage.PLATFORM_1, collage.CANVAS_3X4)
+
+
+@pytest.mark.parametrize("count", collage.COUNTS)
+@pytest.mark.parametrize("split", [SIDE, STACKED])
+@pytest.mark.parametrize("canvas", collage.CANVASES)
+def test_every_canvas_splits_into_every_count(canvas: str, split: str, count: int) -> None:
+    platform = next(p for p, shown in collage.PLATFORM_CANVASES.items() if canvas in shown)
+    layout = Layout(platform=platform, canvas=canvas, split=split, count=count, seams=(), gap=20)
+    black = np.zeros((300, 400, 3), dtype=np.uint8)
+    result = collage.render(layout, [black] * count, [Placement()] * count)
+    width, height = layout.canvas_size
+    assert result.shape == (height, width, 3)
+    assert all(cell.width > 0 and cell.height > 0 for cell in collage.cells(layout))

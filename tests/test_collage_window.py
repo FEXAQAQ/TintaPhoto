@@ -179,7 +179,7 @@ def test_each_photo_goes_in_with_its_own_edit(window: MainWindow, tmp_path: Path
 
 
 def test_the_layout_is_remembered_in_the_settings(window: MainWindow) -> None:
-    layout = Layout(orientation=collage.ORIENTATION_PORTRAIT, split=collage.SPLIT_STACKED, gap=6)
+    layout = Layout(canvas=collage.CANVAS_4X5, split=collage.SPLIT_STACKED, gap=6)
     window.collage.set_layout(layout)
     stored = window._settings.collage
     assert stored.layout == layout.sane()
@@ -196,7 +196,7 @@ def test_a_damaged_layout_in_the_settings_falls_back_to_the_default() -> None:
 def test_the_collage_is_written_at_the_canvas_size(
     window: MainWindow, tmp_path: Path
 ) -> None:
-    window.collage.set_layout(Layout(orientation=collage.ORIENTATION_PORTRAIT, gap=10))
+    window.collage.set_layout(Layout(canvas=collage.CANVAS_4X5, gap=10))
     window.collage.load(0, _jpeg(tmp_path / "left.jpg", (220, 30, 30)))
     window.collage.load(1, _jpeg(tmp_path / "right.jpg", (30, 30, 220), (400, 600)))
     _wait(lambda: window.collage.complete)
@@ -242,26 +242,28 @@ def test_a_file_that_is_not_a_photo_is_refused(window: MainWindow, tmp_path: Pat
 # -- the panel and the dialog -------------------------------------------------
 
 
-def test_the_panel_names_the_halves_after_the_split(qt_app: object) -> None:
+def test_the_panel_numbers_the_photos_whatever_the_split(qt_app: object) -> None:
     panel = CollagePanel()
     announced: list[Layout] = []
     panel.layout_changed.connect(announced.append)
     from app.i18n import tr
 
-    assert panel._row_labels[0].text() == tr("collage.slot.left")
+    assert panel._row_labels[0].text() == tr("collage.slot", number=1)
     panel.split_choice.buttons()[collage.SPLIT_STACKED].click()
     assert announced and announced[-1].split == collage.SPLIT_STACKED
-    assert panel._row_labels[0].text() == tr("collage.slot.top")
-    assert panel.size_label.text() == tr("export.pixels", width=1920, height=1080)
+    assert panel._row_labels[1].text() == tr("collage.slot", number=2)
+    size = tr("export.pixels", width=1920, height=1080)
+    use = tr("collage.canvas_use.social_2.16x9")
+    assert panel.size_label.text() == tr("collage.canvas_caption", use=use, size=size)
 
 
 def test_the_panel_shows_without_announcing(qt_app: object) -> None:
     panel = CollagePanel()
     announced: list[Layout] = []
     panel.layout_changed.connect(announced.append)
-    panel.set_layout(Layout(orientation=collage.ORIENTATION_PORTRAIT, gap=12))
+    panel.set_layout(Layout(canvas=collage.CANVAS_4X5, gap=12))
     assert not announced
-    assert panel.layout_value == Layout(orientation=collage.ORIENTATION_PORTRAIT, gap=12)
+    assert panel.layout_value == Layout(canvas=collage.CANVAS_4X5, gap=12)
 
 
 def test_the_export_dialog_for_a_collage_has_a_fixed_size(
@@ -469,11 +471,11 @@ def test_the_seam_can_be_dragged_and_put_back(window: MainWindow, tmp_path: Path
     seam_at = QPointF(canvas.seam_position(), canvas.canvas_rect().center().y()).toPoint()
     canvas_width = canvas.canvas_rect().width()
     _drag(canvas, seam_at, QPoint(round(canvas_width * 0.1), 0))
-    assert window.collage.layout.seam == pytest.approx(0.6, abs=0.01)
+    assert window.collage.layout.seams[0] == pytest.approx(0.6, abs=0.01)
     assert window.collage_panel.seam_slider.value == pytest.approx(60.0, abs=1.0)
     seam_at = QPointF(canvas.seam_position(), canvas.canvas_rect().center().y()).toPoint()
     QTest.mouseDClick(canvas, Qt.MouseButton.LeftButton, pos=seam_at)
-    assert window.collage.layout.seam == collage.SEAM_DEFAULT
+    assert window.collage.layout.seams == (collage.SEAM_DEFAULT,)
 
 
 def test_the_linked_collage_is_written_as_it_is_shown(window: MainWindow, tmp_path: Path) -> None:
@@ -582,3 +584,194 @@ def test_the_carousel_choice_is_remembered() -> None:
     stored.carousel = True
     assert CollageSettings.from_dict(stored.to_dict()).carousel
     assert not CollageSettings.from_dict({"carousel": "yes"}).carousel
+
+
+# -- three or four photos and the canvases (PLAN.md 2.8, 2026-11-07) ----------
+
+
+def _four(tmp_path: Path) -> list[Path]:
+    colours = [(200, 40, 40), (40, 200, 40), (40, 40, 200), (200, 200, 40)]
+    return [
+        _jpeg(tmp_path / f"{name}.jpg", colour, (900, 600))
+        for name, colour in zip("abcd", colours)
+    ]
+
+
+def test_the_count_shows_as_many_pieces_and_rows(window: MainWindow, tmp_path: Path) -> None:
+    window.enter_collage()
+    panel = window.collage_panel
+    panel.count_choice.buttons()["4"].click()
+    assert window.collage.count == 4
+    rows = [panel._row_labels[slot].isVisibleTo(panel) for slot in range(4)]
+    assert rows == [True, True, True, True]
+    zooms = [panel.zoom_sliders[slot].isVisibleTo(panel) for slot in range(4)]
+    assert zooms == [True, True, True, True]
+    # Three seams are moved on the canvas, not by one slider.
+    assert not panel.seam_slider.isVisibleTo(panel)
+    canvas = window.collage_canvas
+    widths = {round(canvas.cell_rect(slot).width()) for slot in range(4)}
+    assert len(widths) == 1
+    panel.count_choice.buttons()["3"].click()
+    assert not panel._row_labels[3].isVisibleTo(panel)
+    assert canvas.slot_at(canvas.cell_rect(2).center()) == 2
+
+
+def test_export_waits_for_every_piece(window: MainWindow, tmp_path: Path) -> None:
+    photos = _four(tmp_path)
+    window.enter_collage()
+    window.collage_panel.count_choice.buttons()["3"].click()
+    window.collage.fill(photos[:2])
+    _wait(lambda: window.collage.photo(1) is not None)
+    assert not window.collage.complete
+    assert not window.toolbar.export_button.isEnabled()
+    window.collage.fill(photos[2:])
+    _wait(lambda: window.collage.complete)
+    # Only three pieces: the fourth photo was not taken.
+    assert window.collage.paths == tuple(photos[:3])
+    assert window.toolbar.export_button.isEnabled()
+    assert window.collage.default_name() == "a_b_c_collage"
+
+
+def test_a_smaller_count_keeps_the_photos_it_leaves_out(
+    window: MainWindow, tmp_path: Path
+) -> None:
+    photos = _four(tmp_path)
+    window.enter_collage()
+    window.collage_panel.count_choice.buttons()["4"].click()
+    window.collage.fill(photos)
+    _wait(lambda: window.collage.complete)
+    window.collage_panel.count_choice.buttons()["2"].click()
+    assert window.collage.paths == tuple(photos[:2])
+    assert window.collage.complete
+    assert window.collage_panel._paths == tuple(photos[:2])
+    window.collage_panel.count_choice.buttons()["4"].click()
+    assert window.collage.paths == tuple(photos)
+    assert window.collage.complete
+
+
+def test_each_of_three_seams_drags_and_a_double_click_evens_them(
+    window: MainWindow, tmp_path: Path
+) -> None:
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtTest import QTest
+
+    window.enter_collage()
+    window.collage_panel.count_choice.buttons()["4"].click()
+    window.collage.fill(_four(tmp_path))
+    _wait(lambda: window.collage.complete)
+    canvas = window.collage_canvas
+    middle = canvas.canvas_rect().center().y()
+    width = canvas.canvas_rect().width()
+    seam_at = QPointF(canvas.seam_position(1), middle).toPoint()
+    _drag(canvas, seam_at, QPoint(round(width * 0.05), 0))
+    seams = window.collage.layout.seams
+    assert seams[0] == pytest.approx(0.25)
+    assert seams[1] == pytest.approx(0.55, abs=0.01)
+    assert seams[2] == pytest.approx(0.75)
+    # Dragged far, it stops short of its neighbour.
+    seam_at = QPointF(canvas.seam_position(1), middle).toPoint()
+    _drag(canvas, seam_at, QPoint(round(width * 0.5), 0))
+    seams = window.collage.layout.seams
+    assert seams[1] == pytest.approx(0.75 - collage.PIECE_MIN[4])
+    seam_at = QPointF(canvas.seam_position(2), middle).toPoint()
+    QTest.mouseDClick(canvas, Qt.MouseButton.LeftButton, pos=seam_at)
+    assert window.collage.layout.seams == pytest.approx((0.25, 0.5, 0.75))
+
+
+def test_aligning_moves_only_the_photo_chosen(window: MainWindow, tmp_path: Path) -> None:
+    from PySide6.QtCore import QPoint
+
+    window.enter_collage()
+    panel = window.collage_panel
+    panel.count_choice.buttons()["3"].click()
+    window.collage.fill(_four(tmp_path)[:3])
+    _wait(lambda: window.collage.complete)
+    panel.linked_switch.click()
+    assert panel.align_target_choice.isVisibleTo(panel)
+    assert not panel.align_target_choice.buttons()["3"].isVisibleTo(panel)
+    panel.aligning_switch.click()
+    panel.align_target_choice.buttons()["2"].click()
+    assert window.collage.aligning_slot == 2
+    canvas = window.collage_canvas
+    _drag(canvas, canvas.canvas_rect().center().toPoint(), QPoint(30, 0))
+    assert window.collage.alignment(2).shift_x > 0
+    assert window.collage.alignment(1) == collage.UNALIGNED
+    # Three linked photos still leave no bare strip anywhere.
+    for slot, cell in enumerate(collage.cells(window.collage.layout)):
+        left, top, width, height = window.collage.rect(slot)
+        assert left <= cell.x + 1e-6 and left + width >= cell.x + cell.width - 1e-6
+        assert top <= cell.y + 1e-6 and top + height >= cell.y + cell.height - 1e-6
+
+
+def test_with_two_photos_there_is_no_choice_of_which_to_align(
+    window: MainWindow, tmp_path: Path
+) -> None:
+    _filled(window, tmp_path)
+    panel = window.collage_panel
+    panel.linked_switch.click()
+    assert not panel.align_target_choice.isVisibleTo(panel)
+
+
+def test_a_carousel_of_four_names_them_a_to_d(window: MainWindow, tmp_path: Path) -> None:
+    window.collage.set_layout(Layout(count=4, seams=()))
+    window.collage.fill(_four(tmp_path))
+    _wait(lambda: window.collage.complete)
+    finished: list[object] = []
+    window.collage.export_finished.connect(finished.append)
+    target = tmp_path / "out" / "four_collage.jpg"
+    assert window.collage.export(target, ExportOptions(), singles=True)
+    _wait(lambda: bool(finished))
+    names = [path.name for path in finished[0].singles]
+    assert names == [f"four_collage_{letter}.jpg" for letter in "abcd"]
+    with Image.open(target) as image:
+        pixels = np.asarray(image.convert("RGB")).astype(int)
+    for cell, colour in zip(collage.cells(window.collage.layout), (0, 1, 2)):
+        centre_x, centre_y = cell.centre
+        assert pixels[int(centre_y), int(centre_x)].argmax() == colour
+
+
+def test_the_platform_offers_its_own_canvases(window: MainWindow) -> None:
+    window.enter_collage()
+    panel = window.collage_panel
+    first, second = collage.PLATFORM_1, collage.PLATFORM_2
+    assert panel.canvas_choices[second].isVisibleTo(panel)
+    assert not panel.canvas_choices[first].isVisibleTo(panel)
+    panel.canvas_choices[second].buttons()[collage.CANVAS_1X1].click()
+    assert window.collage.layout.canvas_size == (1080, 1080)
+    # Square is in both groups, so it stays.
+    panel.platform_choice.buttons()[first].click()
+    assert window.collage.layout.canvas == collage.CANVAS_1X1
+    assert panel.canvas_choices[first].isVisibleTo(panel)
+    assert not panel.canvas_choices[second].isVisibleTo(panel)
+    panel.canvas_choices[first].buttons()[collage.CANVAS_191X100].click()
+    assert window.collage.layout.canvas_size == (1080, 566)
+    # 1.91:1 is not in the second group, so its best one is taken.
+    panel.platform_choice.buttons()[second].click()
+    assert window.collage.layout.canvas == collage.CANVAS_4X5
+
+
+def test_count_seams_and_canvas_are_remembered() -> None:
+    layout = Layout(
+        platform=collage.PLATFORM_1,
+        canvas=collage.CANVAS_3X4,
+        count=3,
+        seams=(0.3, 0.7),
+        split=collage.SPLIT_STACKED,
+    )
+    stored = CollageSettings()
+    stored.remember(layout)
+    again = CollageSettings.from_dict(stored.to_dict())
+    assert again.layout == layout.sane()
+
+
+@pytest.mark.parametrize(
+    ("orientation", "canvas"),
+    [("landscape", collage.CANVAS_16X9), ("portrait", collage.CANVAS_4X5)],
+)
+def test_settings_from_before_keep_their_canvas_and_seam(orientation: str, canvas: str) -> None:
+    stored = CollageSettings.from_dict({"orientation": orientation, "seam": 0.4})
+    layout = stored.layout
+    assert layout.platform == collage.PLATFORM_2
+    assert layout.canvas == canvas
+    assert layout.count == 2
+    assert layout.seams == pytest.approx((0.4,))

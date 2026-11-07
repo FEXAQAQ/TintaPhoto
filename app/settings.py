@@ -168,13 +168,15 @@ class CollageSettings:
     collage and are not kept.
     """
 
-    orientation: str = collage.ORIENTATION_LANDSCAPE
+    platform: str = collage.PLATFORM_DEFAULT
+    canvas: str = collage.CANVAS_DEFAULT
     split: str = collage.SPLIT_SIDE_BY_SIDE
     fit: str = collage.FIT_COVER
     gap: int = collage.GAP_MIN
     background: str = collage.BACKGROUND_WHITE
     linked: bool = False
-    seam: float = collage.SEAM_DEFAULT
+    count: int = collage.COUNT_MIN
+    seams: tuple[float, ...] = (collage.SEAM_DEFAULT,)
     #: Write each photo on a canvas of its own beside the collage (K-13).
     carousel: bool = False
 
@@ -182,36 +184,42 @@ class CollageSettings:
     def layout(self) -> collage.Layout:
         """Return these choices as the layout they describe."""
         return collage.Layout(
-            orientation=self.orientation,
+            platform=self.platform,
+            canvas=self.canvas,
             split=self.split,
             fit=self.fit,
             gap=self.gap,
             background=self.background,
             linked=self.linked,
-            seam=self.seam,
+            count=self.count,
+            seams=self.seams,
         ).sane()
 
     def remember(self, layout: collage.Layout) -> None:
         """Take on *layout*."""
         layout = layout.sane()
-        self.orientation = layout.orientation
+        self.platform = layout.platform
+        self.canvas = layout.canvas
         self.split = layout.split
         self.fit = layout.fit
         self.gap = layout.gap
         self.background = layout.background
         self.linked = layout.linked
-        self.seam = layout.seam
+        self.count = layout.count
+        self.seams = layout.seams
 
     def to_dict(self) -> dict[str, Any]:
         """Return the choices as a JSON compatible dictionary."""
         return {
-            "orientation": self.orientation,
+            "platform": self.platform,
+            "canvas": self.canvas,
             "split": self.split,
             "fit": self.fit,
             "gap": self.gap,
             "background": self.background,
             "linked": self.linked,
-            "seam": self.seam,
+            "count": self.count,
+            "seams": list(self.seams),
             "carousel": self.carousel,
         }
 
@@ -221,15 +229,26 @@ class CollageSettings:
         if not isinstance(data, dict):
             data = {}
         settings = cls()
+        seams = data.get("seams")
+        if not isinstance(seams, list):
+            # Before 0.36 a collage was always two photos with one seam.
+            seams = [data.get("seam", collage.SEAM_DEFAULT)]
+        canvas = data.get("canvas")
+        if canvas is None:
+            # Before 0.36 the canvas was 16:9 lying down or 4:5 standing up.
+            portrait = data.get("orientation") == "portrait"
+            canvas = collage.CANVAS_4X5 if portrait else collage.CANVAS_16X9
         settings.remember(
             collage.Layout(
-                orientation=str(data.get("orientation", settings.orientation)),
+                platform=str(data.get("platform", settings.platform)),
+                canvas=str(canvas),
                 split=str(data.get("split", settings.split)),
                 fit=str(data.get("fit", settings.fit)),
                 gap=_as_int(data.get("gap"), settings.gap),
                 background=str(data.get("background", settings.background)),
                 linked=data.get("linked") is True,
-                seam=data.get("seam", settings.seam),
+                count=_as_int(data.get("count"), settings.count),
+                seams=tuple(seams),
             )
         )
         settings.carousel = data.get("carousel") is True

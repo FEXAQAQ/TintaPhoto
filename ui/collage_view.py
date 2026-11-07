@@ -2,17 +2,18 @@
 
 Shows the whole canvas as large as the area allows, each photo where
 :func:`core.collage.placed_rect` puts it - the same function the export
-renders with, so what is seen is what is written. A half with no photo is a
+renders with, so what is seen is what is written. A piece with no photo is a
 patch that asks for one: click it to pick a file, or drop one on it, from
 the filmstrip or from Explorer.
 
 Over a photo, dragging moves it, the wheel zooms it about the pointer (Shift
-for a finer step) and a double click puts it back to its fit. Linked, both
-photos move together. The seam between the halves can be dragged.
+for a finer step) and a double click puts it back to its fit. Linked, all
+photos move together. Each seam between two pieces can be dragged, and a
+double click on one makes the pieces even again.
 
-While the second photo is being aligned, it is drawn half see-through over
-the first across the whole canvas, and dragging, the wheel and the arrow
-keys move and scale it alone.
+While a linked photo is being aligned, it is drawn half see-through over the
+first across the whole canvas, and dragging, the wheel and the arrow keys
+move and scale it alone.
 """
 
 from __future__ import annotations
@@ -60,9 +61,9 @@ _ARROWS: Final[dict[int, tuple[float, float]]] = {
 
 
 class CollageCanvas(QWidget):
-    """The canvas, its two halves and the gestures that place the photos."""
+    """The canvas, its pieces and the gestures that place the photos."""
 
-    #: The user asked to pick a photo for a half, by its slot.
+    #: The user asked to pick a photo for a piece, by its slot.
     choose_requested = Signal(int)
 
     def __init__(self, collage_controller: CollageController, parent: QWidget | None = None) -> None:
@@ -70,7 +71,9 @@ class CollageCanvas(QWidget):
         self._collage = collage_controller
         self._pixmaps: dict[int, QPixmap] = {}
         self._hover: int | None = None
-        self._hover_seam = False
+        #: The seam the pointer is over, and the one being dragged, by index.
+        self._hover_seam: int | None = None
+        self._drag_seam: int | None = None
         self._drop: int | None = None
         self._pressed: int | None = None
         self._drag: str | None = None
@@ -93,11 +96,11 @@ class CollageCanvas(QWidget):
 
     @property
     def aligning(self) -> bool:
-        """Return whether the second photo is being aligned over the first."""
+        """Return whether a linked photo is being aligned over the first."""
         return self._aligning and self._can_align()
 
     def set_aligning(self, aligning: bool) -> None:
-        """Draw the second photo over the first, and move it alone, or stop."""
+        """Draw the photo being aligned over the first, and move it alone, or stop."""
         self._aligning = aligning
         self._update_cursor()
         self.update()
@@ -106,8 +109,12 @@ class CollageCanvas(QWidget):
 
     def _can_align(self) -> bool:
         return self._collage.layout.linked and all(
-            self._collage.photo(slot) is not None for slot in range(collage.SLOTS)
+            self._collage.photo(slot) is not None for slot in (0, self._collage.aligning_slot)
         )
+
+    def _slots(self) -> range:
+        """Return the pieces the layout uses."""
+        return range(self._collage.count)
 
     # -- where things are ------------------------------------------------
 
@@ -127,7 +134,7 @@ class CollageCanvas(QWidget):
         return QRectF(origin.x(), origin.y(), width * scale, height * scale)
 
     def cell_rect(self, slot: int) -> QRectF:
-        """Return where one half is drawn, in widget pixels."""
+        """Return where one piece is drawn, in widget pixels."""
         cell = collage.cells(self._collage.layout)[slot]
         return self._to_widget((cell.x, cell.y, cell.width, cell.height))
 
@@ -143,27 +150,31 @@ class CollageCanvas(QWidget):
         return (point.x() - origin.x()) / scale, (point.y() - origin.y()) / scale
 
     def slot_at(self, point: QPointF) -> int | None:
-        """Return the half under *point*, or ``None`` over the gap or outside."""
-        for slot in range(collage.SLOTS):
+        """Return the piece under *point*, or ``None`` over a gap or outside."""
+        for slot in self._slots():
             if self.cell_rect(slot).contains(point):
                 return slot
         return None
 
-    def seam_position(self) -> float:
-        """Return where the seam is drawn, in widget pixels along the split."""
+    def seam_position(self, index: int = 0) -> float:
+        """Return where seam *index* is drawn, in widget pixels along the split."""
         layout = self._collage.layout
-        first = collage.cells(layout)[0]
         scale, origin = self._scale_and_origin()
-        if layout.split == collage.SPLIT_SIDE_BY_SIDE:
-            return origin.x() + (first.width + layout.gap / 2.0) * scale
-        return origin.y() + (first.height + layout.gap / 2.0) * scale
+        start = origin.x() if layout.split == collage.SPLIT_SIDE_BY_SIDE else origin.y()
+        return start + collage.seam_at(layout, index) * scale
 
-    def _near_seam(self, point: QPointF) -> bool:
+    def _seam_near(self, point: QPointF) -> int | None:
+        """Return the seam within reach of *point*, the nearest if two are."""
         if not self.canvas_rect().contains(point) or self.aligning:
-            return False
-        along = point.x() if self._collage.layout.split == collage.SPLIT_SIDE_BY_SIDE else point.y()
-        reach = theme.COLLAGE_SEAM_GRAB + self._collage.layout.gap * self._scale_and_origin()[0] / 2
-        return abs(along - self.seam_position()) <= reach
+            return None
+        layout = self._collage.layout
+        along = point.x() if layout.split == collage.SPLIT_SIDE_BY_SIDE else point.y()
+        reach = theme.COLLAGE_SEAM_GRAB + layout.gap * self._scale_and_origin()[0] / 2
+        distances = [
+            (abs(along - self.seam_position(index)), index) for index in range(len(layout.seams))
+        ]
+        distance, index = min(distances)
+        return index if distance <= reach else None
 
     # -- being told things -----------------------------------------------
 
@@ -178,7 +189,7 @@ class CollageCanvas(QWidget):
     # -- drawing ---------------------------------------------------------
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """Draw the canvas, its background and each half."""
+        """Draw the canvas, its background and each piece."""
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(theme.BG_CANVAS))
         layout = self._collage.layout
@@ -192,7 +203,7 @@ class CollageCanvas(QWidget):
         if self.aligning:
             self._draw_aligning(painter, canvas)
             return
-        for slot in range(collage.SLOTS):
+        for slot in self._slots():
             area = self.cell_rect(slot)
             pixmap = self._pixmaps.get(slot)
             rect = self._collage.rect(slot)
@@ -203,37 +214,40 @@ class CollageCanvas(QWidget):
             painter.setClipRect(area)
             painter.drawPixmap(self._to_widget(rect), pixmap, QRectF(pixmap.rect()))
             painter.restore()
-            if slot in (self._hover, self._drop) and self.isEnabled() and not self._hover_seam:
+            hovered = slot in (self._hover, self._drop) and self._hover_seam is None
+            if hovered and self.isEnabled():
                 self._draw_outline(painter, area, dashed=slot == self._drop)
-        if self.isEnabled() and (self._hover_seam or self._drag == _DRAG_SEAM):
-            self._draw_seam(painter, canvas)
+        seam = self._drag_seam if self._drag == _DRAG_SEAM else self._hover_seam
+        if self.isEnabled() and seam is not None:
+            self._draw_seam(painter, canvas, seam)
 
     def _draw_aligning(self, painter: QPainter, canvas: QRectF) -> None:
-        """Draw both photos over the whole canvas, the second see-through."""
+        """Draw the first photo over the whole canvas, the one being aligned see-through."""
         painter.save()
         painter.setClipRect(canvas)
-        for slot in range(collage.SLOTS):
+        aligning = self._collage.aligning_slot
+        for slot in (0, aligning):
             rect = self._collage.rect(slot)
             pixmap = self._pixmaps.get(slot)
             if rect is None or pixmap is None:
                 continue
-            painter.setOpacity(theme.COLLAGE_ALIGN_OPACITY if slot == 1 else 1.0)
+            painter.setOpacity(theme.COLLAGE_ALIGN_OPACITY if slot == aligning else 1.0)
             painter.drawPixmap(self._to_widget(rect), pixmap, QRectF(pixmap.rect()))
         painter.restore()
 
-    def _draw_seam(self, painter: QPainter, canvas: QRectF) -> None:
+    def _draw_seam(self, painter: QPainter, canvas: QRectF, index: int) -> None:
         """Mark the seam the pointer is over, or the one being dragged."""
         pen = QPen(QColor(theme.ACCENT))
         pen.setWidth(theme.BORDER_WIDTH)
         painter.setPen(pen)
-        at = self.seam_position()
+        at = self.seam_position(index)
         if self._collage.layout.split == collage.SPLIT_SIDE_BY_SIDE:
             painter.drawLine(QPointF(at, canvas.top()), QPointF(at, canvas.bottom()))
         else:
             painter.drawLine(QPointF(canvas.left(), at), QPointF(canvas.right(), at))
 
     def _draw_empty(self, painter: QPainter, slot: int, area: QRectF) -> None:
-        """Draw a half that has no photo yet, in its hover and pressed states."""
+        """Draw a piece that has no photo yet, in its hover and pressed states."""
         loading = self._collage.paths[slot] is not None
         if not self.isEnabled() or loading:
             fill = theme.BG_RAISED
@@ -275,7 +289,7 @@ class CollageCanvas(QWidget):
             )
 
     def _draw_outline(self, painter: QPainter, area: QRectF, dashed: bool) -> None:
-        """Mark the half the pointer is over, or the one a drop would land in."""
+        """Mark the piece the pointer is over, or the one a drop would land in."""
         pen = QPen(QColor(theme.ACCENT if dashed else theme.TEXT_TERTIARY))
         pen.setWidth(theme.BORDER_WIDTH)
         if dashed:
@@ -288,7 +302,7 @@ class CollageCanvas(QWidget):
     # -- gestures --------------------------------------------------------
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """Start dragging a photo, the seam, or the photo being aligned."""
+        """Start dragging a photo, a seam, or the photo being aligned."""
         if event.button() is not Qt.MouseButton.LeftButton:
             super().mousePressEvent(event)
             return
@@ -297,11 +311,13 @@ class CollageCanvas(QWidget):
         self._dragged = False
         self._press_point = point
         self._pressed = self.slot_at(point)
+        seam = self._seam_near(point)
         if self.aligning and self.canvas_rect().contains(point):
             self._drag = _DRAG_ALIGN
-            self._press_alignment = self._collage.alignment(1)
-        elif self._near_seam(point):
+            self._press_alignment = self._collage.alignment(self._collage.aligning_slot)
+        elif seam is not None:
             self._drag = _DRAG_SEAM
+            self._drag_seam = seam
             self._pressed = None
         elif self._pressed is not None:
             self._drag = _DRAG_PAN
@@ -322,7 +338,7 @@ class CollageCanvas(QWidget):
                 self._follow_drag(point, moved)
             return
         hover = self.slot_at(point)
-        near_seam = self._near_seam(point)
+        near_seam = self._seam_near(point)
         if hover != self._hover or near_seam != self._hover_seam:
             self._hover = hover
             self._hover_seam = near_seam
@@ -334,13 +350,15 @@ class CollageCanvas(QWidget):
         delta = (moved.x() / scale, moved.y() / scale)
         layout = self._collage.layout
         if self._drag == _DRAG_SEAM:
+            if self._drag_seam is None:
+                return
             canvas_x, canvas_y = self._to_canvas(point)
             width, height = layout.canvas_size
             along = canvas_x / width if layout.split == collage.SPLIT_SIDE_BY_SIDE else canvas_y / height
-            self._collage.set_layout(replace(layout, seam=along))
+            self._collage.set_layout(collage.with_seam(layout, self._drag_seam, along))
             return
         if self._drag == _DRAG_ALIGN:
-            rect = self._collage.rect(1, aligned=False)
+            rect = self._collage.rect(self._collage.aligning_slot, aligned=False)
             if rect is not None:
                 self._collage.set_alignment(collage.nudged(self._press_alignment, delta, rect))
             return
@@ -360,7 +378,7 @@ class CollageCanvas(QWidget):
         )
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """A click on an empty half asks for a photo to put there."""
+        """A click on an empty piece asks for a photo to put there."""
         if event.button() is not Qt.MouseButton.LeftButton:
             super().mouseReleaseEvent(event)
             return
@@ -374,6 +392,7 @@ class CollageCanvas(QWidget):
         )
         self._pressed = None
         self._drag = None
+        self._drag_seam = None
         self._dragged = False
         if clicked_empty:
             self.choose_requested.emit(slot)
@@ -381,14 +400,14 @@ class CollageCanvas(QWidget):
         self.update()
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """Put back whatever is under the pointer: alignment, seam or fit."""
+        """Put back whatever is under the pointer: alignment, even pieces or fit."""
         point = event.position()
         if self.aligning:
             self._collage.set_alignment(UNALIGNED)
             return
-        if self._near_seam(point):
+        if self._seam_near(point) is not None:
             layout = self._collage.layout
-            self._collage.set_layout(replace(layout, seam=collage.SEAM_DEFAULT))
+            self._collage.set_layout(replace(layout, seams=collage.even_seams(layout.count)))
             return
         slot = self.slot_at(point)
         if slot is not None and self._collage.photo_size(slot) is not None:
@@ -410,12 +429,13 @@ class CollageCanvas(QWidget):
         fine = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         anchor = self._to_canvas(event.position())
         if self.aligning:
-            rect = self._collage.rect(1, aligned=False)
+            aligning = self._collage.aligning_slot
+            rect = self._collage.rect(aligning, aligned=False)
             if rect is None:
                 event.ignore()
                 return
             step = _ALIGN_SCALE_FINE if fine else _ALIGN_SCALE_PER_NOTCH
-            alignment = self._collage.alignment(1)
+            alignment = self._collage.alignment(aligning)
             self._collage.set_alignment(
                 collage.rescaled(alignment, alignment.scale * step**notches, anchor, rect)
             )
@@ -443,25 +463,26 @@ class CollageCanvas(QWidget):
         event.accept()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """While aligning, the arrow keys move the second photo a pixel at a time."""
+        """While aligning, the arrow keys move the aligned photo a pixel at a time."""
         direction = _ARROWS.get(int(event.key()))
-        rect = self._collage.rect(1, aligned=False) if self.aligning else None
+        aligning = self._collage.aligning_slot
+        rect = self._collage.rect(aligning, aligned=False) if self.aligning else None
         if direction is None or rect is None:
             super().keyPressEvent(event)
             return
         step = _NUDGE_LARGE if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else _NUDGE
         self._collage.set_alignment(
             collage.nudged(
-                self._collage.alignment(1), (direction[0] * step, direction[1] * step), rect
+                self._collage.alignment(aligning), (direction[0] * step, direction[1] * step), rect
             )
         )
         event.accept()
 
     def leaveEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """Stop marking the half or the seam the pointer was over."""
+        """Stop marking the piece or the seam the pointer was over."""
         super().leaveEvent(event)
         self._hover = None
-        self._hover_seam = False
+        self._hover_seam = None
         self.update()
 
     def changeEvent(self, event) -> None:  # noqa: N802 - Qt naming
@@ -476,7 +497,7 @@ class CollageCanvas(QWidget):
         if self.aligning:
             self.setCursor(Qt.CursorShape.SizeAllCursor)
             return
-        if self._drag == _DRAG_SEAM or (self._drag is None and self._hover_seam):
+        if self._drag == _DRAG_SEAM or (self._drag is None and self._hover_seam is not None):
             vertical = self._collage.layout.split == collage.SPLIT_SIDE_BY_SIDE
             self.setCursor(Qt.CursorShape.SplitHCursor if vertical else Qt.CursorShape.SplitVCursor)
             return
@@ -504,20 +525,20 @@ class CollageCanvas(QWidget):
         self._follow_drop(event.position())
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """Follow the drag from one half to the other."""
+        """Follow the drag from one piece to another."""
         if self._follow_drop(event.position()):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragLeaveEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """Stop marking a half."""
+        """Stop marking a piece."""
         super().dragLeaveEvent(event)
         self._drop = None
         self.update()
 
     def dropEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """Put the first photo in the half it was dropped on, a second in the other."""
+        """Put the first photo in the piece it was dropped on, the rest in empty ones."""
         slot = self.slot_at(event.position())
         photos = dropped_photos(event)
         self._drop = None
@@ -527,9 +548,7 @@ class CollageCanvas(QWidget):
             return
         event.acceptProposedAction()
         self._collage.load(slot, photos[0])
-        other = 1 - slot
-        if len(photos) > 1 and self._collage.paths[other] is None:
-            self._collage.load(other, photos[1])
+        self._collage.fill(photos[1:])
 
     def _follow_drop(self, point: QPointF) -> bool:
         slot = self.slot_at(point)
