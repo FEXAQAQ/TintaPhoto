@@ -1528,6 +1528,8 @@ def test_the_settings_menu_entry_and_shortcut_are_live(window: MainWindow) -> No
 def test_the_last_folder_is_opened_at_start_when_that_is_asked_for(
     qt_app: object, tmp_path: object
 ) -> None:
+    import time
+
     from app import settings as settings_module
 
     folder = _folder_with_a_photo(tmp_path)
@@ -1538,7 +1540,11 @@ def test_the_last_folder_is_opened_at_start_when_that_is_asked_for(
     )
     main_window = MainWindow(settings)
     try:
-        qt_app.processEvents()  # type: ignore[attr-defined]
+        # The folder is listed on a background thread; under load one pass
+        # of the event loop is not always enough for it to arrive.
+        deadline = time.perf_counter() + 10.0
+        while not main_window.controller.photos and time.perf_counter() < deadline:
+            qt_app.processEvents()  # type: ignore[attr-defined]
         assert len(main_window.controller.photos) == 1
     finally:
         main_window.controller.shutdown()
