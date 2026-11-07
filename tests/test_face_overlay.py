@@ -83,3 +83,31 @@ def test_the_points_and_the_reach_of_the_one_in_hand_are_drawn(qt_app: object) -
     (centre, across, _down) = guide.reaches["chin"][0]
     edge = _on_screen(across)
     assert image.pixelColor(edge.toPoint()).alpha() > 0
+
+
+def test_left_and_right_are_named_as_they_are_on_screen(qt_app: object) -> None:
+    overlay = _overlay()
+    names = overlay.names(0)
+    assert names["left_eye"] == "liquify.handle.eye_left"  # the detector's first eye is on the left here
+    assert names["chin"] == "liquify.handle.chin" and names["nose"] == "liquify.handle.nose"
+    # The same face mirrored: its first eye is now on the right of the screen.
+    mirrored = liquify.FaceMarks(points=tuple((1.0 - x, y) for x, y in FACE.points))
+    guide = liquify.face_guide(mirrored, (400, 300))
+    assert guide is not None
+    overlay.set_guides([guide])
+    names = overlay.names(0)
+    assert names["left_eye"] == "liquify.handle.eye_right"
+    assert names["right_eye"] == "liquify.handle.eye_left"
+    assert names["left_cheek"] == "liquify.handle.cheek_right"
+    assert overlay.names(5) == {}
+
+
+def test_every_point_has_a_name_and_a_place_to_go(qt_app: object) -> None:
+    from app.i18n import tr
+
+    overlay = _overlay()
+    for handle, key in overlay.names(0).items():
+        assert tr(key) != key, handle
+    for feature in ("eye", "nose", "mouth", "chin", "cheek"):
+        key = f"liquify.handle.{feature}.where"
+        assert tr(key) != key

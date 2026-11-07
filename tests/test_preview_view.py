@@ -823,3 +823,25 @@ def test_the_view_bar_keeps_centred_when_its_words_change_width(
     page = area.view_bar.parentWidget()
     assert area.view_bar.width() >= narrow
     assert abs(area.view_bar.geometry().center().x() - page.width() / 2) <= 1
+
+
+def test_zooming_onto_a_part_fills_the_view_with_it_and_the_view_comes_back(
+    canvas: PhotoCanvas,
+) -> None:
+    """L-12: placing a face's points brings the face up close, then puts the view back."""
+    before = canvas.view_state()
+    box = (0.6, 0.6, 0.7, 0.7)
+    canvas.zoom_onto(box, 0.6)
+    assert not canvas.fitting
+    width, height = canvas.frame_size
+    view = canvas.view_rect()
+    expected = 0.6 * min(view.width() / (0.1 * width), view.height() / (0.1 * height))
+    assert canvas.scale == pytest.approx(min(expected, 4.0), rel=1e-6)
+    middle = canvas.widget_to_photo(view.center())
+    assert middle.x() / width == pytest.approx(0.65, abs=0.01)
+    assert middle.y() / height == pytest.approx(0.65, abs=0.01)
+    # Never smaller than the photo fits.
+    canvas.zoom_onto((0.0, 0.0, 1.0, 1.0), 0.6)
+    assert canvas.scale == pytest.approx(canvas.fit_scale())
+    canvas.restore_view(before)
+    assert canvas.fitting and canvas.scale == pytest.approx(before[1])

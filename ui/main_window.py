@@ -80,6 +80,9 @@ logger = logging.getLogger(__name__)
 #: How much one press of [ or ] changes the spot removal brush (A-32): a
 #: quarter, so that eight presses run from a speck of dust to a blemish.
 SPOT_SIZE_STEP: Final[float] = 1.25
+#: How much of the view the faces fill when their points are placed by hand
+#: (L-12): near enough to tell the points apart, with room around them.
+FACE_EDIT_SHARE: Final[float] = 0.6
 
 
 class MainWindow(QMainWindow):
@@ -114,6 +117,13 @@ class MainWindow(QMainWindow):
         self._portrait_mode = False
         #: Whether liquify is open (PLAN.md 3.16).
         self._liquify_mode = False
+        #: How the photo was shown before it was zoomed onto the faces to
+        #: place their points (L-12), and which photo that was; the view
+        #: goes back to it when placing ends.
+        self._view_before_faces: tuple[Path, tuple[bool, float, QPointF]] | None = None
+        #: Whether the faces are still to be zoomed onto, because placing
+        #: began before they were found.
+        self._faces_to_zoom = False
         #: What the watermark on screen was last drawn for, so that a new
         #: preview of the same photo does not draw it again.
         self._watermark_drawn: tuple[object, tuple[int, int]] | None = None
@@ -1004,12 +1014,24 @@ class MainWindow(QMainWindow):
         shown without liquify; letting go of the button shapes it again.
         """
         editing = editing and self._liquify_mode
+        canvas = self.preview.canvas
+        was_editing = canvas.faces.active
         self.liquify_panel.set_editing(editing)
         self.controller.set_editing_faces(editing)
-        canvas = self.preview.canvas
         canvas.faces.set_open(editing)
         canvas.liquify.set_open(self._liquify_mode and not editing)
+        current = self.controller.current
+        if editing and not was_editing and current is not None:
+            # The faces are brought up close, and the view is put back after.
+            self._view_before_faces = (current, canvas.view_state())
+            self._faces_to_zoom = True
         self._show_face_guides()
+        if not editing and was_editing:
+            self._faces_to_zoom = False
+            before = self._view_before_faces
+            self._view_before_faces = None
+            if before is not None and before[0] == current:
+                canvas.restore_view(before[1])
         canvas.refresh_cursor()
         canvas.update()
 
@@ -1021,9 +1043,16 @@ class MainWindow(QMainWindow):
     def _show_face_guides(self) -> None:
         """Give the photo the face's points as they are now, while they are placed."""
         canvas = self.preview.canvas
-        if canvas.faces.active:
-            canvas.faces.set_guides(self.controller.face_guides_on_screen())
-            canvas.update()
+        if not canvas.faces.active:
+            return
+        guides = self.controller.face_guides_on_screen()
+        canvas.faces.set_guides(guides)
+        if self._faces_to_zoom and guides:
+            self._faces_to_zoom = False
+            xs = [x for guide in guides for x, _ in guide.handles]
+            ys = [y for guide in guides for _, y in guide.handles]
+            canvas.zoom_onto((min(xs), min(ys), max(xs), max(ys)), FACE_EDIT_SHARE)
+        canvas.update()
 
     def _on_face_handle_moved(
         self, face: int, handle: str, x: float, y: float, dragging: bool

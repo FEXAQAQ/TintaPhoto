@@ -2568,3 +2568,35 @@ def test_a_dragged_face_point_reaches_the_controller(
     window.preview.canvas.faces.handle_moved.emit(0, "nose", 0.52, 0.48, False)
     assert controller.face_shape.faces[0].points[2] == pytest.approx((0.52, 0.48), abs=1e-6)
     assert window.liquify_panel.reset_faces_button.isEnabled()
+
+
+def test_placing_the_points_zooms_onto_the_face_and_puts_the_view_back(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    from core.faces import Face, SkinTone
+
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    controller = window.controller
+    face = Face(
+        points=((0.45, 0.4), (0.55, 0.4), (0.5, 0.47), (0.47, 0.54), (0.53, 0.54), (0.5, 0.48)),
+        tone=SkinTone(red=0.0, blue=0.0, spread=0.1, brightness=-2.0),
+    )
+    controller._faces[(controller.current, controller.geometry.lens)] = (face,)
+    canvas = window.preview.canvas
+    assert canvas.fitting
+    window.enter_liquify()
+    window._on_faces_ready(1)
+    window.liquify_panel.edit_faces_button.click()
+    # This small photo already fills the window at its largest zoom, so the
+    # view only moves its middle onto the face.
+    fitting, _scale, centre = canvas.view_state()
+    width, height = canvas.frame_size
+    (guide,) = controller.face_guides_on_screen()
+    xs = [x for x, _ in guide.handles]
+    ys = [y for _, y in guide.handles]
+    middle = ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
+    assert not fitting
+    assert (centre.x() / width, centre.y() / height) == pytest.approx(middle, abs=0.01)
+    window.liquify_panel.edit_faces_button.click()
+    assert canvas.fitting

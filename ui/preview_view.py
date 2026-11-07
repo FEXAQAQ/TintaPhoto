@@ -505,6 +505,46 @@ class PhotoCanvas(QWidget):
             self._apply_scale(target, anchor, photo_point)
             self._announce_view(settled=True)
 
+    def view_state(self) -> tuple[bool, float, QPointF]:
+        """Return how the photo is shown now: fitted or not, the scale, the middle point."""
+        return self._fitting, self._scale, QPointF(self._centre)
+
+    def restore_view(self, state: tuple[bool, float, QPointF]) -> None:
+        """Show the photo again as :meth:`view_state` said it was."""
+        if self._pixmap is None:
+            return
+        self._stop_animation()
+        fitting, scale, centre = state
+        if fitting:
+            self.fit_to_window()
+            return
+        self._fitting = False
+        self._apply_scale(scale, self._middle().toPoint(), centre)
+        self._announce_view(settled=True)
+
+    def zoom_onto(self, box: tuple[float, float, float, float], share: float) -> None:
+        """Zoom so that *box* fills *share* of the view, in its middle.
+
+        *box* is left, top, right and bottom in fractions of the frame. The
+        photo is never shown smaller than it fits, nor larger than the
+        largest zoom step (L-12: placing a face's points).
+        """
+        if self._pixmap is None or self._frame.isEmpty():
+            return
+        left, top, right, bottom = box
+        width = max((right - left) * self._frame.width(), 1.0)
+        height = max((bottom - top) * self._frame.height(), 1.0)
+        view = self.view_rect()
+        wanted = share * min(view.width() / width, view.height() / height)
+        scale = max(min(wanted, ZOOM_STEPS[-1]), self.fit_scale())
+        centre = QPointF(
+            (left + right) / 2 * self._frame.width(), (top + bottom) / 2 * self._frame.height()
+        )
+        self._stop_animation()
+        self._fitting = False
+        self._apply_scale(scale, self._middle().toPoint(), centre)
+        self._announce_view(settled=True)
+
     def toggle_actual_size(self, focus: QPoint | None = None) -> None:
         """Switch between fitting the window and actual pixels (PLAN.md 3.3)."""
         if self._fitting:
