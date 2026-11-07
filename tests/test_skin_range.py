@@ -215,3 +215,38 @@ def test_grey_in_the_same_shade_is_still_left_out() -> None:
     skin = _skin(photo, SkinRange(auto=False, strokes=(stroke,)))
     assert skin[505, 345] < 0.1  # the grey slab
     assert skin[505, 310] > 0.9  # the shaded skin beside it
+
+
+def _leaf_lit_photo():
+    """The test person with a broad band of light through leaves across the chest.
+
+    A stop darker and 0.9 stops less blue at its middle, fading in over 40 px
+    on both sides, so that its middle lies well beyond the reach of shade
+    from lit skin.
+    """
+    from tests.test_whiten import _person_area
+
+    photo = _photo()
+    rows = np.arange(HEIGHT, dtype=np.float32)
+    strength = np.clip(np.minimum(rows - 460, 580 - rows) / 40.0, 0.0, 1.0)[:, None, None]
+    tint = np.array([0.45, 0.42, 0.22], dtype=np.float32)
+    shaded = photo.image * (1 + strength * (tint - 1))
+    image = np.where(_person_area()[..., None], shaded, photo.image).astype(np.float32)
+    return replace(photo, image=image)
+
+
+def test_the_brush_takes_in_yellow_shade_where_its_centre_goes() -> None:
+    """2026-11-07: the side of a waist lit through leaves stayed out of the brush."""
+    photo = _leaf_lit_photo()
+    over = SkinStroke(points=(_at(150, 520),), radius=0.03, adding=True, snap=True)
+    skin = _skin(photo, SkinRange(auto=False, strokes=(over,)))
+    assert skin[520, 150] > 0.9
+
+
+def test_far_shade_is_left_out_where_the_centre_stays_on_lit_skin() -> None:
+    photo = _leaf_lit_photo()
+    # A wide brush over lit skin whose edge reaches the middle of the band.
+    beside = SkinStroke(points=(_at(150, 440),), radius=0.12, adding=True, snap=True)
+    skin = _skin(photo, SkinRange(auto=False, strokes=(beside,)))
+    assert skin[440, 150] > 0.9
+    assert skin[520, 150] < 0.1

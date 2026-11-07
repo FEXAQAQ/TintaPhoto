@@ -73,6 +73,11 @@ SNAP_SHADE_REACH: Final[tuple[float, float]] = (3.0, 5.0)
 SNAP_SHADE_DARKER: Final[tuple[float, float]] = (3.0, 5.0)
 SNAP_SHADE_FROM: Final[float] = 0.0
 SNAP_SHADE_FULL: Final[float] = 0.5
+#: Light through leaves turns skin in shade yellow rather than blue: on the
+#: user's portraits the side of a waist under an arm came out 0.7 stops less
+#: blue than the cheeks, as warm as them or warmer. Towards less blue the
+#: looser colour reaches this many times as far.
+SNAP_SHADE_YELLOWER: Final[float] = 3.5
 #: An edge of colour, in stops of red or blue against green per pixel of the
 #: small copy, after the same blur as for the skin beside the face. Steeper
 #: than there: the edge of a shadow cast by the sun turns skin bluer at once
@@ -99,6 +104,29 @@ SNAP_SHADE_NEAR_FRAME: Final[float] = 0.025
 #: than SNAP_WARMTH_LEAST stops is not held to it.
 SNAP_SHADE_WARMTH: Final[tuple[float, float]] = (0.15, 0.35)
 SNAP_WARMTH_LEAST: Final[float] = 0.1
+#: Shade beyond that reach is still taken in where the brush's centre went
+#: over it: each pixel is held to the colour under the nearest point of the
+#: stroke's path, fully within the first of these stops of red and blue
+#: against green and not at all beyond the second, after a blur of
+#: SNAP_CENTRE_BLUR of the radius. The side of a body in the shade of an arm
+#: can lie a whole face from lit skin on a photo of the whole body, and the
+#: pavement beside an arm is as near; what tells them apart is where the
+#: user put the brush.
+SNAP_CENTRE_REACH: Final[tuple[float, float]] = (0.15, 0.3)
+SNAP_CENTRE_BLUR: Final[float] = 0.15
+#: That far shade must keep at least the faces' warmth (none of it at the
+#: first share, all at the second) and be no darker than them by more than
+#: these stops (fully within the first, not at all beyond the second): the
+#: dark leaves and the ground in deep shade behind a person join the skin
+#: as well, but are greyer or far darker. The yellow side of the waist was
+#: twice as warm as the cheeks and a stop darker.
+SNAP_FAR_WARMTH: Final[tuple[float, float]] = (0.6, 0.9)
+SNAP_FAR_DARKER: Final[tuple[float, float]] = (1.5, 2.5)
+#: Nor may it be less red than the faces by more than these stops (red
+#: against green; fully within the first, not at all beyond the second):
+#: grass and leaves in the same warm shade are 0.25 to 0.5 stops less red,
+#: the yellow side of the waist was as red as the cheeks.
+SNAP_FAR_LESS_RED: Final[tuple[float, float]] = (0.12, 0.22)
 
 #: The planes of :func:`field`.
 FOUND: Final[int] = 0
@@ -299,7 +327,7 @@ def field(
     # With faces to take the colour from, every stroke keeps to the same.
     if tones:
         largest = max(faces_module.face_size(face, size) for face in faces or ())
-        shared = snap_likeness(features, tones, SNAP_SHADE_NEAR * largest)
+        shared = snap_planes(features, tones, SNAP_SHADE_NEAR * largest)
     else:
         shared = None
     kept = np.ones(small.shape[:2], dtype=np.float32)
@@ -312,7 +340,7 @@ def field(
             kept *= np.float32(1.0) - painted
             continue
         if stroke.snap:
-            painted *= _likeness(features, shared, painted, stroke.radius * max(size))
+            painted *= _likeness(features, shared, painted, stroke, size)
         np.maximum(added, painted * kept, out=added)
     planes[..., KEPT] = kept
     planes[..., ADDED] = added
@@ -355,20 +383,21 @@ def stroke_mask(stroke: SkinStroke, size: tuple[int, int]) -> NDArray[np.float32
 
 def _likeness(
     features: tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]],
-    shared: NDArray[np.float32] | None,
+    shared: tuple[NDArray[np.float32], NDArray[np.float32]] | None,
     painted: NDArray[np.float32],
-    radius: float,
+    stroke: SkinStroke,
+    size: tuple[int, int],
 ) -> NDArray[np.float32]:
     """Return how much each pixel is skin, for a stroke that keeps to it.
 
-    *shared* is the likeness to the colour of the faces, when there are
-    faces with colour; otherwise the colour the stroke was painted over is
-    read as a face's would be. Where there is no colour to go by - a black
-    and white photo - everything is.
+    *shared* is :func:`snap_planes` for the colour of the faces, when there
+    are faces with colour; otherwise the colour the stroke was painted over
+    is read as a face's would be. Where there is no colour to go by - a
+    black and white photo - everything is.
     """
     red, blue, brightness = features
-    like = shared
-    if like is None:
+    planes = shared
+    if planes is None:
         under = painted > 0.5
         if not under.any():
             return np.ones(red.shape, dtype=np.float32)
@@ -380,8 +409,66 @@ def _likeness(
         )
         if not faces_module.is_coloured(tone):
             return np.ones(red.shape, dtype=np.float32)
-        like = snap_likeness(features, [tone], SNAP_SHADE_NEAR_FRAME * max(red.shape))
-    return faces_module.fill_holes(like, SNAP_HOLE_FILL * radius)
+        planes = snap_planes(features, [tone], SNAP_SHADE_NEAR_FRAME * max(red.shape))
+    like, far = planes
+    reached = painted > 0
+    if far[reached].max(initial=0.0) > 0:
+        # Only where the stroke went, which is all that is kept of it.
+        rows, columns = np.nonzero(reached)
+        box = (
+            slice(int(rows.min()), int(rows.max()) + 1),
+            slice(int(columns.min()), int(columns.max()) + 1),
+        )
+        like = like.copy()
+        like[box] = np.maximum(like[box], far[box] * centre_likeness(features, stroke, size, box))
+    return faces_module.fill_holes(like, SNAP_HOLE_FILL * stroke.radius * max(size))
+
+
+def centre_likeness(
+    features: tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]],
+    stroke: SkinStroke,
+    size: tuple[int, int],
+    box: tuple[slice, slice] | None = None,
+) -> NDArray[np.float32]:
+    """Return how near each pixel is to the colour under the stroke's path, from 0 to 1.
+
+    Each pixel is held to the colour at the nearest point of the path the
+    brush's centre took (SNAP_CENTRE_REACH, after a blur of SNAP_CENTRE_BLUR
+    of the radius). *features* are on a frame of *size*; with *box*, only
+    that part of it is worked out and returned, which must hold the path.
+    """
+    if box is None:
+        box = (slice(0, size[1]), slice(0, size[0]))
+    red, blue = features[0][box], features[1][box]
+    width, height = size
+    top, left = box[0].start, box[1].start
+    bottom, right = red.shape[0] - 1, red.shape[1] - 1
+    points = [
+        (
+            min(max(round(x * width - 0.5) - left, 0), right),
+            min(max(round(y * height - 0.5) - top, 0), bottom),
+        )
+        for x, y in stroke.points
+    ]
+    path = np.zeros(red.shape, dtype=np.uint8)
+    for x, y in points:
+        path[y, x] = 255
+    for start, end in zip(points[:-1], points[1:], strict=True):
+        cv2.line(path, start, end, 255, 1)
+    on_path = path > 0
+    # Every pixel of the path gets a label of its own, so that each pixel
+    # can look up the colour of the nearest one.
+    _distance, nearest = cv2.distanceTransformWithLabels(
+        np.where(on_path, 0, 1).astype(np.uint8), cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL
+    )
+    sigma = max(SNAP_CENTRE_BLUR * stroke.radius * max(size), 0.5)
+    apart = np.zeros(red.shape, dtype=np.float32)
+    for plane in (red, blue):
+        smooth = cv2.GaussianBlur(plane, (0, 0), sigma)
+        under = np.zeros(int(nearest.max()) + 1, dtype=np.float32)
+        under[nearest[on_path]] = smooth[on_path]
+        apart += (plane - under[nearest]) ** 2
+    return np.float32(1.0) - _smoothstep(np.sqrt(apart), *SNAP_CENTRE_REACH)
 
 
 def snap_likeness(
@@ -391,10 +478,24 @@ def snap_likeness(
 ) -> NDArray[np.float32]:
     """Return how much each pixel is skin of *tones*, shade included, from 0 to 1.
 
-    The skin beside the face's colour (:func:`core.faces.body_likeness`),
-    and, in shade joined to it with no edge of colour between and no more
-    than *reach* pixels from it, the looser colour of SNAP_SHADE_SPREAD and
-    SNAP_SHADE_REACH.
+    The first of :func:`snap_planes`.
+    """
+    return snap_planes(features, tones, reach)[0]
+
+
+def snap_planes(
+    features: tuple[NDArray[np.float32], NDArray[np.float32], NDArray[np.float32]],
+    tones: list[SkinTone],
+    reach: float,
+) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+    """Return how much each pixel is skin of *tones*, and the shade beyond *reach*.
+
+    The first is the skin beside the face's colour
+    (:func:`core.faces.body_likeness`), and, in shade joined to it with no
+    edge of colour between and no more than *reach* pixels from it, the
+    looser colour of SNAP_SHADE_SPREAD, SNAP_SHADE_REACH and
+    SNAP_SHADE_YELLOWER. The second is that shade however far it goes, for
+    a stroke to take in where its centre went (:func:`centre_likeness`).
     """
     red, blue, brightness = features
     close = faces_module.body_likeness(red, blue, brightness, tones)
@@ -406,6 +507,7 @@ def snap_likeness(
         reach=SNAP_SHADE_REACH,
         darker=SNAP_SHADE_DARKER,
         least_spread=SNAP_SHADE_SPREAD,
+        yellower=SNAP_SHADE_YELLOWER,
     )
     ground = loose > 0.5
     weight = ground.astype(np.float32)
@@ -433,10 +535,17 @@ def snap_likeness(
     # Skin in shade keeps some of its warmth, red over blue; a grey pavement
     # or a white sleeve in shade has none.
     warmth = max(tone.red - tone.blue for tone in tones)
+    deep = np.float32(1.0) - _smoothstep(np.float32(lit) - brightness, *SNAP_FAR_DARKER)
+    reddest = max(tone.red for tone in tones)
+    deep = deep * (np.float32(1.0) - _smoothstep(np.float32(reddest) - red, *SNAP_FAR_LESS_RED))
     if warmth > SNAP_WARMTH_LEAST:
-        near = near * _smoothstep((red - blue) / np.float32(warmth), *SNAP_SHADE_WARMTH)
-    shaded = loose * shade * near
-    return np.where(joined[labels], np.maximum(close, shaded), close).astype(np.float32)
+        share = (red - blue) / np.float32(warmth)
+        near = near * _smoothstep(share, *SNAP_SHADE_WARMTH)
+        deep = deep * _smoothstep(share, *SNAP_FAR_WARMTH)
+    else:
+        deep = np.zeros(red.shape, dtype=np.float32)
+    shaded = np.where(joined[labels], loose * shade, np.float32(0.0)).astype(np.float32)
+    return np.maximum(close, shaded * near).astype(np.float32), shaded * deep
 
 
 def _smoothstep(values: NDArray[np.float32], low: float, high: float) -> NDArray[np.float32]:
@@ -474,7 +583,9 @@ __all__ = [
     "combined",
     "field",
     "reaches_nothing",
+    "centre_likeness",
     "snap_likeness",
+    "snap_planes",
     "stroke_mask",
     "thinned",
 ]

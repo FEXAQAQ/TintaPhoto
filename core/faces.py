@@ -684,18 +684,23 @@ def body_likeness(
     reach: tuple[float, float] = BODY_COLOUR_REACH,
     darker: tuple[float, float] = DARKER_REACH,
     least_spread: float = COLOUR_LEAST_SPREAD,
+    yellower: float = 1.0,
 ) -> NDArray[np.float32]:
     """Return how much each pixel is the colour of any of *tones*, from 0 to 1.
 
     *red*, *blue* and *brightness* are :func:`colour_features` of the photo.
     The colour may be as far from the tone as an arm's is from the cheeks
     (*reach*, in spreads of at least *least_spread*), and as much darker as
-    *darker* says, in stops; brighter as for the face's own mask.
+    *darker* says, in stops; brighter as for the face's own mask. Towards
+    yellow - less blue than the tone - it may go *yellower* times as far.
     """
     like = np.zeros(red.shape, dtype=np.float32)
     for tone in tones:
         spread = min(max(tone.spread, least_spread), max(COLOUR_MOST_SPREAD, least_spread))
-        distance = cv2.sqrt((red - tone.red) ** 2 + (blue - tone.blue) ** 2) / np.float32(spread)
+        bluer = blue - np.float32(tone.blue)
+        if yellower != 1.0:
+            bluer = np.where(bluer < 0, bluer / np.float32(yellower), bluer)
+        distance = cv2.sqrt((red - tone.red) ** 2 + bluer**2) / np.float32(spread)
         colour = np.float32(1.0) - _smoothstep(distance.reshape(red.shape), *reach)
         light = brightness - np.float32(tone.brightness)
         lit = (np.float32(1.0) - _smoothstep(-light, *darker)) * (
