@@ -150,6 +150,29 @@ def test_the_face_can_be_reset_without_the_strokes(panel: LiquifyPanel) -> None:
     assert panel.every_face_caption.text() == tr("liquify.every_face")
 
 
+def test_the_links_that_act_on_the_faces_sit_together(
+    panel: LiquifyPanel, qt_app: object
+) -> None:
+    panel.set_faces(1)
+    qt_app.processEvents()  # type: ignore[attr-defined]
+    edit, reset = panel.edit_faces_link, panel.reset_face_link
+    assert edit.parentWidget() is reset.parentWidget()
+    assert edit.geometry().center().y() == reset.geometry().center().y()
+    assert edit.geometry().right() < reset.geometry().left()
+    # Below every slider, not up with the count of faces.
+    last = panel.face_rows[FACE_GROUPS[-1][1][-1]]
+    assert edit.mapTo(panel, edit.rect().topLeft()).y() > last.mapTo(panel, last.rect().bottomLeft()).y()
+
+
+def test_done_placing_the_points_is_on_the_right(panel: LiquifyPanel, qt_app: object) -> None:
+    panel.set_faces(1)
+    panel.set_editing(True)
+    qt_app.processEvents()  # type: ignore[attr-defined]
+    done, back = panel.finish_editing_button, panel.reset_faces_button
+    assert back.geometry().right() < done.geometry().left()
+    assert done.width() == back.width()
+
+
 def test_placing_the_points_has_a_page_of_its_own(panel: LiquifyPanel, qt_app: object) -> None:
     seen: list[object] = []
     panel.editing_toggled.connect(seen.append)

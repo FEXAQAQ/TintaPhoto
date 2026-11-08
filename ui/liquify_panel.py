@@ -5,10 +5,11 @@ portrait's panel does. Liquify is two ways of working, and the panel shows
 one at a time, chosen at the top:
 
 * **Face** - sliders, nothing to paint. A line says how many faces were
-  found, with a link for when they were found in the wrong place (L-12);
-  the sliders come in two groups, the face's shape and its features, and
-  each says under its track what its two ends do. With no face found the
-  page says so and offers the brush instead.
+  found; the sliders come in two groups, the face's shape and its
+  features, and each says under its track what its two ends do. Under
+  them the two links that act on the faces sit together: placing their
+  points by hand (L-12) and putting the sliders to rest. With no face
+  found the page says so and offers the brush instead.
 * **Brush** - a line saying how to paint, the six tools with a sentence on
   the one chosen, and the brush's size and strength.
 
@@ -238,17 +239,12 @@ class LiquifyPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # How many faces, and the way to place their points (L-12).
+        # How many faces.
         status = QWidget(page)
         row = QHBoxLayout(status)
         row.setContentsMargins(theme.PANEL_PADDING, theme.SPACE_XS, theme.PANEL_PADDING, 0)
-        row.setSpacing(theme.SPACE_SM)
         self.faces_caption = _caption(status)
         row.addWidget(self.faces_caption, 1)
-        self.edit_faces_link = LinkButton(tr("liquify.edit_faces.link"), parent=status)
-        self.edit_faces_link.setToolTip(tooltip("liquify.edit_faces.tip"))
-        self.edit_faces_link.clicked.connect(lambda: self._on_editing(True))
-        row.addWidget(self.edit_faces_link)
         layout.addWidget(status)
         self._face_status = status
 
@@ -271,20 +267,32 @@ class LiquifyPanel(QWidget):
                 group.add_row(ends)
             layout.addWidget(group)
 
-        # Under the sliders: every face at once, and putting them to rest.
+        # Under the sliders: every face at once, then the two links that act
+        # on the faces, side by side - placing their points (L-12) and
+        # putting the sliders to rest.
         footer = QWidget(page)
-        row = QHBoxLayout(footer)
-        row.setContentsMargins(theme.PANEL_PADDING, theme.SPACE_XS, theme.PANEL_PADDING, 0)
-        row.setSpacing(theme.SPACE_SM)
+        column = QVBoxLayout(footer)
+        column.setContentsMargins(theme.PANEL_PADDING, theme.SPACE_XS, theme.PANEL_PADDING, 0)
+        column.setSpacing(theme.SPACE_XS)
         self.every_face_caption = _caption(footer)
-        row.addWidget(self.every_face_caption, 1)
+        column.addWidget(self.every_face_caption)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(theme.SPACE_MD)
+        row.addStretch(1)
+        self.edit_faces_link = LinkButton(tr("liquify.edit_faces.link"), parent=footer)
+        self.edit_faces_link.setToolTip(tooltip("liquify.edit_faces.tip"))
+        self.edit_faces_link.clicked.connect(lambda: self._on_editing(True))
+        row.addWidget(self.edit_faces_link)
         self.reset_face_link = LinkButton(tr("liquify.reset_face"), parent=footer)
         self.reset_face_link.clicked.connect(self.face_reset_requested.emit)
         row.addWidget(self.reset_face_link)
+        column.addLayout(row)
         layout.addWidget(footer)
         self._face_footer = footer
 
-        # While the points are placed by hand: how, and the way out.
+        # While the points are placed by hand: how, and the way out - on
+        # the right, where the panel's own "done" is.
         editing = QWidget(page)
         column = QVBoxLayout(editing)
         column.setContentsMargins(
@@ -296,15 +304,15 @@ class LiquifyPanel(QWidget):
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
         buttons.setSpacing(theme.SPACE_SM)
-        self.finish_editing_button = TextButton("liquify.edit_faces.done", editing)
-        self.finish_editing_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        self.finish_editing_button.clicked.connect(lambda: self._on_editing(False))
-        buttons.addWidget(self.finish_editing_button, 1)
         self.reset_faces_button = TextButton("liquify.reset_faces", editing)
         self.reset_faces_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.reset_faces_button.setToolTip(tooltip("liquify.reset_faces.tip"))
         self.reset_faces_button.clicked.connect(self.face_marks_reset_requested.emit)
         buttons.addWidget(self.reset_faces_button, 1)
+        self.finish_editing_button = TextButton("liquify.edit_faces.done", editing)
+        self.finish_editing_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.finish_editing_button.clicked.connect(lambda: self._on_editing(False))
+        buttons.addWidget(self.finish_editing_button, 1)
         column.addLayout(buttons)
         layout.addWidget(editing)
         self._face_editing = editing
