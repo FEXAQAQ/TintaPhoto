@@ -243,6 +243,7 @@ class MainWindow(QMainWindow):
         """Join the controller to the regions that show what it produces."""
         self.controller.folder_opened.connect(self._on_folder_opened)
         self.controller.selection_changed.connect(self._on_selection_changed)
+        self.controller.photos_removed.connect(self._on_photos_removed)
         self.controller.preview_ready.connect(self._on_preview_ready)
         self.controller.metadata_ready.connect(self._on_metadata_ready)
         self.controller.thumbnail_ready.connect(self.filmstrip.set_thumbnail)
@@ -440,6 +441,7 @@ class MainWindow(QMainWindow):
         done.clicked.connect(self.finish_crop)
 
         self.filmstrip.photo_selected.connect(self._on_thumbnail_clicked)
+        self.filmstrip.remove_requested.connect(self.controller.remove_photos)
         self.preview.canvas.previous_requested.connect(self.controller.select_previous)
         self.preview.canvas.next_requested.connect(self.controller.select_next)
 
@@ -520,6 +522,22 @@ class MainWindow(QMainWindow):
         # There is something to show now, so the panels come back.
         self._apply_panel_visibility()
 
+
+    def _on_photos_removed(self, removed: list[Path]) -> None:
+        """Take the photos out of the filmstrip; with none left, back to the welcome screen (F-07)."""
+        self.filmstrip.remove_photos(removed)
+        if self.controller.current is not None:
+            self.filmstrip.set_current(self.controller.index, len(self.controller.photos))
+            return
+        # The modes all work on the photo shown, and there is none now.
+        self.leave_watermark()
+        self.leave_portrait()
+        self.leave_liquify()
+        self.preview.canvas.clear()
+        self.preview.show_welcome()
+        self._enable_photo_modes()
+        self._enable_export()
+        self._apply_panel_visibility()
 
     def _on_selection_changed(self, index: int, total: int) -> None:
         self.filmstrip.set_current(index, total)
@@ -830,6 +848,8 @@ class MainWindow(QMainWindow):
         if self.batch.exporting:
             enabled = not self.batch.stopping
         self.toolbar.export_button.setEnabled(enabled)
+        # A photo being written must stay in the list it is written from.
+        self.filmstrip.set_removing_allowed(not self.batch.exporting)
         self.collage_canvas.setEnabled(not self.collage.exporting)
         self.collage_panel.setEnabled(not self.collage.exporting)
 

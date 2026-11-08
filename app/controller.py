@@ -311,6 +311,9 @@ class Controller(QObject):
     history_changed = Signal(bool, bool)
     #: The index of the photo now being shown, and how many there are.
     selection_changed = Signal(int, int)
+    #: Photos taken out of the filmstrip, in the order they were shown;
+    #: :attr:`index` and :attr:`photos` already say what is left (F-07).
+    photos_removed = Signal(object)
     preview_ready = Signal(object)
     metadata_ready = Signal(object)
     thumbnail_ready = Signal(Path, object)
@@ -1161,6 +1164,18 @@ class Controller(QObject):
         """Show the photo at *index*."""
         if not self._photos or not 0 <= index < len(self._photos):
             return
+        self._leave_photo()
+        self._index = index
+        path = self._photos[index]
+        self._look_thumbnails_key = None
+        self.look_thumbnails_ready.emit({})
+        self.selection_changed.emit(index, len(self._photos))
+        self._forget_distant_photos()
+        self._show(path)
+        self._request_metadata(path)
+
+    def _leave_photo(self) -> None:
+        """Let go of everything that belongs to the photo being shown."""
         # The photo being left behind must not lose the second it was still
         # waiting to be saved in.
         self._write_pending()
@@ -1184,14 +1199,6 @@ class Controller(QObject):
         self._showing_window = False
         self._backdrop_stale = False
         self._forget_full_size()
-        self._index = index
-        path = self._photos[index]
-        self._look_thumbnails_key = None
-        self.look_thumbnails_ready.emit({})
-        self.selection_changed.emit(index, len(self._photos))
-        self._forget_distant_photos()
-        self._show(path)
-        self._request_metadata(path)
 
     def select_next(self) -> None:
         """Show the next photo, if there is one."""
@@ -1200,6 +1207,44 @@ class Controller(QObject):
     def select_previous(self) -> None:
         """Show the previous photo, if there is one."""
         self.select(max(self._index - 1, 0))
+
+    def remove_photos(self, paths: Sequence[Path]) -> None:
+        """Take *paths* out of the filmstrip, leaving the files alone (F-07).
+
+        Only the list changes: the photos and their parameter files stay
+        where they are, and opening the folder again brings them back.
+        Taking out the photo being shown moves to the one after it, or the
+        one before when it was the last; taking out every photo leaves
+        nothing open, which is the welcome screen.
+        """
+        gone = set(paths) & set(self._photos)
+        if not gone:
+            return
+        # Settings pasted onto a photo being taken out are still its own.
+        self._write_pending()
+        kept = [path for path in self._photos if path not in gone]
+        current = self.current
+        if current in gone:
+            later = [path for path in self._photos[self._index + 1 :] if path not in gone]
+            earlier = [path for path in self._photos[: self._index] if path not in gone]
+            following = later[0] if later else earlier[-1] if earlier else None
+            if following is None:
+                self._leave_photo()
+            else:
+                self.select(self._photos.index(following))
+            current = following
+        removed = [path for path in self._photos if path in gone]
+        self._photos = kept
+        self._index = kept.index(current) if current is not None else -1
+        for path in gone:
+            self._carried.pop(path, None)
+        self._edited -= gone
+        self._history.forget_all_but(set(kept))
+        self._forget_distant_photos()
+        if current is not None and current in self._decoded:
+            self._preload_neighbours()
+        self._announce_history()
+        self.photos_removed.emit(removed)
 
     # -- the preview -----------------------------------------------------
 

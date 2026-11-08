@@ -84,6 +84,8 @@
   "filmstrip.stop_choosing": "Stop Choosing",
   "filmstrip.checked": "{count} selected",
   "filmstrip.done": "Done",
+  "filmstrip.remove": "Remove from list",
+  "filmstrip.remove_several": "Remove {count} from list",
   "presets.empty": "Press + above to save the current settings as a preset",
   "presets.hint": "Click to apply, right-click to rename or delete",
   "presets.name_label": "Preset name",

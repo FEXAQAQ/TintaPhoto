@@ -19,6 +19,10 @@ Right-clicking a photo offers a choosing mode for exporting several photos
 (PLAN.md 3.1, X-09): every thumbnail gets a box in its corner, a click ticks
 or unticks it without changing the photo being edited, and the export button
 then writes the ticked ones.
+
+A cross in the top right corner of the thumbnail under the pointer takes
+that photo out of the strip (F-07); the menu takes out several chosen ones.
+Only the list changes: the files stay where they are.
 """
 
 from __future__ import annotations
@@ -61,6 +65,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QToolTip,
     QWidget,
 )
 
@@ -90,6 +95,8 @@ class Thumbnail(QWidget):
     drag_started = Signal(Path)
     #: The photo was right-clicked, at this point on the screen.
     menu_requested = Signal(Path, QPoint)
+    #: The cross in the corner was clicked (F-07).
+    remove_requested = Signal(Path)
 
     def __init__(self, path: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -104,6 +111,12 @@ class Thumbnail(QWidget):
         self._hovering = False
         self._pressed = False
         self._press_point = QPoint()
+        #: Whether the cross that takes the photo out is offered, and
+        #: whether the pointer is over it or pressing it (F-07).
+        self._removable = True
+        self._over_cross = False
+        self._pressing_cross = False
+        self.setMouseTracking(True)
         self.setFixedHeight(THUMBNAIL_HEIGHT)
         self.setFixedWidth(PLACEHOLDER_WIDTH)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -145,6 +158,29 @@ class Thumbnail(QWidget):
         if checked != self._checked:
             self._checked = checked
             self.update()
+
+    def set_removable(self, removable: bool) -> None:
+        """Offer the cross that takes this photo out of the strip, or not (F-07)."""
+        if removable != self._removable:
+            self._removable = removable
+            self._over_cross = self._over_cross and removable
+            self._pressing_cross = self._pressing_cross and removable
+            self.update()
+
+    @property
+    def cross_shown(self) -> bool:
+        """Return whether the cross is on screen: the pointer is over the photo."""
+        return self._removable and self._hovering
+
+    def cross_rect(self) -> QRect:
+        """Return where the cross sits, in the top right corner."""
+        size = theme.THUMBNAIL_BADGE_SIZE
+        return QRect(
+            self.rect().right() - size - theme.SPACE_XS + 1,
+            self.rect().top() + theme.SPACE_XS,
+            size,
+            size,
+        )
 
     @property
     def checkable(self) -> bool:
@@ -213,6 +249,34 @@ class Thumbnail(QWidget):
 
         if self._checkable:
             self._draw_check_box(painter, area)
+
+        if self.cross_shown:
+            self._draw_cross(painter)
+
+    def _draw_cross(self, painter: QPainter) -> None:
+        """Draw the cross that takes the photo out of the strip (F-07).
+
+        Solid, like the edited mark below it, because the photo underneath
+        can be any colour; brighter under the pointer and darker pressed.
+        """
+        if self._pressing_cross:
+            patch, glyph_colour = theme.TRACK, theme.TEXT_PRIMARY
+        elif self._over_cross:
+            patch, glyph_colour = theme.BG_RAISED, theme.TEXT_PRIMARY
+        else:
+            patch, glyph_colour = theme.BG_APP, theme.TEXT_SECONDARY
+        badge = self.cross_rect()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(patch))
+        painter.drawRoundedRect(badge, theme.RADIUS_THUMB, theme.RADIUS_THUMB)
+        glyph = theme.ICON_SIZE_SMALL
+        inset = (badge.width() - glyph) // 2
+        painter.drawPixmap(
+            QRect(badge.x() + inset, badge.y() + inset, glyph, glyph),
+            icons.render_pixmap(
+                icons.ICON_X, glyph_colour, round(glyph * self.devicePixelRatioF())
+            ),
+        )
 
     def _draw_outline(self, painter: QPainter, area: QRect) -> None:
         """Outline the thumbnail according to what it is doing right now.
@@ -318,6 +382,13 @@ class Thumbnail(QWidget):
         self.menu_requested.emit(self.path, event.globalPos())
         event.accept()
 
+    def event(self, event: QEvent) -> bool:
+        """Name the cross in its own tooltip, and the photo everywhere else."""
+        if event.type() is QEvent.Type.ToolTip and self._over_cross:
+            QToolTip.showText(event.globalPos(), tr("filmstrip.remove"), self)
+            return True
+        return super().event(event)
+
     def enterEvent(self, event) -> None:  # noqa: N802 - Qt naming
         """Mark the thumbnail the pointer is over."""
         super().enterEvent(event)
@@ -329,10 +400,24 @@ class Thumbnail(QWidget):
         super().leaveEvent(event)
         self._hovering = False
         self._pressed = False
+        self._over_cross = False
+        self._pressing_cross = False
         self.update()
 
+    def _set_over_cross(self, over: bool) -> None:
+        if over != self._over_cross:
+            self._over_cross = over
+            # The photo's name was showing; the cross has a name of its own.
+            QToolTip.hideText()
+            self.update()
+
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        """Show that the thumbnail is being pressed."""
+        """Show that the thumbnail, or its cross, is being pressed."""
+        if event.button() is Qt.MouseButton.LeftButton and self._over_cross:
+            self._pressing_cross = True
+            self.update()
+            event.accept()
+            return
         if event.button() is Qt.MouseButton.LeftButton:
             self._pressed = True
             self._press_point = event.position().toPoint()
@@ -345,6 +430,11 @@ class Thumbnail(QWidget):
         What it is dropped on decides what happens: a half of the collage
         takes it (PLAN.md 3.13). The photos selected along with it go too.
         """
+        point = event.position().toPoint()
+        if not event.buttons():
+            self._set_over_cross(self.cross_shown and self.cross_rect().contains(point))
+        if self._pressing_cross:
+            return
         if not (self._pressed and event.buttons() & Qt.MouseButton.LeftButton):
             super().mouseMoveEvent(event)
             return
@@ -357,6 +447,16 @@ class Thumbnail(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
         """Select this photo, on its own or along with the others."""
+        if self._pressing_cross:
+            self._pressing_cross = False
+            self.update()
+            if (
+                event.button() is Qt.MouseButton.LeftButton
+                and self.cross_shown
+                and self.cross_rect().contains(event.position().toPoint())
+            ):
+                self.remove_requested.emit(self.path)
+            return
         pressed = self._pressed
         self._pressed = False
         self.update()
@@ -533,6 +633,8 @@ class Filmstrip(QWidget):
     choosing_changed = Signal(bool)
     #: The photos ticked for export, in the order the strip shows them.
     checked_changed = Signal(object)
+    #: Photos to take out of the strip, in the order it shows them (F-07).
+    remove_requested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -549,6 +651,8 @@ class Filmstrip(QWidget):
         self._choosing_allowed = True
         self._checked: set[Path] = set()
         self._anchor: Path | None = None
+        #: Whether photos may be taken out; not while several are exported.
+        self._removing_allowed = True
         #: Which photo of how many the position reads, so that it can be
         #: written again in another language (U-02).
         self._position_shown: tuple[int, int] | None = None
@@ -611,6 +715,10 @@ class Filmstrip(QWidget):
             thumbnail.clicked.connect(self._on_thumbnail_clicked)
             thumbnail.drag_started.connect(self._start_drag)
             thumbnail.menu_requested.connect(self._show_menu)
+            thumbnail.remove_requested.connect(
+                lambda path: self.remove_requested.emit([path])
+            )
+            thumbnail.set_removable(self._removing_allowed)
             self._thumbnails[path] = thumbnail
             self._strip_layout.insertWidget(index, thumbnail)
 
@@ -618,6 +726,37 @@ class Filmstrip(QWidget):
         self._empty.setVisible(not has_photos)
         self._scroll.setVisible(has_photos)
         self._position.setVisible(has_photos)
+
+    def remove_photos(self, paths: list[Path]) -> None:
+        """Take the thumbnails of *paths* out of the strip (F-07).
+
+        The window calls this once the photos have left the list; what is
+        current is said by :meth:`set_current` as usual.
+        """
+        for path in paths:
+            thumbnail = self._thumbnails.pop(path, None)
+            if thumbnail is None:
+                continue
+            self._strip_layout.removeWidget(thumbnail)
+            thumbnail.deleteLater()
+            self._selected.discard(path)
+            self._checked.discard(path)
+            if self._anchor == path:
+                self._anchor = None
+            if self._current == path:
+                self._current = None
+        if self._choosing:
+            self._show_checks()
+        has_photos = bool(self._thumbnails)
+        self._empty.setVisible(not has_photos)
+        self._scroll.setVisible(has_photos)
+        self._position.setVisible(has_photos)
+
+    def set_removing_allowed(self, allowed: bool) -> None:
+        """Offer taking photos out of the strip, or not (F-07)."""
+        self._removing_allowed = allowed
+        for thumbnail in self._thumbnails.values():
+            thumbnail.set_removable(allowed)
 
     def set_thumbnail(self, path: Path, image: NDArray[np.uint8]) -> None:
         """Show the picture of one photo once it has been made."""
@@ -762,7 +901,7 @@ class Filmstrip(QWidget):
         self.checked_changed.emit(self.checked_photos())
 
     def _show_menu(self, path: Path, where: QPoint) -> None:
-        """Offer choosing photos to export, or an end to it (X-09)."""
+        """Offer choosing photos to export or an end to it (X-09), and taking photos out (F-07)."""
         menu = QMenu(self)
         if self._choosing:
             action = menu.addAction(tr("filmstrip.stop_choosing"))
@@ -771,8 +910,27 @@ class Filmstrip(QWidget):
             action = menu.addAction(tr("filmstrip.choose_for_export"))
             action.setEnabled(self._choosing_allowed)
             action.triggered.connect(lambda _checked=False, chosen=path: self.start_choosing(chosen))
+        leaving = self.photos_to_remove(path)
+        remove = menu.addAction(
+            tr("filmstrip.remove_several", count=len(leaving))
+            if len(leaving) > 1
+            else tr("filmstrip.remove")
+        )
+        remove.setEnabled(self._removing_allowed)
+        remove.triggered.connect(lambda _checked=False: self.remove_requested.emit(leaving))
         menu.exec(where)
         menu.deleteLater()
+
+    def photos_to_remove(self, path: Path) -> list[Path]:
+        """Return what the menu on *path* takes out: the choice it belongs to, or just it.
+
+        While choosing photos to export the grey outlines are not drawn, so
+        the menu then speaks only for the photo it was opened on.
+        """
+        chosen = self.selected_photos()
+        if not self._choosing and path in chosen and len(chosen) > 1:
+            return chosen
+        return [path]
 
     def _start_drag(self, path: Path) -> None:
         """Carry *path* away, with the photos chosen along with it.

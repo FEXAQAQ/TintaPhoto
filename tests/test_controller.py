@@ -467,6 +467,103 @@ def test_selection_changes_are_announced(controller: Controller, folder: Path) -
     assert seen == [(2, 3)]
 
 
+# -- taking photos out of the list (F-07) ---------------------------------
+
+
+def test_taking_out_another_photo_keeps_the_one_shown(
+    controller: Controller, folder: Path
+) -> None:
+    open_and_wait(controller, folder)
+    controller.select(1)
+    removed = []
+    controller.photos_removed.connect(removed.append)
+
+    controller.remove_photos([controller.photos[0]])
+
+    assert [path.name for path in controller.photos] == ["b.jpg", "c.jpg"]
+    assert controller.current is not None and controller.current.name == "b.jpg"
+    assert controller.index == 0
+    assert [path.name for path in removed[0]] == ["a.jpg"]
+
+
+def test_taking_out_the_photo_shown_moves_to_the_next(
+    controller: Controller, folder: Path
+) -> None:
+    open_and_wait(controller, folder)
+    controller.select(1)
+
+    controller.remove_photos([controller.photos[1]])
+
+    assert controller.current is not None and controller.current.name == "c.jpg"
+    assert controller.index == 1
+
+
+def test_taking_out_the_last_photo_shown_moves_to_the_one_before(
+    controller: Controller, folder: Path
+) -> None:
+    open_and_wait(controller, folder)
+    controller.select(2)
+
+    controller.remove_photos([controller.photos[2]])
+
+    assert controller.current is not None and controller.current.name == "b.jpg"
+    assert controller.index == 1
+
+
+def test_taking_out_several_skips_past_all_of_them(
+    controller: Controller, folder: Path
+) -> None:
+    open_and_wait(controller, folder)
+    photos = controller.photos
+
+    controller.remove_photos([photos[0], photos[1]])
+
+    assert controller.photos == [photos[2]]
+    assert controller.current == photos[2]
+
+
+def test_taking_out_every_photo_leaves_nothing_open(
+    controller: Controller, folder: Path
+) -> None:
+    open_and_wait(controller, folder)
+
+    controller.remove_photos(controller.photos)
+
+    assert controller.photos == []
+    assert controller.current is None
+    assert controller.index == -1
+
+
+def test_taking_out_a_photo_leaves_its_file_and_settings_alone(
+    controller: Controller, folder: Path
+) -> None:
+    photo = _opened(controller, folder)
+    controller.set_adjustments(controller.state.with_value("exposure", 0.5))
+
+    controller.remove_photos([photo])
+    # Its waiting parameter file is written in the background on the way out.
+    wait_for(controller.edited_changed)
+
+    assert photo.exists()
+    stored = sidecar.read(photo, controller.state, controller._store)
+    assert stored is not None and stored.adjustments.exposure == 0.5
+    open_and_wait(controller, folder)
+    assert photo in controller.photos
+
+
+def test_taking_out_a_photo_not_in_the_list_does_nothing(
+    controller: Controller, folder: Path
+) -> None:
+    open_and_wait(controller, folder)
+    removed = []
+    controller.photos_removed.connect(removed.append)
+
+    controller.remove_photos([folder / "elsewhere.jpg"])
+
+    assert len(controller.photos) == 3
+    assert removed == []
+
+
 def test_only_the_photo_and_its_neighbours_are_kept_decoded(
     controller: Controller, tmp_path: Path
 ) -> None:

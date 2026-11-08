@@ -84,6 +84,8 @@
   "filmstrip.stop_choosing": "結束選擇",
   "filmstrip.checked": "已選 {count} 張",
   "filmstrip.done": "完成",
+  "filmstrip.remove": "從列表移除",
+  "filmstrip.remove_several": "從列表移除 {count} 張",
   "presets.empty": "按右上角＋，把目前的調整存成預設集",
   "presets.hint": "點擊套用，按右鍵可改名或刪除",
   "presets.name_label": "預設集名稱",

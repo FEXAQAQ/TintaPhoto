@@ -324,3 +324,81 @@ def test_choosing_a_photo_stops_a_glide(
     while time.perf_counter() < deadline:
         qt_app.processEvents()  # type: ignore[attr-defined]
     assert _bar(long_strip).value() == 0
+
+
+# -- taking photos out of the list (F-07) ---------------------------------
+
+
+def test_the_cross_shows_only_under_the_pointer(filmstrip: Filmstrip) -> None:
+    thumbnail = _thumbnail(filmstrip, PHOTOS[0])
+    assert not thumbnail.cross_shown
+
+    thumbnail._hovering = True
+    assert thumbnail.cross_shown
+
+    thumbnail.set_removable(False)
+    assert not thumbnail.cross_shown
+
+
+def test_the_cross_sits_in_the_top_right_corner(filmstrip: Filmstrip) -> None:
+    thumbnail = _thumbnail(filmstrip, PHOTOS[0])
+    cross = thumbnail.cross_rect()
+    assert cross.width() == theme.THUMBNAIL_BADGE_SIZE
+    assert cross.top() == theme.SPACE_XS
+    assert cross.right() == thumbnail.rect().right() - theme.SPACE_XS
+
+
+def test_clicking_the_cross_asks_to_take_out_that_photo(
+    filmstrip: Filmstrip, qt_app: object
+) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    filmstrip.resize(800, theme.FILMSTRIP_HEIGHT)
+    filmstrip.show()
+    thumbnail = _thumbnail(filmstrip, PHOTOS[1])
+    asked: list = []
+    chosen: list = []
+    filmstrip.remove_requested.connect(asked.append)
+    filmstrip.photo_selected.connect(chosen.append)
+    centre = thumbnail.cross_rect().center()
+
+    # Pointer movement is not delivered offscreen, so the hover is set here.
+    thumbnail._hovering = True
+    thumbnail._set_over_cross(True)
+    QTest.mouseClick(thumbnail, Qt.MouseButton.LeftButton, pos=centre)
+
+    assert asked == [[PHOTOS[1]]]
+    assert chosen == []
+    filmstrip.hide()
+
+
+def test_the_menu_takes_out_the_whole_choice(filmstrip: Filmstrip) -> None:
+    filmstrip.set_current(0, 3)
+    filmstrip._selected = {PHOTOS[0], PHOTOS[2]}
+
+    assert filmstrip.photos_to_remove(PHOTOS[2]) == [PHOTOS[0], PHOTOS[2]]
+    assert filmstrip.photos_to_remove(PHOTOS[1]) == [PHOTOS[1]]
+
+
+def test_taken_out_photos_leave_the_strip(filmstrip: Filmstrip) -> None:
+    filmstrip.set_current(1, 3)
+
+    filmstrip.remove_photos([PHOTOS[1]])
+    filmstrip.set_current(1, 2)
+
+    assert filmstrip.thumbnail(PHOTOS[1]) is None
+    assert filmstrip.thumbnail(PHOTOS[2]) is not None
+    assert filmstrip.selected_photos() == [PHOTOS[2]]
+
+
+def test_photos_cannot_be_taken_out_while_several_are_exported(
+    filmstrip: Filmstrip,
+) -> None:
+    filmstrip.set_removing_allowed(False)
+    thumbnail = _thumbnail(filmstrip, PHOTOS[0])
+    thumbnail._hovering = True
+    assert not thumbnail.cross_shown
+
+    filmstrip.set_removing_allowed(True)
+    assert thumbnail.cross_shown
