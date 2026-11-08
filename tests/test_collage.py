@@ -408,72 +408,45 @@ def _covers(rect, cell) -> bool:
 # -- the single photos of a carousel -----------------------------------------
 
 
-@pytest.mark.parametrize("orientation", [LANDSCAPE, PORTRAIT])
-@pytest.mark.parametrize("linked", [False, True])
-def test_a_single_photo_takes_the_collage_size(orientation: str, linked: bool) -> None:
-    layout = Layout(canvas=orientation, linked=linked)
-    single = collage.render_single(layout, _gradient((600, 400)), Placement())
+@pytest.mark.parametrize("split", [collage.SPLIT_SIDE_BY_SIDE, collage.SPLIT_STACKED])
+@pytest.mark.parametrize("count", [2, 3, 4])
+def test_the_pieces_are_the_collage_cut_at_its_seams(split: str, count: int) -> None:
+    layout = Layout(split=split, count=count, gap=8)
     width, height = layout.canvas_size
-    assert single.shape == (height, width, 3)
-    assert single.dtype == np.float32
+    rng = np.random.default_rng(7)
+    canvas = rng.integers(0, 256, (height, width, 3), dtype=np.uint8)
+    cut = collage.pieces(layout, canvas)
+    assert len(cut) == count
+    for piece, cell in zip(cut, collage.cells(layout)):
+        assert piece.shape == (cell.height, cell.width, 3)
+        assert piece.dtype == canvas.dtype
+        assert np.array_equal(
+            piece, canvas[cell.y : cell.y + cell.height, cell.x : cell.x + cell.width]
+        )
 
 
-def test_a_single_photo_keeps_the_point_its_half_was_centred_on() -> None:
+def test_the_same_photo_linked_is_cut_into_different_pieces() -> None:
+    layout = Layout(count=3, linked=True)
+    size = (1800, 600)
+    image = _gradient(size)
+    placement = collage.linked_placement(layout, Placement(), [size] * 3)
+    canvas = collage.render(layout, [image] * 3, [placement] * 3)
+    left, middle, right = collage.pieces(layout, canvas)
+    assert left.mean() < middle.mean() < right.mean()
+
+
+def test_the_pieces_are_their_own_pixels_not_views_of_the_canvas() -> None:
     layout = Layout()
-    placement = Placement(zoom=1.5, focus_x=0.4, focus_y=0.6)
-    size = (6000, 4000)
-    left, top, width, height = collage.single_rect(layout, size, placement)
-    centre_x, centre_y = collage.canvas_cell(layout).centre
-    assert (centre_x - left) / width == pytest.approx(0.4)
-    assert (centre_y - top) / height == pytest.approx(0.6)
-    # Zoomed as far past the canvas's fit as it was past its half's.
-    cover = collage.fitted_scale(size, collage.canvas_cell(layout), collage.FIT_COVER)
-    assert width / size[0] == pytest.approx(cover * 1.5)
+    width, height = layout.canvas_size
+    canvas = np.zeros((height, width, 3), dtype=np.uint16)
+    first = collage.pieces(layout, canvas)[0]
+    first[...] = 1
+    assert canvas.max() == 0
 
 
-def test_a_single_photo_shows_more_than_its_half() -> None:
-    layout = Layout()
-    size = (6000, 4000)
-    half = collage.placed_rect(layout, 0, size, Placement())
-    single = collage.single_rect(layout, size, Placement())
-    first = collage.cells(layout)[0]
-    canvas = collage.canvas_cell(layout)
-    assert canvas.width / single[2] > first.width / half[2]
-
-
-def test_a_filled_single_photo_leaves_no_background() -> None:
-    layout = Layout(background=collage.BACKGROUND_BLACK)
-    single = collage.render_single(layout, _solid((255, 255, 255), (300, 900)), Placement())
-    assert single.min() > 0.99
-
-
-def test_a_contained_single_photo_shows_all_of_itself() -> None:
-    layout = Layout(fit=collage.FIT_CONTAIN, background=collage.BACKGROUND_BLACK)
-    single = collage.render_single(layout, _solid((255, 255, 255), (300, 900)), Placement())
-    height, width = single.shape[:2]
-    assert single[height // 2, width // 2].min() > 0.99
-    assert single[height // 2, 0].max() == 0.0
-    assert single[0, width // 2].min() > 0.99
-
-
-def test_a_linked_first_photo_is_the_collage_left_whole() -> None:
-    layout = Layout(linked=True)
-    size = (900, 600)
-    placement = collage.linked_placement(layout, Placement(zoom=1.3, focus_x=0.4), [size, size])
-    assert collage.single_rect(layout, size, placement) == pytest.approx(
-        collage.placed_rect(layout, 0, size, placement)
-    )
-
-
-def test_a_linked_second_photo_leaves_its_alignment_out() -> None:
-    layout = Layout(linked=True, background=collage.BACKGROUND_BLACK)
-    size = (900, 600)
-    alignment = collage.Alignment(shift_x=0.1, scale=0.85)
-    placement = collage.linked_placement(
-        layout, Placement(), [size, size], [collage.UNALIGNED, alignment]
-    )
-    single = collage.render_single(layout, _solid((255, 255, 255), size), placement)
-    assert single.min() > 0.99
+def test_pieces_of_a_canvas_of_another_size_are_refused() -> None:
+    with pytest.raises(ValueError):
+        collage.pieces(Layout(), np.zeros((10, 10, 3), dtype=np.uint8))
 
 
 def test_the_single_photos_are_not_named_like_a_taken_name() -> None:

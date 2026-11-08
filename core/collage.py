@@ -769,31 +769,24 @@ def render_slot(
     return render_cell(image, cells(layout)[slot], rect, layout.background)
 
 
-def single_rect(
-    layout: Layout, photo_size: tuple[int, int], placement: Placement
-) -> tuple[float, float, float, float]:
-    """Return where a photo lands when it fills a canvas of its own.
+def pieces(layout: Layout, canvas: NDArray[Any]) -> tuple[NDArray[Any], ...]:
+    """Return each piece cut out of the finished *canvas*, first left or top.
 
-    The single photos of a carousel are posted after the collage, so they
-    take its size and nothing is cropped off when they are swiped through.
-    The photo keeps the zoom and the focus it has in its piece, measured
-    against the whole canvas instead: the same point sits in the middle, and
-    the wider frame shows more around it. Linked, the alignment is left out:
-    it only lines the pieces up at the seams, and on a canvas of its own it
-    could uncover a strip of background.
+    The single photos of a carousel (PLAN.md 2.8 K-13) are the collage cut
+    apart at its seams: every pixel is the collage's own, so the pieces put
+    side by side are the collage again, less the gaps.
     """
     layout = layout.sane()
-    return photo_rect(placement, photo_size, canvas_cell(layout), layout.fit_used)
-
-
-def render_single(
-    layout: Layout, image: NDArray[Any], placement: Placement
-) -> NDArray[np.float32]:
-    """Return one photo filling the whole canvas, as linear light (carousel)."""
-    layout = layout.sane()
-    size = (int(image.shape[1]), int(image.shape[0]))
-    rect = single_rect(layout, size, placement)
-    return render_cell(image, canvas_cell(layout), rect, layout.background)
+    width, height = layout.canvas_size
+    if canvas.shape[:2] != (height, width):
+        raise ValueError(
+            f"a canvas of {canvas.shape[1]}x{canvas.shape[0]} was given for one of "
+            f"{width}x{height}"
+        )
+    return tuple(
+        canvas[cell.y : cell.y + cell.height, cell.x : cell.x + cell.width].copy()
+        for cell in cells(layout)
+    )
 
 
 def render(

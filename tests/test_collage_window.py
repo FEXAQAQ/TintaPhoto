@@ -506,7 +506,7 @@ def test_the_linked_collage_is_written_as_it_is_shown(window: MainWindow, tmp_pa
 # -- the carousel (PLAN.md 2.8 K-13) ------------------------------------------
 
 
-def test_a_carousel_writes_each_photo_on_a_canvas_of_its_own(
+def test_a_carousel_writes_each_piece_cut_out_of_the_collage(
     window: MainWindow, tmp_path: Path
 ) -> None:
     window.collage.set_layout(Layout(gap=10))
@@ -524,14 +524,17 @@ def test_a_carousel_writes_each_photo_on_a_canvas_of_its_own(
         "a.b_collage_a.jpg",
         "a.b_collage_b.jpg",
     ]
-    for path, channel in zip(result.singles, (0, 2)):
+    for path, channel, cell in zip(
+        result.singles, (0, 2), collage.cells(window.collage.layout)
+    ):
         with Image.open(path) as image:
-            assert image.size == (1920, 1080)
+            assert image.size == (cell.width, cell.height)
             assert image.info.get("icc_profile")
             pixels = np.asarray(image.convert("RGB"))
-        # A portrait photo filling a landscape canvas: no background shows.
-        assert pixels[540, 960, channel] > 180
-        assert pixels[540, 4, channel] > 180
+        # Each piece is the collage's own, edge to edge, with no gap in it.
+        assert pixels[cell.height // 2, cell.width // 2, channel] > 180
+        assert pixels[cell.height // 2, 0, channel] > 180
+        assert pixels[cell.height // 2, -1, channel] > 180
 
     # A second export's photos sit beside its own collage.
     finished.clear()

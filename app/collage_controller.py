@@ -41,7 +41,7 @@ class CollageExportResult:
     path: Path
     #: A collage is always developed, never copied (X-08).
     copied: bool = False
-    #: Each photo on a canvas of its own, in the order they are posted.
+    #: Each piece cut out of the collage, in the order they are posted.
     singles: tuple[Path, ...] = ()
 
 #: Developing two photos at once is as much as the collage ever asks for.
@@ -322,8 +322,8 @@ class CollageController(QObject):
     def export(self, target: Path, options: ExportOptions, singles: bool = False) -> bool:
         """Write the collage to *target* in the background (X-07).
 
-        With *singles*, each photo is also written on a canvas of its own,
-        for a carousel: the collage first, then each photo in order (K-13).
+        With *singles*, each piece is also cut out and written on its own,
+        for a carousel: the collage first, then each piece in order (K-13).
         """
         if self._exporting or not self.complete:
             return False
@@ -438,8 +438,8 @@ class _ExportJob:
     def run(self) -> CollageExportResult | None:
         """Develop each photo at full size, lay them out and write the files.
 
-        One photo at a time, and only the piece it fills - and its own canvas,
-        for a carousel - is kept, so the memory needed is one developed photo
+        One photo at a time, and only the piece it fills is kept, so the
+        memory needed is one developed photo
         rather than all of them. Returns ``None`` rather than raising, so the
         progress is never left half way.
         """
@@ -448,7 +448,6 @@ class _ExportJob:
             depth = self.options.depth
             dither = depth == pipeline.EIGHT_BIT
             halves: list[NDArray[np.float32] | None] = []
-            singles: list[NDArray[Any]] = []
             for index, (path, edit, placement, alignment) in enumerate(
                 zip(self.paths, self.edits, self.placements, self.alignments)
             ):
@@ -469,15 +468,13 @@ class _ExportJob:
                 halves.append(
                     collage.render_slot(self.layout, index, developed, placement, alignment)
                 )
-                if self.singles:
-                    single = collage.render_single(self.layout, developed, placement)
-                    singles.append(collage.encode(single, depth, dither))
                 del developed
                 self.progress(
                     _PROGRESS_START + _PROGRESS_PHOTOS * (index + 1) / max(1, len(self.paths))
                 )
             canvas = collage.encode(collage.compose(self.layout, halves), depth, dither)
             written = exporter.export_pixels(canvas, self.target, self.options).path
+            singles = collage.pieces(self.layout, canvas) if self.singles else ()
             # Named after the collage as it was written, so that a second
             # export's photos sit beside its own collage, not the first one's.
             single_paths = tuple(
