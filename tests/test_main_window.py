@@ -2535,14 +2535,14 @@ def test_placing_the_face_points_puts_the_brush_down_and_esc_ends_it_first(
     window.enter_liquify()
     window._on_faces_ready(1)
     canvas = window.preview.canvas
-    window.liquify_panel.edit_faces_link.click()
+    window.liquify_panel.edit_faces_button.click()
     assert window.editing_faces and window.controller.editing_faces
     assert canvas.faces.active and not canvas.liquify.active
 
-    window.on_escape()  # ends placing the points first
+    window.on_escape()  # calls placing the points off first
     assert window.in_liquify and not window.editing_faces
     assert not window.controller.editing_faces and not window.liquify_panel.editing
-    window.liquify_panel.edit_faces_link.click()
+    window.liquify_panel.edit_faces_button.click()
     window.leave_liquify()
     assert not window.editing_faces and not window.controller.editing_faces
     assert not window.liquify_panel.editing
@@ -2563,10 +2563,24 @@ def test_a_dragged_face_point_reaches_the_controller(
     controller._faces[(controller.current, controller.geometry.lens)] = (face,)
     window.enter_liquify()
     window._on_faces_ready(1)
-    window.liquify_panel.edit_faces_link.click()
+    window.liquify_panel.edit_faces_button.click()
     window.preview.canvas.faces.handle_moved.emit(0, "nose", 0.52, 0.48, False)
     assert controller.face_shape.faces[0].points[2] == pytest.approx((0.52, 0.48), abs=1e-6)
     assert window.liquify_panel.reset_faces_button.isEnabled()
+
+    # Cancel puts the point back; Enter keeps it.
+    window.liquify_panel.cancel_editing_button.click()
+    assert not window.editing_faces and not controller.editing_faces
+    assert not controller.faces_edited
+    window.liquify_panel.edit_faces_button.click()
+    window.preview.canvas.faces.handle_moved.emit(0, "nose", 0.52, 0.48, False)
+    window._on_shortcut("shortcut.crop_apply", lambda: None)
+    assert not window.editing_faces and controller.faces_edited
+    window.liquify_panel.edit_faces_button.click()
+    window.preview.canvas.faces.handle_moved.emit(0, "nose", 0.6, 0.5, False)
+    window.on_escape()
+    assert window.in_liquify and not window.editing_faces
+    assert controller.face_shape.faces[0].points[2] == pytest.approx((0.52, 0.48), abs=1e-6)
 
 
 def test_placing_the_points_zooms_onto_the_face_and_puts_the_view_back(
@@ -2586,7 +2600,7 @@ def test_placing_the_points_zooms_onto_the_face_and_puts_the_view_back(
     assert canvas.fitting
     window.enter_liquify()
     window._on_faces_ready(1)
-    window.liquify_panel.edit_faces_link.click()
+    window.liquify_panel.edit_faces_button.click()
     # This small photo already fills the window at its largest zoom, so the
     # view only moves its middle onto the face.
     fitting, _scale, centre = canvas.view_state()

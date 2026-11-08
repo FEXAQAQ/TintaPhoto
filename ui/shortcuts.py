@@ -54,6 +54,7 @@ SHORTCUTS: Final[tuple[Shortcut, ...]] = (
     Shortcut("portrait.show", "shortcut.portrait_show"),
     Shortcut("toolbar.liquify", "shortcut.liquify"),
     Shortcut("shortcut.name.liquify_reverse", "shortcut.keys.liquify_reverse"),
+    Shortcut("shortcut.name.liquify_edit_faces", "shortcut.keys.liquify_edit_faces"),
     Shortcut("menu.settings", "shortcut.settings"),
     Shortcut("shortcut.name.crop", "shortcut.crop"),
     Shortcut("shortcut.name.crop_flip", "shortcut.crop_flip"),

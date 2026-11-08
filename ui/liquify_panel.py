@@ -7,8 +7,9 @@ one at a time, chosen at the top:
 * **Face** - sliders, nothing to paint. A line says how many faces were
   found; the sliders come in two groups, the face's shape and its
   features, and each says under its track what its two ends do. Under
-  them the two links that act on the faces sit together: placing their
-  points by hand (L-12) and putting the sliders to rest. With no face
+  them two buttons act on the faces: putting the sliders to rest, and
+  placing their points by hand (L-12), which is done on the same page -
+  the sliders fade and the buttons become cancel and done. With no face
   found the page says so and offers the brush instead.
 * **Brush** - a line saying how to paint, the six tools with a sentence on
   the one chosen, and the brush's size and strength.
@@ -25,6 +26,7 @@ from typing import Final
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -36,7 +38,7 @@ from PySide6.QtWidgets import (
 from app.i18n import tr
 from core import liquify
 from ui import theme
-from ui.widgets.buttons import ROLE_CHOICE, LinkButton, TextButton, tooltip
+from ui.widgets.buttons import ROLE_CHOICE, TextButton, tooltip
 from ui.widgets.group import ControlGroup
 from ui.widgets.region import styled_background
 from ui.widgets.scroll import scrolled
@@ -130,6 +132,13 @@ class ToolChoice(QPushButton):
         self.setToolTip(tooltip(f"{TOOL_KEYS[self.tool]}.tip"))
 
 
+def _half_button(key: str, parent: QWidget) -> TextButton:
+    """Return a text button that takes its width from its row, not its words."""
+    button = TextButton(key, parent)
+    button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+    return button
+
+
 def _caption(parent: QWidget, primary: bool = False) -> QLabel:
     """Return a wrapping line of small text, in the primary colour if asked."""
     label = QLabel("", parent)
@@ -155,8 +164,10 @@ class LiquifyPanel(QWidget):
     #: The pointer came onto a face slider (its name) or left them all
     #: (an empty name), so the photo can show where it works.
     face_hovered = Signal(str)
-    #: Placing the face's points by hand was started or stopped (L-12).
+    #: Placing the face's points by hand was started or finished (L-12).
     editing_toggled = Signal(bool)
+    #: Placing the face's points was called off: they go back as they were.
+    editing_cancelled = Signal()
     #: The face's points put back where they were found (L-12).
     face_marks_reset_requested = Signal()
     #: The face sliders put back to rest, the strokes left alone.
@@ -267,55 +278,48 @@ class LiquifyPanel(QWidget):
                 group.add_row(ends)
             layout.addWidget(group)
 
-        # Under the sliders: every face at once, then the two links that act
-        # on the faces, side by side - placing their points (L-12) and
-        # putting the sliders to rest.
+        # Under the sliders: what they work on, and two buttons that act on
+        # the faces. Placing the points by hand (L-12) happens on this same
+        # page: the sliders stay, faded, and the two buttons become the way
+        # out - cancel, and done on the right, where the panel's own is.
         footer = QWidget(page)
         column = QVBoxLayout(footer)
-        column.setContentsMargins(theme.PANEL_PADDING, theme.SPACE_XS, theme.PANEL_PADDING, 0)
-        column.setSpacing(theme.SPACE_XS)
-        self.every_face_caption = _caption(footer)
-        column.addWidget(self.every_face_caption)
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(theme.SPACE_MD)
-        row.addStretch(1)
-        self.edit_faces_link = LinkButton(tr("liquify.edit_faces.link"), parent=footer)
-        self.edit_faces_link.setToolTip(tooltip("liquify.edit_faces.tip"))
-        self.edit_faces_link.clicked.connect(lambda: self._on_editing(True))
-        row.addWidget(self.edit_faces_link)
-        self.reset_face_link = LinkButton(tr("liquify.reset_face"), parent=footer)
-        self.reset_face_link.clicked.connect(self.face_reset_requested.emit)
-        row.addWidget(self.reset_face_link)
-        column.addLayout(row)
-        layout.addWidget(footer)
-        self._face_footer = footer
-
-        # While the points are placed by hand: how, and the way out - on
-        # the right, where the panel's own "done" is.
-        editing = QWidget(page)
-        column = QVBoxLayout(editing)
         column.setContentsMargins(
             theme.PANEL_PADDING, theme.SPACE_SM, theme.PANEL_PADDING, theme.SPACE_SM
         )
         column.setSpacing(theme.SPACE_SM)
-        self.editing_caption = _caption(editing, primary=True)
+        self.every_face_caption = _caption(footer)
+        column.addWidget(self.every_face_caption)
+        self.editing_caption = _caption(footer, primary=True)
         column.addWidget(self.editing_caption)
-        buttons = QHBoxLayout()
-        buttons.setContentsMargins(0, 0, 0, 0)
-        buttons.setSpacing(theme.SPACE_SM)
-        self.reset_faces_button = TextButton("liquify.reset_faces", editing)
-        self.reset_faces_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        self.reset_faces_button.setToolTip(tooltip("liquify.reset_faces.tip"))
+        self.reset_faces_button = _half_button("liquify.reset_faces", footer)
         self.reset_faces_button.clicked.connect(self.face_marks_reset_requested.emit)
-        buttons.addWidget(self.reset_faces_button, 1)
-        self.finish_editing_button = TextButton("liquify.edit_faces.done", editing)
-        self.finish_editing_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.reset_face_button = _half_button("liquify.reset_face", footer)
+        self.reset_face_button.clicked.connect(self.face_reset_requested.emit)
+        self.edit_faces_button = _half_button("liquify.edit_faces", footer)
+        self.edit_faces_button.clicked.connect(lambda: self._on_editing(True))
+        self.cancel_editing_button = _half_button("liquify.edit_faces.cancel", footer)
+        self.cancel_editing_button.clicked.connect(self._on_cancel_editing)
+        self.finish_editing_button = _half_button("liquify.edit_faces.done", footer)
         self.finish_editing_button.clicked.connect(lambda: self._on_editing(False))
-        buttons.addWidget(self.finish_editing_button, 1)
+        self._tooltips()
+        # Two even columns: back to found alone on the row above, as wide as
+        # the buttons under it; each pair shares its cells with the other,
+        # one pair shown at a time.
+        buttons = QGridLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setHorizontalSpacing(theme.SPACE_SM)
+        buttons.setVerticalSpacing(theme.SPACE_SM)
+        buttons.setColumnStretch(0, 1)
+        buttons.setColumnStretch(1, 1)
+        buttons.addWidget(self.reset_faces_button, 0, 0)
+        buttons.addWidget(self.reset_face_button, 1, 0)
+        buttons.addWidget(self.cancel_editing_button, 1, 0)
+        buttons.addWidget(self.edit_faces_button, 1, 1)
+        buttons.addWidget(self.finish_editing_button, 1, 1)
         column.addLayout(buttons)
-        layout.addWidget(editing)
-        self._face_editing = editing
+        layout.addWidget(footer)
+        self._face_footer = footer
 
         # With no face found: why that may be, and the brush instead.
         missing = QWidget(page)
@@ -515,16 +519,16 @@ class LiquifyPanel(QWidget):
         for button in (
             self.reset_button,
             self.leave_button,
+            self.reset_face_button,
+            self.edit_faces_button,
+            self.cancel_editing_button,
             self.finish_editing_button,
             self.reset_faces_button,
             self.use_brush_button,
         ):
             button.retranslate()
         self.leave_button.setToolTip(tooltip("liquify.leave", "shortcut.liquify"))
-        self.reset_faces_button.setToolTip(tooltip("liquify.reset_faces.tip"))
-        self.edit_faces_link.setText(tr("liquify.edit_faces.link"))
-        self.edit_faces_link.setToolTip(tooltip("liquify.edit_faces.tip"))
-        self.reset_face_link.setText(tr("liquify.reset_face"))
+        self._tooltips()
         for name, row in self.face_rows.items():
             row.set_spec(FACE_SPECS[name])
         for ends in self.face_ends.values():
@@ -532,6 +536,17 @@ class LiquifyPanel(QWidget):
         self.set_face_shape(self._face)
         self._show_strokes()
         self._show_faces()
+
+    def _tooltips(self) -> None:
+        """Give the face page's buttons their tooltips, with the keys that do the same."""
+        self.edit_faces_button.setToolTip(tooltip("liquify.edit_faces.tip"))
+        self.reset_faces_button.setToolTip(tooltip("liquify.reset_faces.tip"))
+        self.cancel_editing_button.setToolTip(
+            tooltip("liquify.edit_faces.cancel.tip", "liquify.edit_faces.keys.cancel")
+        )
+        self.finish_editing_button.setToolTip(
+            tooltip("liquify.edit_faces.done.tip", "liquify.edit_faces.keys.done")
+        )
 
     def _show_faces(self) -> None:
         """Show the sliders, the page for placing the points, or the page for no face."""
@@ -545,19 +560,29 @@ class LiquifyPanel(QWidget):
         self.faces_caption.setText(caption)
         # Faces kept with the sliders still have points to place before the
         # search has finished again (L-12).
-        missing = count == 0 and not self._face.faces and not self._editing
-        self._face_status.setVisible(not self._editing and not missing)
+        editing = self._editing
+        missing = count == 0 and not self._face.faces and not editing
+        self._face_status.setVisible(not missing)
         for group in self._face_groups:
-            group.setVisible(not self._editing and not missing)
-        self._face_footer.setVisible(not self._editing and not missing)
-        self._face_editing.setVisible(self._editing)
+            group.setVisible(not missing)
+        self._face_footer.setVisible(not missing)
         self._face_missing.setVisible(missing)
+        # While the points are placed the photo is shown without liquify,
+        # so a slider moved then would change nothing to be seen.
+        usable = (bool(count) or bool(self._face.faces)) and not editing
         for row in self.face_rows.values():
-            row.setEnabled(bool(count) or bool(self._face.faces))
+            row.setEnabled(usable)
         for ends in self.face_ends.values():
-            ends.setEnabled(bool(count) or bool(self._face.faces))
-        self.edit_faces_link.setEnabled(bool(count) or bool(self._face.faces))
-        self.reset_face_link.setEnabled(not self._face.is_default)
+            ends.setEnabled(usable)
+        self.every_face_caption.setVisible(not editing)
+        self.editing_caption.setVisible(editing)
+        self.reset_faces_button.setVisible(editing)
+        self.reset_face_button.setVisible(not editing)
+        self.edit_faces_button.setVisible(not editing)
+        self.cancel_editing_button.setVisible(editing)
+        self.finish_editing_button.setVisible(editing)
+        self.edit_faces_button.setEnabled(bool(count) or bool(self._face.faces))
+        self.reset_face_button.setEnabled(not self._face.is_default)
         self.reset_faces_button.setEnabled(self._faces_edited)
         self.every_face_caption.setText(tr("liquify.every_face"))
         self.editing_caption.setText(tr("liquify.editing_hint"))
@@ -580,7 +605,10 @@ class LiquifyPanel(QWidget):
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt naming
         """Say which face slider the pointer is over, so the photo can show where it works."""
-        if event.type() == QEvent.Type.Enter:
+        if self._editing:
+            # The sliders are put down while the points are placed.
+            pass
+        elif event.type() == QEvent.Type.Enter:
             for name, row in self.face_rows.items():
                 if row is watched:
                     self.face_hovered.emit(name)
@@ -605,10 +633,14 @@ class LiquifyPanel(QWidget):
         self.set_editing(editing)
         self.editing_toggled.emit(editing)
 
+    def _on_cancel_editing(self) -> None:
+        self.set_editing(False)
+        self.editing_cancelled.emit()
+
     def _on_face_row(self, name: str, value: float, dragging: bool) -> None:
         self._face = self._face.with_value(name, value)
         self._show_strokes()
-        self.reset_face_link.setEnabled(not self._face.is_default)
+        self.reset_face_button.setEnabled(not self._face.is_default)
         self._set_titles_dimmed(dragging)
         self.face_value_set.emit(name, value, dragging)
 

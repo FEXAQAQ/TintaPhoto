@@ -2706,3 +2706,71 @@ def test_a_face_sliders_reach_is_where_the_photo_shows_it(
     (left, _right) = controller.face_reach_on_screen("eyes")
     assert left[0] == pytest.approx((0.5, 0.5), abs=0.01)
     assert controller.face_reach_on_screen("ears") == []
+
+
+def test_placing_the_points_is_one_step_and_undo_stays_within_it(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _shown(controller, _blotted_folder(tmp_path))
+    _with_found_face(controller)
+    controller.set_face_shape_value("chin", 40.0)
+    assert controller.can_undo
+
+    controller.set_editing_faces(True)
+    assert not controller.can_undo  # nothing placed yet, and the slider is behind
+    controller.move_face_handle(0, "chin", (0.55, 0.85))
+    controller.move_face_handle(0, "nose", (0.52, 0.5))
+    assert controller.can_undo
+    controller.undo()
+    assert controller.face_shape.faces[0].points[2] != pytest.approx((0.52, 0.5))
+    assert controller.face_shape.faces[0].chin == pytest.approx((0.55, 0.85))
+    controller.undo()
+    assert controller.face_shape.faces[0].chin is None
+    assert not controller.can_undo
+    controller.undo()  # not past where placing began
+    assert controller.face_shape.chin == 40.0
+    controller.redo()
+    controller.move_face_handle(0, "nose", (0.52, 0.5))
+
+    controller.set_editing_faces(False)
+    (marks,) = controller.face_shape.faces
+    assert marks.chin == pytest.approx((0.55, 0.85))
+    assert marks.points[2] == pytest.approx((0.52, 0.5))
+    controller.undo()  # the whole placing at once
+    assert controller.face_shape.faces[0].chin is None and not controller.faces_edited
+    assert controller.face_shape.chin == 40.0
+
+
+def test_cancelling_puts_the_points_back_and_leaves_no_step(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _shown(controller, _blotted_folder(tmp_path))
+    _with_found_face(controller)
+    controller.set_face_shape_value("eyes", 100.0)
+    before = controller.face_shape
+
+    controller.set_editing_faces(True)
+    controller.move_face_handle(0, "chin", (0.55, 0.85))
+    controller.reset_face_marks()
+    controller.move_face_handle(0, "nose", (0.52, 0.5))
+    controller.cancel_editing_faces()
+    assert not controller.editing_faces
+    assert controller.face_shape == before
+    assert not controller.can_redo
+    controller.undo()  # the slider, not the points
+    assert controller.face_shape.eyes == 0.0
+
+
+def test_moving_to_another_photo_while_placing_keeps_the_points_as_one_step(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _shown(controller, _blotted_folder(tmp_path))
+    first = controller.current
+    _with_found_face(controller)
+    controller.set_face_shape_value("eyes", 100.0)
+    controller.set_editing_faces(True)
+    controller.move_face_handle(0, "chin", (0.55, 0.85))
+    controller.move_face_handle(0, "nose", (0.52, 0.5))
+    controller._end_face_session()  # what moving to another photo does first
+    assert first is not None
+    assert controller._history.depth(first) == 3  # opened, the slider, the points

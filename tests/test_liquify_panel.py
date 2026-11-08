@@ -97,7 +97,7 @@ def test_the_face_page_waits_for_a_face_then_offers_the_brush_without_one(
     assert not panel.face_rows["eyes"].isEnabled()
     panel.set_faces(2)
     assert panel.faces_caption.text() == tr("adjust.faces.many", count=2)
-    assert panel.face_rows["eyes"].isEnabled() and panel.edit_faces_link.isEnabled()
+    assert panel.face_rows["eyes"].isEnabled() and panel.edit_faces_button.isEnabled()
 
     panel.set_faces(0)
     qt_app.processEvents()  # type: ignore[attr-defined]
@@ -129,7 +129,7 @@ def test_a_face_slider_says_what_changed_and_where_the_pointer_is(
     panel.set_faces(1)
     panel.face_rows["chin"].set_value(40.0, announce=True)
     assert seen[-1] == ("chin", pytest.approx(40.0), False)
-    assert panel.reset_face_link.isEnabled() and panel.reset_button.isEnabled()
+    assert panel.reset_face_button.isEnabled() and panel.reset_button.isEnabled()
 
     row = panel.face_rows["chin"]
     QApplication.sendEvent(row, QEnterEvent(QPointF(5, 5), QPointF(5, 5), QPointF(5, 5)))
@@ -141,60 +141,102 @@ def test_the_face_can_be_reset_without_the_strokes(panel: LiquifyPanel) -> None:
     asked: list[str] = []
     panel.face_reset_requested.connect(lambda: asked.append("face"))
     panel.set_faces(1)
-    assert not panel.reset_face_link.isEnabled()
+    assert not panel.reset_face_button.isEnabled()
     panel.set_face_shape(liquify.FaceShape(chin=-30.0))
     assert panel.face_rows["chin"].value == pytest.approx(-30.0)
-    assert panel.reset_face_link.isEnabled()
-    panel.reset_face_link.click()
+    assert panel.reset_face_button.isEnabled()
+    panel.reset_face_button.click()
     assert asked == ["face"]
     assert panel.every_face_caption.text() == tr("liquify.every_face")
 
 
-def test_the_links_that_act_on_the_faces_sit_together(
+def _left_of(left: object, right: object) -> bool:
+    return left.geometry().right() < right.geometry().left()  # type: ignore[attr-defined]
+
+
+def test_two_buttons_under_the_sliders_act_on_the_faces(
     panel: LiquifyPanel, qt_app: object
 ) -> None:
     panel.set_faces(1)
     qt_app.processEvents()  # type: ignore[attr-defined]
-    edit, reset = panel.edit_faces_link, panel.reset_face_link
-    assert edit.parentWidget() is reset.parentWidget()
-    assert edit.geometry().center().y() == reset.geometry().center().y()
-    assert edit.geometry().right() < reset.geometry().left()
+    reset, edit = panel.reset_face_button, panel.edit_faces_button
+    assert edit.text() == tr("liquify.edit_faces") and reset.text() == tr("liquify.reset_face")
+    assert reset.isVisible() and edit.isVisible()
+    assert reset.geometry().center().y() == edit.geometry().center().y()
+    assert _left_of(reset, edit) and reset.width() == edit.width()
     # Below every slider, not up with the count of faces.
     last = panel.face_rows[FACE_GROUPS[-1][1][-1]]
     assert edit.mapTo(panel, edit.rect().topLeft()).y() > last.mapTo(panel, last.rect().bottomLeft()).y()
+    for hidden in (panel.cancel_editing_button, panel.finish_editing_button, panel.reset_faces_button):
+        assert not hidden.isVisible()
 
 
-def test_done_placing_the_points_is_on_the_right(panel: LiquifyPanel, qt_app: object) -> None:
-    panel.set_faces(1)
-    panel.set_editing(True)
-    qt_app.processEvents()  # type: ignore[attr-defined]
-    done, back = panel.finish_editing_button, panel.reset_faces_button
-    assert back.geometry().right() < done.geometry().left()
-    assert done.width() == back.width()
-
-
-def test_placing_the_points_has_a_page_of_its_own(panel: LiquifyPanel, qt_app: object) -> None:
+def test_the_points_are_placed_on_the_same_page(panel: LiquifyPanel, qt_app: object) -> None:
     seen: list[object] = []
     panel.editing_toggled.connect(seen.append)
     panel.face_marks_reset_requested.connect(lambda: seen.append("reset"))
     panel.set_faces(1)
-    assert panel.edit_faces_link.text() == tr("liquify.edit_faces.link")
-    panel.edit_faces_link.click()
+    edit = panel.edit_faces_button
+    place = edit.mapTo(panel, edit.rect().topLeft())
+    edit.click()
     qt_app.processEvents()  # type: ignore[attr-defined]
     assert panel.editing and seen == [True]
-    assert panel.editing_caption.isVisible()
+    # The sliders stay where they were, put down.
+    assert panel.face_rows["eyes"].isVisible() and not panel.face_rows["eyes"].isEnabled()
+    assert panel.faces_caption.isVisible()
+    assert panel.editing_caption.isVisible() and not panel.every_face_caption.isVisible()
     assert panel.editing_caption.text() == tr("liquify.editing_hint")
-    assert not panel.face_rows["eyes"].isVisible()
-    assert not panel.reset_faces_button.isEnabled()
+    # The two buttons become cancel and done, done on the right.
+    cancel, done = panel.cancel_editing_button, panel.finish_editing_button
+    assert not panel.reset_face_button.isVisible() and not edit.isVisible()
+    assert cancel.text() == tr("liquify.edit_faces.cancel") and done.text() == tr("liquify.edit_faces.done")
+    assert _left_of(cancel, done) and cancel.width() == done.width()
+    assert done.mapTo(panel, done.rect().topLeft()).y() >= place.y()
+    # Back to found sits alone above them, as wide as they are.
+    back = panel.reset_faces_button
+    assert back.isVisible() and back.width() == cancel.width()
+    assert back.geometry().left() == cancel.geometry().left()
+    assert back.geometry().bottom() < cancel.geometry().top()
+    assert not back.isEnabled()
     panel.set_faces_edited(True)
-    panel.reset_faces_button.click()
+    back.click()
     assert seen[-1] == "reset"
-    panel.finish_editing_button.click()
+    done.click()
     qt_app.processEvents()  # type: ignore[attr-defined]
     assert not panel.editing and seen[-1] is False
-    assert panel.face_rows["eyes"].isVisible()
+    assert panel.face_rows["eyes"].isEnabled() and edit.isVisible()
     panel.set_editing(True)  # told, not announced
     assert seen[-1] is False
+
+
+def test_cancel_says_so_rather_than_done(panel: LiquifyPanel, qt_app: object) -> None:
+    toggled: list[bool] = []
+    cancelled: list[str] = []
+    panel.editing_toggled.connect(toggled.append)
+    panel.editing_cancelled.connect(lambda: cancelled.append("cancel"))
+    panel.set_faces(1)
+    panel.edit_faces_button.click()
+    panel.cancel_editing_button.click()
+    qt_app.processEvents()  # type: ignore[attr-defined]
+    assert toggled == [True] and cancelled == ["cancel"] and not panel.editing
+    assert "Esc" in panel.cancel_editing_button.toolTip()
+    assert "Enter" in panel.finish_editing_button.toolTip()
+
+
+def test_the_sliders_do_not_point_at_the_photo_while_points_are_placed(
+    panel: LiquifyPanel,
+) -> None:
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QEnterEvent
+    from PySide6.QtWidgets import QApplication
+
+    hovered: list[str] = []
+    panel.face_hovered.connect(hovered.append)
+    panel.set_faces(1)
+    panel.set_editing(True)
+    row = panel.face_rows["chin"]
+    QApplication.sendEvent(row, QEnterEvent(QPointF(5, 5), QPointF(5, 5), QPointF(5, 5)))
+    assert hovered == []
 
 
 # -- the brush page ----------------------------------------------------------

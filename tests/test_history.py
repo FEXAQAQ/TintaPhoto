@@ -154,3 +154,59 @@ def test_pushing_to_an_unknown_photo_starts_its_history() -> None:
     assert not history.push(PHOTO, _with(1.0))
     assert history.current(PHOTO) == _with(1.0)
     assert not history.can_undo(PHOTO)
+
+
+def test_a_run_of_steps_after_a_mark_can_be_folded_into_one() -> None:
+    history = History()
+    history.begin(PHOTO, REST)
+    history.push(PHOTO, _with(1.0))
+    mark = history.mark(PHOTO)
+    assert mark is not None and not history.can_undo_since(PHOTO, mark)
+    for step in (2.0, 3.0, 4.0):
+        history.push(PHOTO, _with(step))
+    history.undo(PHOTO)
+    assert history.can_undo_since(PHOTO, mark)
+
+    assert history.squash(PHOTO, mark)
+    assert history.depth(PHOTO) == 3
+    assert history.current(PHOTO) == _with(3.0)
+    assert not history.can_redo(PHOTO)
+    assert history.undo(PHOTO) == _with(1.0)
+
+
+def test_a_run_that_comes_back_where_it_began_leaves_no_step() -> None:
+    history = History()
+    history.begin(PHOTO, REST)
+    mark = history.mark(PHOTO)
+    assert mark is not None
+    history.push(PHOTO, _with(1.0))
+    history.push(PHOTO, REST)
+    assert not history.squash(PHOTO, mark)
+    assert history.depth(PHOTO) == 1 and not history.can_undo(PHOTO)
+
+
+def test_a_run_of_steps_can_be_called_off() -> None:
+    history = History()
+    history.begin(PHOTO, REST)
+    history.push(PHOTO, _with(1.0))
+    mark = history.mark(PHOTO)
+    assert mark is not None
+    history.push(PHOTO, _with(2.0))
+    history.push(PHOTO, _with(3.0))
+
+    assert history.rewind(PHOTO, mark) == _with(1.0)
+    assert history.current(PHOTO) == _with(1.0)
+    assert history.depth(PHOTO) == 2 and not history.can_redo(PHOTO)
+    assert history.mark(OTHER) is None and history.rewind(OTHER, 0) is None
+
+
+def test_a_mark_holds_while_the_oldest_steps_are_dropped() -> None:
+    history = History()
+    history.begin(PHOTO, REST)
+    for step in range(HISTORY_LIMIT - 1):
+        history.push(PHOTO, _with(step * 0.01))
+    mark = history.mark(PHOTO)
+    assert mark is not None
+    for step in range(10):
+        history.push(PHOTO, _with(10.0 + step))
+    assert history.rewind(PHOTO, mark) == _with((HISTORY_LIMIT - 2) * 0.01)

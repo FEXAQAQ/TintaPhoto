@@ -15,7 +15,8 @@
   **PLAN.md 已補上濾鏡**（2.2、3.1、6、7.1.5、8、13.3 節），文件也不再出現相機廠牌。
   F1 完成：三個濾鏡已從素材擬合出來，同相機 ΔE 0.78 ～ 0.92、
   跨相機 1.56 ～ 1.73。見「濾鏡功能 F1」、「濾鏡功能 F2」
-- **最後更新**：2026-11-08（最後一項工作：「編輯五官位置」移到「重設臉部」旁邊、編輯時「完成調整」放右邊，0.40.1。使用者直接要求。見文末「液化（階段 19）」的連結位置）
+- **最後更新**：2026-11-08（最後一項工作：編輯五官位置改在同一頁、按鈕「取消／完成」，0.41.0。使用者要求不另外換頁、兩顆按鈕變成取消／完成且都是按鈕；取消的做法與「回到自動位置」的位置照建議。見文末「液化（階段 19）」的同一頁編輯）
+  在此之前：「編輯五官位置」移到「重設臉部」旁邊，0.40.1。使用者直接要求。見文末「液化（階段 19）」的連結位置）
   在此之前：下巴改成五個點、臉寬沿下顎內收，入口改名「編輯五官位置」，0.40.0。使用者要求入口直接叫「編輯五官位置」、下巴從三個點改成五個點；我畫了五點與 V 型瘦臉的示意，使用者「照建議」讓新的兩點影響臉寬。見文末「液化（階段 19）」的下巴五點）
   在此之前：液化面板分成「臉部｜筆刷」兩頁，0.39.2。使用者覺得工具、筆刷、臉部疊在一起第一次用看不懂；我畫了兩次模擬圖（分頁、再細修臉部頁），使用者「照建議」：分頁、臉型／五官兩組、滑桿兩端寫字、拉滑桿時照片上標出範圍、重設臉部、沒臉時改用筆刷、旋轉合成一顆按 Alt 反向。見文末「液化（階段 19）」的分頁）
   在此之前：編輯五官位置改得看得懂，0.39.1。使用者回報「好難用，完全看不出要怎麼設定，也不知道部位哪個是對應哪個，都是圈圈」。我畫了對照模擬圖，使用者「照這樣改」：自動放大到臉、每個點寫名稱、不同部位不同形狀、下巴輪廓虛線、畫面上方說明該放哪裡。見文末「液化（階段 19）」的 L4 修正）
@@ -5706,4 +5707,22 @@ app 樣式表的通用 `QPushButton` 最小高度會把標籤撐成 27 px，所�
 - `ui/liquify_panel.py`：`edit_faces_link` 從上方「找到幾張臉」那一行移到滑桿下方，`every_face_caption` 自成一行，下一行靠右並排 `edit_faces_link`、`reset_face_link`（間隔 `SPACE_MD`）；編輯時的兩顆按鈕對調，`reset_faces_button` 在左、`finish_editing_button` 在右（與底部「完成」同側）
 - 測試：`test_liquify_panel.py` 加 2 項（兩個連結同一行且在滑桿下方、完成調整在右且兩鈕同寬）
 - 離線視窗中英文截圖確認：中文一行放得下，英文 Edit features／Reset face 也不換行
+
+**同一頁編輯五官（2026-11-08，0.41.0）**：
+- `app/history.py`：`mark()`、`can_undo_since()`、`squash()`（把標記之後的步驟合成一步）、`rewind()`（退回標記並丟掉之後的步驟）；`_PhotoHistory.dropped` 記住因上限丟掉幾步，標記才不會偏
+- `app/controller.py`：`_face_session`（照片與標記）；`set_editing_faces(True)` 下標記、`(False)` 合成一步；`cancel_editing_faces()` 退回並 `_restore()`；`can_undo`／`undo()` 編輯中退不到標記之前，`_announce_history()` 用 `can_undo`；拖點與「回到自動位置」前 `_face_session_ready()`；`select()` 先結束這張的編輯紀錄，`_announce_adjustments()` 在新照片上重新標記
+- `ui/liquify_panel.py`：不再有獨立的編輯區塊；`reset_face_button`、`edit_faces_button`、`cancel_editing_button`、`finish_editing_button`、`reset_faces_button` 都是 `TextButton`，排在兩欄 `QGridLayout`（同一格放兩顆、一次顯示一對）；編輯時滑桿停用、`face_hovered` 不送；新訊號 `editing_cancelled`
+- `ui/main_window.py`：`cancel_editing_faces()`；Esc 改成取消；Enter（`shortcut.crop_apply`）在編輯五官時完成
+- 字串：`liquify.edit_faces.link` → `liquify.edit_faces`；`liquify.edit_faces.done` 改「完成／Done」；新增取消、兩個工具提示、Esc／Enter、快捷鍵表一列；編輯說明改寫
+- 測試：`test_history.py` 加 4 項、`test_controller.py` 加 3 項、`test_liquify_panel.py` 換成 4 項、`test_main_window.py` 改 2 項（取消、Enter、Esc）
+- 離線視窗中英文截圖確認兩種狀態
+
+**決定（同一頁編輯五官）**：
+- 取消 = 這次拖過的點（含回到自動位置）全部放回、不留步驟；完成 = 整次一步；編輯中 Ctrl+Z 可一步步退，但不退過開始編輯的地方
+- Esc 取消、Enter 完成，與裁切一致（之前 Esc 是結束並保留）
+- 三顆按鈕一排每顆只有 84 px，「回到自動位置」要 104 px，所以放在上一排左欄
+- 編輯中換照片視同完成
+
+**未解決（同一頁編輯五官）**：
+- 跑測試時又遇到一次那個偶發的 pytest 當掉，重跑就過，仍未查
 

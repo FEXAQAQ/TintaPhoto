@@ -36,6 +36,9 @@ class _PhotoHistory:
 
     states: list[Edit]
     position: int = 0
+    #: How many of the oldest states were dropped for the limit, so that a
+    #: mark taken earlier still points at the same state.
+    dropped: int = 0
 
     @property
     def current(self) -> Edit:
@@ -60,7 +63,9 @@ class _PhotoHistory:
         self.states.append(state)
         if len(self.states) > HISTORY_LIMIT:
             # Drop the oldest; the position moves with the window.
-            del self.states[0 : len(self.states) - HISTORY_LIMIT]
+            extra = len(self.states) - HISTORY_LIMIT
+            del self.states[0:extra]
+            self.dropped += extra
         self.position = len(self.states) - 1
         return True
 
@@ -139,10 +144,63 @@ class History:
         history.position += 1
         return history.current
 
+    def mark(self, photo: Path) -> int | None:
+        """Return a mark for the state *photo* is in now, or ``None`` if it has no history.
+
+        A run of steps taken after it can later be folded into one
+        (:meth:`squash`) or taken back altogether (:meth:`rewind`), as
+        placing a face's points is (PLAN.md 2.11 L-12).
+        """
+        history = self._photos.get(photo)
+        return history.dropped + history.position if history is not None else None
+
+    def can_undo_since(self, photo: Path, mark: int) -> bool:
+        """Return whether *photo* can step back without going behind *mark*."""
+        history = self._photos.get(photo)
+        return history is not None and history.position > _marked(history, mark)
+
+    def squash(self, photo: Path, mark: int) -> bool:
+        """Fold every step after *mark* into one, the state now in force.
+
+        Steps that were undone are dropped with the rest. Returns whether a
+        step is left: none when the run came back to where it started.
+        """
+        history = self._photos.get(photo)
+        if history is None:
+            return False
+        start = _marked(history, mark)
+        if history.position < start:
+            return False
+        kept = history.current
+        del history.states[start + 1 :]
+        if kept != history.states[start]:
+            history.states.append(kept)
+        history.position = len(history.states) - 1
+        return history.position > start
+
+    def rewind(self, photo: Path, mark: int) -> Edit | None:
+        """Take back every step after *mark* and return the state it marks.
+
+        The steps are forgotten, not kept for redo: what they did is being
+        called off. ``None`` if *photo* has no history.
+        """
+        history = self._photos.get(photo)
+        if history is None:
+            return None
+        start = _marked(history, mark)
+        del history.states[start + 1 :]
+        history.position = start
+        return history.current
+
     def depth(self, photo: Path) -> int:
         """Return how many states *photo* holds; for tests and diagnostics."""
         history = self._photos.get(photo)
         return len(history.states) if history is not None else 0
+
+
+def _marked(history: _PhotoHistory, mark: int) -> int:
+    """Return where in *history* the state *mark* was taken at is now."""
+    return min(max(mark - history.dropped, 0), len(history.states) - 1)
 
 
 __all__ = ["HISTORY_LIMIT", "History"]

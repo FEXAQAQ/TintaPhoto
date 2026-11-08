@@ -498,6 +498,9 @@ class Controller(QObject):
         #: photo is then shown without liquify, so that the points can be
         #: put on the features as they really are.
         self._editing_faces = False
+        #: The photo whose points are being placed and the mark in its
+        #: history where placing them began (L-12).
+        self._face_session: tuple[Path, int] | None = None
         self.preview_ready.connect(self._remember_on_screen)
 
         self._save_timer = QTimer(self)
@@ -1161,6 +1164,8 @@ class Controller(QObject):
         # The photo being left behind must not lose the second it was still
         # waiting to be saved in.
         self._write_pending()
+        # Points placed on the photo being left are one step of its history.
+        self._end_face_session()
         self._comparing = False
         self._cropping = False
         self._before = None
@@ -1321,6 +1326,9 @@ class Controller(QObject):
         self._state = edit.adjustments
         self._geometry = edit.geometry
         self._history.begin(path, edit)
+        if path == self.current:
+            # Still placing points: they start again on this photo.
+            self._face_session_ready()
 
         self.adjustments_ready.emit(self._state, self._shot_white_balance)
         self.lens_ready.emit(decoded.lens, decoded.is_raw)
@@ -1400,7 +1408,7 @@ class Controller(QObject):
         if path is None:
             self.history_changed.emit(False, False)
             return
-        self.history_changed.emit(self._history.can_undo(path), self._history.can_redo(path))
+        self.history_changed.emit(self.can_undo, self._history.can_redo(path))
 
     # -- adjusting -------------------------------------------------------
 
@@ -1991,10 +1999,56 @@ class Controller(QObject):
         """
         if editing == self._editing_faces:
             return
+        if editing:
+            self._begin_face_session()
+        else:
+            self._end_face_session()
         self._editing_faces = editing
         self._end_liquify_draft()
         self._developed = None
         self._develop_current()
+
+    def cancel_editing_faces(self) -> None:
+        """Stop placing the face's points and put them back as they were (L-12).
+
+        Every point moved since placing began goes back, and none of it is
+        left in the history.
+        """
+        if not self._editing_faces:
+            return
+        session, self._face_session = self._face_session, None
+        self._editing_faces = False
+        self._end_liquify_draft()
+        self._developed = None
+        path = self.current
+        if session is not None and session[0] == path and path is not None:
+            edit = self._history.rewind(path, session[1])
+            if edit is not None and edit != self.edit:
+                self._restore(edit)
+                return
+        self._announce_history()
+        self._develop_current()
+
+    def _begin_face_session(self) -> None:
+        """Mark where placing the points began on the photo shown, if it has a history yet."""
+        path = self.current
+        mark = self._history.mark(path) if path is not None else None
+        self._face_session = (path, mark) if path is not None and mark is not None else None
+        self._announce_history()
+
+    def _end_face_session(self) -> None:
+        """Make everything done while the points were placed one step of history."""
+        session, self._face_session = self._face_session, None
+        if session is not None:
+            self._history.squash(*session)
+        self._announce_history()
+
+    def _face_session_ready(self) -> None:
+        """Make sure a step taken while placing points belongs to the photo shown."""
+        path = self.current
+        if self._editing_faces and (self._face_session is None or self._face_session[0] != path):
+            self._end_face_session()
+            self._begin_face_session()
 
     @property
     def faces_edited(self) -> bool:
@@ -2061,6 +2115,7 @@ class Controller(QObject):
         moved = replace(self._geometry.face_shape, faces=tuple(marks))
         self._geometry = replace(self._geometry, face_shape=moved)
         if not dragging:
+            self._face_session_ready()
             self._record(path, self.edit)
             self.geometry_changed.emit(self._geometry)
             if not self._editing_faces:
@@ -2108,6 +2163,7 @@ class Controller(QObject):
         """Put every face's points back where they were found, as one step (L-12)."""
         if self.current is None or not self.faces_edited:
             return
+        self._face_session_ready()
         shape = replace(self._geometry.face_shape, faces=self._found_marks())
         self.set_geometry(replace(self._geometry, face_shape=shape))
         self.geometry_changed.emit(self._geometry)
@@ -2196,7 +2252,13 @@ class Controller(QObject):
     # -- undo, redo and reset --------------------------------------------
 
     def undo(self) -> None:
-        """Go back one step on the photo being shown (E-04)."""
+        """Go back one step on the photo being shown (E-04).
+
+        While the face's points are placed, only as far back as where placing
+        them began (L-12).
+        """
+        if not self.can_undo:
+            return
         self._restore(self._history.undo(self.current) if self.current else None)
 
     def redo(self) -> None:
@@ -2336,7 +2398,12 @@ class Controller(QObject):
     def can_undo(self) -> bool:
         """Return whether the photo being shown has something to undo."""
         path = self.current
-        return path is not None and self._history.can_undo(path)
+        if path is None:
+            return False
+        session = self._face_session
+        if self._editing_faces and session is not None and session[0] == path:
+            return self._history.can_undo_since(path, session[1])
+        return self._history.can_undo(path)
 
     @property
     def can_redo(self) -> bool:

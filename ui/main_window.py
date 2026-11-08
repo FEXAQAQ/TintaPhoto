@@ -319,6 +319,7 @@ class MainWindow(QMainWindow):
         panel.face_reset_requested.connect(self.controller.reset_face_shape)
         panel.page_changed.connect(lambda _page: self._open_liquify_brush())
         panel.editing_toggled.connect(self.set_editing_faces)
+        panel.editing_cancelled.connect(self.cancel_editing_faces)
         panel.face_marks_reset_requested.connect(self.controller.reset_face_marks)
         self.preview.canvas.faces.handle_moved.connect(self._on_face_handle_moved)
         panel.tool_changed.connect(lambda _tool: self._show_liquify_brush())
@@ -1127,6 +1128,13 @@ class MainWindow(QMainWindow):
                 canvas.restore_view(before[1])
         canvas.refresh_cursor()
         canvas.update()
+
+    def cancel_editing_faces(self) -> None:
+        """Stop placing the face's points and put them back as they were (Esc, L-12)."""
+        if not self.editing_faces:
+            return
+        self.controller.cancel_editing_faces()
+        self.set_editing_faces(False)
 
     @property
     def editing_faces(self) -> bool:
@@ -2202,6 +2210,10 @@ class MainWindow(QMainWindow):
             return
         if not self._portrait_mode and key in _PORTRAIT_ONLY:
             return
+        if self._liquify_mode and self.editing_faces and key == "shortcut.crop_apply":
+            # Enter finishes placing the points, as it applies a crop.
+            self.set_editing_faces(False)
+            return
         if self._liquify_mode and key in _NOT_IN_PORTRAIT:
             return
         handler()
@@ -2237,8 +2249,8 @@ class MainWindow(QMainWindow):
         elif self._portrait_mode:
             self.leave_portrait()
         elif self._liquify_mode and self.editing_faces:
-            # Placing the points ends first, then liquify is left.
-            self.set_editing_faces(False)
+            # Placing the points is called off first, then liquify is left.
+            self.cancel_editing_faces()
         elif self._liquify_mode:
             self.leave_liquify()
         elif self._collage_mode and self.collage_canvas.aligning:
