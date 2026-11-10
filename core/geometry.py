@@ -44,41 +44,70 @@ from core.healing import Spot
 from core.lens import DEFAULT_SETTINGS, LensSettings
 from core.skin_range import DEFAULT_RANGE, SkinRange
 
-#: The fixed ratios of PLAN.md C-02, with the two open choices. 9:16 is the
-#: upright full screen shape, which X reaches from 16:9 as well; it is named
-#: here because that is how the social platforms name it, and a ratio nobody
-#: can see on a button is a ratio nobody finds.
+#: The fixed ratios of PLAN.md C-02, with the two open choices. Every ratio
+#: has a button of its own for each way round (PLAN.md 3.2), so the name of
+#: a ratio always says which way round it is: 16:9 lies down, 9:16 stands
+#: up, and X turns one into the other.
 ASPECT_ORIGINAL: Final[str] = "original"
 ASPECT_FREE: Final[str] = "free"
 ASPECT_SQUARE: Final[str] = "1:1"
+ASPECT_5_4: Final[str] = "5:4"
 ASPECT_3_2: Final[str] = "3:2"
-ASPECT_4_5: Final[str] = "4:5"
 ASPECT_16_9: Final[str] = "16:9"
+ASPECT_21_9: Final[str] = "21:9"
+ASPECT_4_5: Final[str] = "4:5"
+ASPECT_2_3: Final[str] = "2:3"
 ASPECT_9_16: Final[str] = "9:16"
+ASPECT_9_21: Final[str] = "9:21"
 
-#: In the order the crop tab shows them, three to a row (PLAN.md 3.2).
-ASPECTS: Final[tuple[str, ...]] = (
-    ASPECT_ORIGINAL,
-    ASPECT_FREE,
-    ASPECT_SQUARE,
+#: The three rows of the crop tab (PLAN.md 3.2): the ratios that are
+#: neither way round, the wide ones, and below each wide one its upright
+#: twin.
+ASPECTS_ANY_WAY: Final[tuple[str, ...]] = (ASPECT_ORIGINAL, ASPECT_FREE, ASPECT_SQUARE)
+ASPECTS_LANDSCAPE: Final[tuple[str, ...]] = (
+    ASPECT_5_4,
     ASPECT_3_2,
-    ASPECT_4_5,
     ASPECT_16_9,
+    ASPECT_21_9,
+)
+ASPECTS_PORTRAIT: Final[tuple[str, ...]] = (
+    ASPECT_4_5,
+    ASPECT_2_3,
     ASPECT_9_16,
+    ASPECT_9_21,
 )
 
+#: In the order the crop tab shows them.
+ASPECTS: Final[tuple[str, ...]] = ASPECTS_ANY_WAY + ASPECTS_LANDSCAPE + ASPECTS_PORTRAIT
+
 #: The ratios exactly as they are written: 4:5 is four wide and five high,
-#: so it is a portrait shape until it is turned on its side (X).
+#: so it is a portrait shape.
 _FIXED_RATIOS: Final[dict[str, float]] = {
     ASPECT_SQUARE: 1.0,
+    ASPECT_5_4: 5 / 4,
     ASPECT_3_2: 3 / 2,
-    ASPECT_4_5: 4 / 5,
     ASPECT_16_9: 16 / 9,
+    ASPECT_21_9: 21 / 9,
+    ASPECT_4_5: 4 / 5,
+    ASPECT_2_3: 2 / 3,
     ASPECT_9_16: 9 / 16,
+    ASPECT_9_21: 9 / 21,
+}
+
+#: Each ratio and the same ratio the other way round.
+_TWINS: Final[dict[str, str]] = {
+    **dict(zip(ASPECTS_LANDSCAPE, ASPECTS_PORTRAIT)),
+    **dict(zip(ASPECTS_PORTRAIT, ASPECTS_LANDSCAPE)),
 }
 
 ORIENTATION_LANDSCAPE: Final[str] = "landscape"
 ORIENTATION_PORTRAIT: Final[str] = "portrait"
+
+
+def _written_way(aspect: str) -> str:
+    """Return the way round a fixed ratio is written; any other lies down."""
+    ratio = _FIXED_RATIOS.get(aspect, 1.0)
+    return ORIENTATION_PORTRAIT if ratio < 1.0 else ORIENTATION_LANDSCAPE
 
 #: Rotation, in degrees (C-03).
 ANGLE_MIN: Final[float] = -45.0
@@ -219,7 +248,9 @@ class Geometry:
     angle: float = 0.0
     crop: Rect = WHOLE_FRAME
     aspect: str = ASPECT_ORIGINAL
-    orientation: str = ORIENTATION_LANDSCAPE
+    #: Left out, the crop is the way round its ratio is written: 9:16
+    #: stands up.
+    orientation: str = ""
     #: Left and right exchanged after the quarter turns and before the angle
     #: (C-08). One switch covers both flips: upside down is mirrored and
     #: turned half way round.
@@ -246,6 +277,20 @@ class Geometry:
     #: were set on, held for the same reasons; the strokes are laid over
     #: what they make.
     face_shape: liquify_module.FaceShape = liquify_module.DEFAULT_FACE_SHAPE
+
+    def __post_init__(self) -> None:
+        """Name the ratio the way round the crop is (PLAN.md 3.2).
+
+        A crop turned on its side, by X or by a quarter turn of the photo,
+        is the other button's ratio: 16:9 stood up is 9:16. Doing it here
+        means every geometry, also one read from a sidecar written before
+        each way round had a name of its own, lights the right button.
+        """
+        if self.orientation not in (ORIENTATION_LANDSCAPE, ORIENTATION_PORTRAIT):
+            object.__setattr__(self, "orientation", _written_way(self.aspect))
+        twin = _TWINS.get(self.aspect)
+        if twin is not None and _written_way(self.aspect) != self.orientation:
+            object.__setattr__(self, "aspect", twin)
 
     @property
     def liquified(self) -> bool:
@@ -334,11 +379,8 @@ class Geometry:
             angle=_clamp(_as_float(data.get("angle"), 0.0), ANGLE_MIN, ANGLE_MAX),
             crop=Rect.from_dict(data.get("crop")),
             aspect=aspect if aspect in ASPECTS else ASPECT_ORIGINAL,
-            orientation=(
-                orientation
-                if orientation in (ORIENTATION_LANDSCAPE, ORIENTATION_PORTRAIT)
-                else ORIENTATION_LANDSCAPE
-            ),
+            # Anything else is the way round the ratio is written.
+            orientation=orientation if isinstance(orientation, str) else "",
             lens=LensSettings.from_dict(data.get("lens")),
             spots=healing.spots_from_list(data.get("spots")),
             skin=SkinRange.from_dict(data.get("skin")),

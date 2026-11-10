@@ -256,7 +256,7 @@ def crop_tab(qt_app: object) -> CropTab:
 
 
 def test_the_ratios_are_offered(crop_tab: CropTab) -> None:
-    """PLAN.md 3.2: 原始、自由、1:1、3:2、4:5、16:9, and 9:16 after them."""
+    """PLAN.md 3.2: either way round, then landscape, then portrait."""
     assert tuple(crop_tab.aspect_buttons()) == geometry.ASPECTS
 
 
@@ -269,15 +269,19 @@ def test_choosing_a_ratio_announces_it(crop_tab: CropTab) -> None:
     assert chosen == ["16:9"]
 
 
-def test_choosing_the_same_ratio_again_turns_it_on_its_side(crop_tab: CropTab) -> None:
-    """PLAN.md 3.2: 再點一次已選的比例，切換直式／橫式."""
+def test_choosing_the_same_ratio_again_applies_it_again(crop_tab: CropTab) -> None:
+    """PLAN.md 3.2: each way round has its own button, so a second click
+    applies the ratio afresh instead of turning it over."""
+    chosen: list[str] = []
     flips: list[int] = []
+    crop_tab.aspect_chosen.connect(chosen.append)
     crop_tab.orientation_flipped.connect(lambda: flips.append(1))
     crop_tab.set_geometry(Geometry(aspect="3:2"))
 
     crop_tab.aspect_buttons()["3:2"].click()
 
-    assert flips == [1]
+    assert chosen == ["3:2"]
+    assert flips == []
 
 
 def test_the_angle_slider_covers_the_documented_range(crop_tab: CropTab) -> None:
@@ -410,16 +414,8 @@ def test_the_other_two_with_nothing_to_turn_are_applied_again(
     assert flips == []
 
 
-@pytest.mark.parametrize(
-    "aspect",
-    [
-        geometry.ASPECT_3_2,
-        geometry.ASPECT_4_5,
-        geometry.ASPECT_16_9,
-        geometry.ASPECT_9_16,
-    ],
-)
-def test_the_ratios_with_two_sides_still_turn_over(
+@pytest.mark.parametrize("aspect", geometry.ASPECTS_LANDSCAPE + geometry.ASPECTS_PORTRAIT)
+def test_the_ratios_with_two_sides_are_applied_again(
     crop_tab: CropTab, aspect: str
 ) -> None:
     flips: list[int] = []
@@ -428,7 +424,39 @@ def test_the_ratios_with_two_sides_still_turn_over(
 
     crop_tab.aspect_buttons()[aspect].click()
 
-    assert flips == [1]
+    assert flips == []
+
+
+def test_each_landscape_ratio_stands_above_its_portrait_twin(crop_tab: CropTab) -> None:
+    """PLAN.md 3.2: three rows, 16:9 right above 9:16."""
+    crop_tab.resize(theme_panel_width(), 600)
+    crop_tab.show()
+    try:
+        buttons = crop_tab.aspect_buttons()
+        for wide, tall in zip(geometry.ASPECTS_LANDSCAPE, geometry.ASPECTS_PORTRAIT):
+            above = buttons[wide].geometry()
+            below = buttons[tall].geometry()
+            assert above.x() == below.x()
+            assert above.width() == below.width()
+            assert above.y() < below.y()
+    finally:
+        # A window left open sits under the pointer of later tests.
+        crop_tab.close()
+
+
+def test_the_lit_button_follows_the_way_round(crop_tab: CropTab) -> None:
+    """16:9 turned on its side lights 9:16 (PLAN.md 3.2)."""
+    crop_tab.set_geometry(Geometry(aspect="16:9", orientation="portrait"))
+
+    assert crop_tab.aspect_buttons()["9:16"].isChecked()
+    assert not crop_tab.aspect_buttons()["16:9"].isChecked()
+
+
+def theme_panel_width() -> int:
+    """Return the width of the side panel."""
+    from ui import theme
+
+    return theme.PANEL_WIDTH
 
 
 def _settle_fold(group) -> None:
@@ -447,11 +475,12 @@ def _settle_fold(group) -> None:
         time.sleep(0.01)
 
 
-def test_9_16_has_a_button_of_its_own(crop_tab: CropTab) -> None:
-    """X reaches it from 16:9 as well, but nobody finds it that way."""
-    button = crop_tab.aspect_buttons()[geometry.ASPECT_9_16]
+@pytest.mark.parametrize("aspect", ["9:16", "21:9", "9:21", "5:4", "2:3"])
+def test_every_way_round_has_a_button_of_its_own(crop_tab: CropTab, aspect: str) -> None:
+    """X reaches each of them too, but nobody finds a ratio that way."""
+    button = crop_tab.aspect_buttons()[aspect]
 
-    assert button.text() == "9:16"
+    assert button.text() == aspect
     assert button.isVisibleTo(crop_tab)
 
 

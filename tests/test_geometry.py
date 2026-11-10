@@ -617,6 +617,64 @@ def test_9_16_is_kept_when_a_photo_is_opened_again() -> None:
     assert Geometry.from_dict(stored).aspect == geometry.ASPECT_9_16
 
 
+@pytest.mark.parametrize(
+    ("wide", "tall"),
+    [("5:4", "4:5"), ("3:2", "2:3"), ("16:9", "9:16"), ("21:9", "9:21")],
+)
+def test_x_turns_a_ratio_into_its_twin(wide: str, tall: str) -> None:
+    """Each way round has a name of its own, and X goes from one to the other."""
+    source = (6000, 4000)
+    chosen = geometry.with_aspect(Geometry(), source, wide)
+    assert chosen.orientation == geometry.ORIENTATION_LANDSCAPE
+
+    turned = geometry.with_orientation_flipped(chosen, source)
+    assert turned.aspect == tall
+    assert turned.orientation == geometry.ORIENTATION_PORTRAIT
+
+    back = geometry.with_orientation_flipped(turned, source)
+    assert back.aspect == wide
+    assert back.crop.to_dict() == pytest.approx(chosen.crop.to_dict())
+
+
+def test_21_9_is_wide() -> None:
+    source = (6000, 4000)
+    wide = geometry.with_aspect(Geometry(), source, geometry.ASPECT_21_9)
+
+    assert wide.crop.w * source[0] == pytest.approx(
+        wide.crop.h * source[1] * 21 / 9, rel=0.01
+    )
+    assert wide.crop.w == pytest.approx(1.0)
+
+
+def test_a_quarter_turn_names_the_ratio_the_new_way_round() -> None:
+    """16:9 on a photo turned a quarter is an upright crop, so 9:16."""
+    source = (6000, 4000)
+    wide = geometry.with_aspect(Geometry(), source, geometry.ASPECT_16_9)
+
+    assert wide.turned(1).aspect == geometry.ASPECT_9_16
+
+
+@pytest.mark.parametrize(
+    ("stored", "orientation", "named"),
+    [
+        ("4:5", "landscape", "5:4"),
+        ("3:2", "portrait", "2:3"),
+        ("16:9", "portrait", "9:16"),
+        ("9:16", "landscape", "16:9"),
+        ("4:5", "portrait", "4:5"),
+    ],
+)
+def test_an_older_sidecar_lights_the_right_button(
+    stored: str, orientation: str, named: str
+) -> None:
+    """Before each way round had a name, 4:5 on its side was stored as 4:5
+    lying down; it is read as 5:4, the same shape (PLAN.md 7.1)."""
+    read = Geometry.from_dict({"aspect": stored, "orientation": orientation})
+
+    assert read.aspect == named
+    assert read.orientation == orientation
+
+
 # -- turning the crop on its side (X, PLAN.md 3.2) -----------------------
 
 

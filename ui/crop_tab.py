@@ -1,7 +1,8 @@
 """The crop tab of the right hand panel (PLAN.md 3.2).
 
 Three groups, top to bottom, each under a header that folds it away: the
-seven ratios in three columns, the angle slider, and the orientation tools - straighten
+ratios in three rows (either way round, landscape, and below each landscape
+ratio its portrait twin), the angle slider, and the orientation tools - straighten
 and the quarter turns on one row, the two flips under them. The tab only says what
 the user asked for; what that does to the crop box is worked out by
 :mod:`core.geometry` and applied by the controller.
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QGridLayout,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -30,28 +32,24 @@ from ui.widgets.buttons import ROLE_CHOICE, TextButton
 from ui.widgets.group import ControlGroup
 from ui.widgets.slider_row import SliderRow, SliderSpec
 
-#: How the ratios are laid out (PLAN.md 3.2: three columns).
-_COLUMNS: Final[int] = 3
+#: The ratio rows (PLAN.md 3.2): the caption over each, and its ratios.
+#: The landscape and portrait rows have the same number of columns, so each
+#: ratio stands right above its twin.
+_ASPECT_ROWS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("crop.aspect.row.any", geometry.ASPECTS_ANY_WAY),
+    ("crop.aspect.row.landscape", geometry.ASPECTS_LANDSCAPE),
+    ("crop.aspect.row.portrait", geometry.ASPECTS_PORTRAIT),
+)
 
 #: The text key of each ratio button.
 _ASPECT_LABELS: Final[dict[str, str]] = {
+    aspect: "crop.aspect." + aspect.replace(":", "_")
+    for aspect in geometry.ASPECTS_LANDSCAPE + geometry.ASPECTS_PORTRAIT
+} | {
     geometry.ASPECT_ORIGINAL: "crop.aspect.original",
     geometry.ASPECT_FREE: "crop.aspect.free",
     geometry.ASPECT_SQUARE: "crop.aspect.square",
-    geometry.ASPECT_3_2: "crop.aspect.3_2",
-    geometry.ASPECT_4_5: "crop.aspect.4_5",
-    geometry.ASPECT_16_9: "crop.aspect.16_9",
-    geometry.ASPECT_9_16: "crop.aspect.9_16",
 }
-
-#: PLAN.md 3.2 turns the chosen ratio on its side when it is clicked again,
-#: but these three have nothing to turn: "original" is the name of the whole
-#: picture, "free" has no shape, and a square is the same either way.
-#: Clicking one of them again simply applies it afresh. X still turns the
-#: crop over, whichever ratio it is.
-_RECLICK_APPLIES_AGAIN: Final[frozenset[str]] = frozenset(
-    {geometry.ASPECT_ORIGINAL, geometry.ASPECT_FREE, geometry.ASPECT_SQUARE}
-)
 
 
 def angle_spec() -> SliderSpec:
@@ -72,7 +70,7 @@ class CropTab(QWidget):
 
     #: A ratio was chosen, by its name in :data:`core.geometry.ASPECTS`.
     aspect_chosen = Signal(str)
-    #: The chosen ratio was clicked again, or X was pressed (PLAN.md 3.2).
+    #: X was pressed (PLAN.md 3.2).
     orientation_flipped = Signal()
     #: A new angle, and whether the slider is still being dragged.
     angle_changed = Signal(float, bool)
@@ -113,25 +111,44 @@ class CropTab(QWidget):
     # -- building --------------------------------------------------------
 
     def _build_aspects(self) -> ControlGroup:
-        """Build the ratio buttons, three to a row."""
+        """Build the ratio buttons in their three captioned rows."""
         group = ControlGroup("crop.group.aspect", first=True, parent=self)
 
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(theme.SPACE_XS)
         self._aspect_group = QButtonGroup(self)
         self._aspect_group.setExclusive(True)
-        for index, aspect in enumerate(geometry.ASPECTS):
-            button = QPushButton(tr(_ASPECT_LABELS[aspect]))
-            button.setProperty("role", ROLE_CHOICE)
-            button.setCheckable(True)
-            button.setFixedHeight(theme.BUTTON_HEIGHT)
-            button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-            button.clicked.connect(lambda _checked, name=aspect: self._on_aspect(name))
-            self._aspect_group.addButton(button, index)
-            self._aspect_buttons[aspect] = button
-            grid.addWidget(button, index // _COLUMNS, index % _COLUMNS)
-        group.add_layout(grid)
+        self._row_captions: list[tuple[QLabel, str]] = []
+        rows = QWidget(group)
+        rows_layout = QVBoxLayout(rows)
+        rows_layout.setContentsMargins(0, 0, 0, 0)
+        rows_layout.setSpacing(theme.SPACE_XS)
+        for row_index, (caption_key, aspects) in enumerate(_ASPECT_ROWS):
+            caption = QLabel(tr(caption_key), rows)
+            caption.setProperty("role", "caption")
+            if row_index:
+                # A caption sits nearer its own row than the row above it.
+                rows_layout.addSpacing(theme.SPACE_XS)
+            rows_layout.addWidget(caption)
+            self._row_captions.append((caption, caption_key))
+
+            grid = QGridLayout()
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setSpacing(theme.SPACE_XS)
+            for column, aspect in enumerate(aspects):
+                button = QPushButton(tr(_ASPECT_LABELS[aspect]), rows)
+                button.setProperty("role", ROLE_CHOICE)
+                button.setCheckable(True)
+                button.setFixedHeight(theme.BUTTON_HEIGHT)
+                # Ignored, so that every column is as wide as the next
+                # whatever its button says.
+                button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+                button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+                button.clicked.connect(lambda _checked, name=aspect: self._on_aspect(name))
+                self._aspect_group.addButton(button)
+                self._aspect_buttons[aspect] = button
+                grid.addWidget(button, 0, column)
+                grid.setColumnStretch(column, 1)
+            rows_layout.addLayout(grid)
+        group.add_row(rows)
         return group
 
     def _build_angle(self) -> ControlGroup:
@@ -203,6 +220,8 @@ class CropTab(QWidget):
         """
         for aspect, button in self._aspect_buttons.items():
             button.setText(tr(_ASPECT_LABELS[aspect]))
+        for caption, key in self._row_captions:
+            caption.setText(tr(key))
         self.angle_row.set_spec(angle_spec())
         self.straighten_button.setToolTip(tr("crop.straighten.hint"))
 
@@ -246,13 +265,11 @@ class CropTab(QWidget):
     # -- reacting --------------------------------------------------------
 
     def _on_aspect(self, aspect: str) -> None:
-        """Choose a ratio, or turn the chosen one on its side (PLAN.md 3.2).
+        """Choose a ratio (PLAN.md 3.2).
 
-        Three of them have nothing to turn over, so clicking them again
-        applies them afresh instead: pressing "original" twice gives the
-        whole picture both times rather than standing it on its side.
+        Each way round of a ratio has a button of its own, so clicking the
+        chosen one again applies it afresh rather than turning it over: the
+        lit button never jumps away from the one that was clicked. X still
+        turns the crop over.
         """
-        if aspect == self._geometry.aspect and aspect not in _RECLICK_APPLIES_AGAIN:
-            self.orientation_flipped.emit()
-            return
         self.aspect_chosen.emit(aspect)

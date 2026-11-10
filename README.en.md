@@ -113,7 +113,7 @@ when you crop or rotate later.
 <img src="docs/media/en/crop.webp" width="100%" alt="Drawing a line along the horizon with Straighten, then choosing 16:9">
 
 Choose Straighten, draw a line along the horizon, and the photo levels itself.
-Original, Free, 1:1, 4:5, 3:2, 16:9 and 9:16 are one click away — portrait
+Original, Free, 1:1, and 5:4, 3:2, 16:9 and 21:9 with their portrait twins are one click away — portrait
 posts, stories, wallpapers. Plus 90° turns, horizontal and vertical flips, and
 a rule-of-thirds grid.
 
