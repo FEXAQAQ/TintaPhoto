@@ -249,7 +249,12 @@ def test_every_shipped_look_says_where_it_came_from() -> None:
     for look in load_catalogue(SHIPPED):
         assert look.source is not None
         assert "method" in look.source
-        assert "delta_e_oklab" in look.source
+        # A measured look says how well it fits; a designed one keeps the
+        # recipe it was written from, so it can be read and written again.
+        if look.source["method"] == "designed":
+            assert "recipe" in look.source
+        else:
+            assert "delta_e_oklab" in look.source
         # No make, model or file name: a look is this project's own.
         assert "camera" not in look.source
 

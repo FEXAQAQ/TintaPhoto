@@ -16,7 +16,9 @@ nothing to blow up where the reference photograph happened to hold no
 colour.
 
 The whole of it is about eighty numbers, kept in ``resources/filters`` as
-JSON and fitted by ``tools/fit_filter.py``.
+JSON and fitted by ``tools/fit_filter.py``. A grading style no camera ships
+- the cinematic looks - has nothing to be measured from, and is written by
+``tools/design_filter.py`` from a short recipe into the same form.
 """
 
 from __future__ import annotations
@@ -43,7 +45,7 @@ NO_FILTER: Final[str] = ""
 #: The categories the looks tab groups looks under, in the order it shows
 #: them. A look names its own; a file that names none, or one this copy does
 #: not know, goes under the first.
-CATEGORIES: Final[tuple[str, ...]] = ("film", "medium-format", "street")
+CATEGORIES: Final[tuple[str, ...]] = ("film", "medium-format", "street", "cinematic")
 DEFAULT_CATEGORY: Final[str] = CATEGORIES[0]
 
 #: Chroma at which the hue dependent lightness reaches its full strength.
