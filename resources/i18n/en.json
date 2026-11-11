@@ -408,6 +408,7 @@
   "collage.split": "Split",
   "collage.split.side_by_side": "Side by side",
   "collage.split.stacked": "Stacked",
+  "collage.split.grid": "Grid",
   "collage.group.photos": "Photos",
   "collage.fit": "Fit",
   "collage.fit.cover": "Fill",

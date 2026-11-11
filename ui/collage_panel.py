@@ -95,7 +95,8 @@ def alignment_scale_spec() -> SliderSpec:
 
 
 #: The photo rows and their zoom sliders are numbered 1 to 4, left to right
-#: or top to bottom, whatever the count and the split (PLAN.md 3.13).
+#: or top to bottom - a grid read like a page - whatever the count and the
+#: split (PLAN.md 3.13).
 _SLOT_LABEL: Final[str] = "collage.slot"
 
 
@@ -132,6 +133,9 @@ class CollagePanel(QWidget):
         styled_background(self, "CollagePanel")
         self.setFixedWidth(theme.PANEL_WIDTH)
         self._layout = Layout()
+        #: The count a split side by side or stacked had, for when a grid,
+        #: which is always four, is left again.
+        self._line_count = self._layout.count
         self._paths: tuple[Path | None, ...] = (None,) * collage.SLOTS
         self._row_labels: list[QLabel] = []
         self._name_rows: list[list[QWidget]] = []
@@ -221,6 +225,7 @@ class CollagePanel(QWidget):
             [
                 (collage.SPLIT_SIDE_BY_SIDE, "collage.split.side_by_side"),
                 (collage.SPLIT_STACKED, "collage.split.stacked"),
+                (collage.SPLIT_GRID, "collage.split.grid"),
             ],
             group,
         )
@@ -232,10 +237,10 @@ class CollagePanel(QWidget):
             group,
         )
         self.count_choice.chosen.connect(lambda _value: self._changed())
-        self._labelled(group, "collage.count", self.count_choice)
+        self._count_row = self._labelled(group, "collage.count", self.count_choice)
 
-        # Two pieces have one seam, which a slider moves; three or four are
-        # moved on the canvas, where each seam can be taken hold of.
+        # Two pieces have one seam, which a slider moves; three or four, and
+        # a grid, are moved on the canvas, where each seam can be taken hold of.
         self.seam_slider = SliderRow(seam_spec(), group)
         self.seam_slider.value_changed.connect(lambda *_: self._changed())
         group.add_row(self.seam_slider)
@@ -361,11 +366,22 @@ class CollagePanel(QWidget):
         """Return the layout the controls now describe.
 
         A different count starts from even pieces; with two, the seam is the
-        slider's; with more, the seams stay where the canvas left them.
+        slider's; with more, the seams stay where the canvas left them. A
+        grid is always four, and leaving it goes back to the count before it;
+        going into a grid or out of one starts from even pieces too.
         """
-        count = int(self.count_choice.value)
-        if count != self._layout.count:
+        split = self.split_choice.value
+        was_grid = self._layout.split == collage.SPLIT_GRID
+        if split == collage.SPLIT_GRID:
+            count = collage.GRID_COUNT
+        elif was_grid:
+            count = self._line_count
+        else:
+            count = int(self.count_choice.value)
+        if (split == collage.SPLIT_GRID) != was_grid or count != self._layout.count:
             seams: tuple[float, ...] = ()
+        elif split == collage.SPLIT_GRID:
+            seams = self._layout.seams
         elif count == collage.COUNT_MIN:
             seams = (self.seam_slider.value / _PERCENT,)
         else:
@@ -378,7 +394,7 @@ class CollagePanel(QWidget):
         return Layout(
             platform=platform,
             canvas=canvas,
-            split=self.split_choice.value,
+            split=split,
             fit=self.fit_choice.value,
             gap=round(self.gap_slider.value),
             background=self.background_choice.value,
@@ -396,6 +412,9 @@ class CollagePanel(QWidget):
         """Show *layout* without announcing it."""
         layout = layout.sane()
         self._layout = layout
+        grid = layout.split == collage.SPLIT_GRID
+        if not grid:
+            self._line_count = layout.count
         self.platform_choice.set_value(layout.platform)
         for platform, choice in self.canvas_choices.items():
             visible = platform == layout.platform
@@ -405,10 +424,13 @@ class CollagePanel(QWidget):
                 choice.set_value(layout.canvas)
         self.split_choice.set_value(layout.split)
         self.count_choice.set_value(_count_value(layout.count))
+        # A grid is always four: the count shows it but cannot be changed.
+        for widget in self._count_row:
+            widget.setEnabled(not grid)
         self.fit_choice.set_value(layout.fit)
         self.gap_slider.set_value(float(layout.gap))
         self.background_choice.set_value(layout.background)
-        if layout.count == collage.COUNT_MIN:
+        if not grid and layout.count == collage.COUNT_MIN:
             self.seam_slider.set_value(layout.seams[0] * _PERCENT)
         self.linked_switch.blockSignals(True)
         self.linked_switch.setChecked(layout.linked)
@@ -444,7 +466,8 @@ class CollagePanel(QWidget):
         if not linked and self.aligning_switch.isChecked():
             self.aligning_switch.setChecked(False)
         count = self._layout.count
-        self.seam_slider.setVisible(count == collage.COUNT_MIN)
+        grid = self._layout.split == collage.SPLIT_GRID
+        self.seam_slider.setVisible(not grid and count == collage.COUNT_MIN)
         # Linked, one zoom moves every photo.
         for slot, slider in enumerate(self.zoom_sliders):
             slider.setVisible(slot == 0 or (not linked and slot < count))

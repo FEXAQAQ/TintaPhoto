@@ -940,6 +940,13 @@ QPushButton[role="choice"]:disabled {{
     border-color: {BORDER};
 }}
 
+/* A choice that is fixed, such as a grid's count: still shown as the one
+   chosen, but grey like every disabled control and without the accent. */
+QPushButton[role="choice"]:checked:disabled {{
+    color: {TEXT_SECONDARY};
+    border-color: {TEXT_TERTIARY};
+}}
+
 /* A row of the looks tab: the photo as it would leave it on the left, the name
    after it, both read from the left edge (PLAN.md 3.1). The thumbnail is the
    button's icon, so it takes the button's states with it. */

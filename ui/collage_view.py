@@ -8,8 +8,9 @@ the filmstrip or from Explorer.
 
 Over a photo, dragging moves it, the wheel zooms it about the pointer (Shift
 for a finer step) and a double click puts it back to its fit. Linked, all
-photos move together. Each seam between two pieces can be dragged, and a
-double click on one makes the pieces even again.
+photos move together. Each seam between two pieces can be dragged - in a
+grid, the one down the canvas and the one across it - and a double click on
+one makes the pieces even again.
 
 While a linked photo is being aligned, it is drawn half see-through over the
 first across the whole canvas, and dragging, the wheel and the arrow keys
@@ -18,7 +19,6 @@ move and scale it alone.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
@@ -157,10 +157,10 @@ class CollageCanvas(QWidget):
         return None
 
     def seam_position(self, index: int = 0) -> float:
-        """Return where seam *index* is drawn, in widget pixels along the split."""
+        """Return where seam *index* is drawn, in widget pixels across it."""
         layout = self._collage.layout
         scale, origin = self._scale_and_origin()
-        start = origin.x() if layout.split == collage.SPLIT_SIDE_BY_SIDE else origin.y()
+        start = origin.x() if collage.seam_runs_down(layout, index) else origin.y()
         return start + collage.seam_at(layout, index) * scale
 
     def _seam_near(self, point: QPointF) -> int | None:
@@ -168,10 +168,10 @@ class CollageCanvas(QWidget):
         if not self.canvas_rect().contains(point) or self.aligning:
             return None
         layout = self._collage.layout
-        along = point.x() if layout.split == collage.SPLIT_SIDE_BY_SIDE else point.y()
         reach = theme.COLLAGE_SEAM_GRAB + layout.gap * self._scale_and_origin()[0] / 2
         distances = [
-            (abs(along - self.seam_position(index)), index) for index in range(len(layout.seams))
+            (abs(_across(layout, index, point) - self.seam_position(index)), index)
+            for index in range(len(layout.seams))
         ]
         distance, index = min(distances)
         return index if distance <= reach else None
@@ -241,7 +241,7 @@ class CollageCanvas(QWidget):
         pen.setWidth(theme.BORDER_WIDTH)
         painter.setPen(pen)
         at = self.seam_position(index)
-        if self._collage.layout.split == collage.SPLIT_SIDE_BY_SIDE:
+        if collage.seam_runs_down(self._collage.layout, index):
             painter.drawLine(QPointF(at, canvas.top()), QPointF(at, canvas.bottom()))
         else:
             painter.drawLine(QPointF(canvas.left(), at), QPointF(canvas.right(), at))
@@ -354,7 +354,10 @@ class CollageCanvas(QWidget):
                 return
             canvas_x, canvas_y = self._to_canvas(point)
             width, height = layout.canvas_size
-            along = canvas_x / width if layout.split == collage.SPLIT_SIDE_BY_SIDE else canvas_y / height
+            if collage.seam_runs_down(layout, self._drag_seam):
+                along = canvas_x / width
+            else:
+                along = canvas_y / height
             self._collage.set_layout(collage.with_seam(layout, self._drag_seam, along))
             return
         if self._drag == _DRAG_ALIGN:
@@ -406,8 +409,7 @@ class CollageCanvas(QWidget):
             self._collage.set_alignment(UNALIGNED)
             return
         if self._seam_near(point) is not None:
-            layout = self._collage.layout
-            self._collage.set_layout(replace(layout, seams=collage.even_seams(layout.count)))
+            self._collage.set_layout(collage.even_layout(self._collage.layout))
             return
         slot = self.slot_at(point)
         if slot is not None and self._collage.photo_size(slot) is not None:
@@ -497,8 +499,9 @@ class CollageCanvas(QWidget):
         if self.aligning:
             self.setCursor(Qt.CursorShape.SizeAllCursor)
             return
-        if self._drag == _DRAG_SEAM or (self._drag is None and self._hover_seam is not None):
-            vertical = self._collage.layout.split == collage.SPLIT_SIDE_BY_SIDE
+        seam = self._drag_seam if self._drag == _DRAG_SEAM else self._hover_seam
+        if seam is not None and self._drag in (None, _DRAG_SEAM):
+            vertical = collage.seam_runs_down(self._collage.layout, seam)
             self.setCursor(Qt.CursorShape.SplitHCursor if vertical else Qt.CursorShape.SplitVCursor)
             return
         if self._drag == _DRAG_PAN and self._dragged:
@@ -570,6 +573,11 @@ def dropped_photos(event) -> list[Path]:
             if decoder.is_supported(path):
                 photos.append(path)
     return photos
+
+
+def _across(layout: collage.Layout, index: int, point: QPointF) -> float:
+    """Return where *point* lies across seam *index*: x for one that runs down."""
+    return point.x() if collage.seam_runs_down(layout, index) else point.y()
 
 
 def _to_pixmap(image: NDArray[np.uint8]) -> QPixmap:

@@ -778,3 +778,73 @@ def test_settings_from_before_keep_their_canvas_and_seam(orientation: str, canva
     assert layout.canvas == canvas
     assert layout.count == 2
     assert layout.seams == pytest.approx((0.4,))
+
+
+# -- the grid, two by two (PLAN.md 2.8 K-02, 2026-11-11) ----------------------
+
+
+def test_a_grid_fixes_the_count_at_four_and_leaving_it_brings_the_count_back(
+    window: MainWindow,
+) -> None:
+    window.enter_collage()
+    panel = window.collage_panel
+    panel.count_choice.buttons()["3"].click()
+    panel.split_choice.buttons()[collage.SPLIT_GRID].click()
+    layout = window.collage.layout
+    assert layout.split == collage.SPLIT_GRID and layout.count == 4
+    assert layout.seams == (0.5, 0.5)
+    assert panel.count_choice.value == "4"
+    assert not panel.count_choice.isEnabled()
+    assert not panel._count_row[0].isEnabled()
+    assert not panel.seam_slider.isVisibleTo(panel)
+    assert all(panel._row_labels[slot].isVisibleTo(panel) for slot in range(4))
+    canvas = window.collage_canvas
+    top_left, bottom_right = canvas.cell_rect(0), canvas.cell_rect(3)
+    assert top_left.right() <= bottom_right.left() and top_left.bottom() <= bottom_right.top()
+    assert top_left.top() < bottom_right.top() and top_left.left() < bottom_right.left()
+    assert canvas.slot_at(canvas.cell_rect(2).center()) == 2
+
+    panel.split_choice.buttons()[collage.SPLIT_SIDE_BY_SIDE].click()
+    layout = window.collage.layout
+    assert layout.split == collage.SPLIT_SIDE_BY_SIDE and layout.count == 3
+    assert layout.seams == pytest.approx(collage.even_seams(3))
+    assert panel.count_choice.isEnabled() and panel._count_row[0].isEnabled()
+    assert panel.count_choice.value == "3"
+
+
+def test_both_seams_of_a_grid_drag_and_a_double_click_evens_them(
+    window: MainWindow, tmp_path: Path
+) -> None:
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtTest import QTest
+
+    window.enter_collage()
+    window.collage_panel.split_choice.buttons()[collage.SPLIT_GRID].click()
+    window.collage.fill(_four(tmp_path))
+    _wait(lambda: window.collage.complete)
+    canvas = window.collage_canvas
+    rect = canvas.canvas_rect()
+    # Each seam is taken hold of away from where the two cross.
+    down = QPointF(canvas.seam_position(0), rect.top() + rect.height() / 4).toPoint()
+    _drag(canvas, down, QPoint(round(rect.width() * 0.1), 0))
+    across = QPointF(rect.left() + rect.width() / 4, canvas.seam_position(1)).toPoint()
+    _drag(canvas, across, QPoint(0, -round(rect.height() * 0.2)))
+    seams = window.collage.layout.seams
+    assert seams[0] == pytest.approx(0.6, abs=0.01)
+    assert seams[1] == pytest.approx(0.3, abs=0.01)
+    # Dragged far, a seam stops at the edge of its range.
+    down = QPointF(canvas.seam_position(0), rect.top() + rect.height() / 4).toPoint()
+    _drag(canvas, down, QPoint(round(rect.width()), 0))
+    assert window.collage.layout.seams[0] == pytest.approx(collage.SEAM_MAX)
+    across = QPointF(rect.left() + rect.width() / 4, canvas.seam_position(1)).toPoint()
+    QTest.mouseDClick(canvas, Qt.MouseButton.LeftButton, pos=across)
+    assert window.collage.layout.seams == (0.5, 0.5)
+
+
+def test_a_grid_and_its_seams_are_remembered() -> None:
+    layout = Layout(split=collage.SPLIT_GRID, seams=(0.3, 0.7), count=2)
+    stored = CollageSettings()
+    stored.remember(layout)
+    again = CollageSettings.from_dict(stored.to_dict())
+    assert again.layout == layout.sane()
+    assert again.layout.count == 4

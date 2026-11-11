@@ -660,3 +660,102 @@ def test_every_canvas_splits_into_every_count(canvas: str, split: str, count: in
     width, height = layout.canvas_size
     assert result.shape == (height, width, 3)
     assert all(cell.width > 0 and cell.height > 0 for cell in collage.cells(layout))
+
+
+# -- the grid, two by two (PLAN.md 2.8 K-02, 2026-11-11) ----------------------
+
+GRID = collage.SPLIT_GRID
+
+
+@pytest.mark.parametrize("count", [2, 3, 4, 7])
+def test_a_grid_is_always_four_pieces(count: int) -> None:
+    layout = Layout(split=GRID, count=count).sane()
+    assert layout.count == collage.GRID_COUNT
+    assert layout.seams == (collage.SEAM_DEFAULT, collage.SEAM_DEFAULT)
+    assert len(collage.cells(layout)) == 4
+
+
+def test_a_grid_is_read_like_a_page() -> None:
+    top_left, top_right, bottom_left, bottom_right = collage.cells(Layout(split=GRID))
+    assert top_left == Cell(0, 0, 960, 540)
+    assert top_right == Cell(960, 0, 960, 540)
+    assert bottom_left == Cell(0, 540, 960, 540)
+    assert bottom_right == Cell(960, 540, 960, 540)
+
+
+@pytest.mark.parametrize("gap", [0, 1, 7, 20])
+@pytest.mark.parametrize("canvas", collage.CANVASES)
+def test_the_grid_s_gap_comes_out_of_its_pieces_both_ways(canvas: str, gap: int) -> None:
+    platform = next(p for p, shown in collage.PLATFORM_CANVASES.items() if canvas in shown)
+    layout = Layout(platform=platform, canvas=canvas, split=GRID, gap=gap)
+    width, height = layout.canvas_size
+    a, b, c, d = collage.cells(layout)
+    assert a.x == 0 and a.y == 0
+    assert b.x - (a.x + a.width) == gap and c.y - (a.y + a.height) == gap
+    assert b.x + b.width == width and c.y + c.height == height
+    assert (a.width, a.height) == (c.width, b.height)
+    assert (b.width, c.height) == (d.width, d.height)
+    # An odd gap gives its spare pixel to the right and the lower pieces.
+    assert b.width - a.width in (0, 1) and c.height - a.height in (0, 1)
+
+
+def test_the_grid_s_seams_move_on_their_own_and_stay_in_range() -> None:
+    layout = collage.with_seam(Layout(split=GRID), 0, 0.3)
+    assert layout.seams == (pytest.approx(0.3), collage.SEAM_DEFAULT)
+    layout = collage.with_seam(layout, 1, 0.95)
+    assert layout.seams == (pytest.approx(0.3), collage.SEAM_MAX)
+    assert collage.seam_range(layout, 0) == (collage.SEAM_MIN, collage.SEAM_MAX)
+    a, b, c, _d = collage.cells(layout)
+    assert a.width == 576 and c.width == 576
+    assert collage.seam_at(layout, 0) == 576.0
+    assert collage.seam_at(layout, 1) == 864.0
+    assert collage.even_layout(layout).seams == (0.5, 0.5)
+
+
+def test_unusable_grid_seams_are_even() -> None:
+    for seams in ((0.5,), (0.3, 0.4, 0.5), (float("nan"), 0.5), "no"):
+        assert Layout(split=GRID, seams=seams).sane().seams == (0.5, 0.5)
+
+
+def test_which_way_each_seam_runs() -> None:
+    assert collage.seam_runs_down(Layout(split=GRID), 0)
+    assert not collage.seam_runs_down(Layout(split=GRID), 1)
+    assert collage.seam_runs_down(Layout(split=SIDE, count=3), 1)
+    assert not collage.seam_runs_down(Layout(split=STACKED), 0)
+
+
+def test_four_photos_land_in_the_four_corners_of_a_grid() -> None:
+    layout = Layout(split=GRID, gap=10, background=collage.BACKGROUND_BLACK)
+    colours = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255)]
+    result = collage.render(layout, [_solid(c) for c in colours], [Placement()] * 4)
+    for cell, colour in zip(collage.cells(layout), colours):
+        x, y = cell.centre
+        assert tuple(result[int(y), int(x)]) == colour
+    assert tuple(result[540, 960]) == (0, 0, 0)
+
+
+def test_the_grid_is_cut_into_its_four_pieces() -> None:
+    layout = Layout(split=GRID, gap=8, seams=(0.4, 0.6))
+    width, height = layout.canvas_size
+    canvas = np.random.default_rng(3).integers(0, 256, (height, width, 3), dtype=np.uint8)
+    cut = collage.pieces(layout, canvas)
+    assert len(cut) == 4
+    for piece, cell in zip(cut, collage.cells(layout)):
+        assert np.array_equal(
+            piece, canvas[cell.y : cell.y + cell.height, cell.x : cell.x + cell.width]
+        )
+
+
+def test_aligning_four_linked_photos_in_a_grid_never_leaves_a_bare_strip() -> None:
+    layout = Layout(split=GRID, linked=True)
+    size = (2000, 1333)
+    alignments = [
+        collage.UNALIGNED,
+        collage.Alignment(shift_x=0.03, scale=0.96),
+        collage.Alignment(shift_y=0.03),
+        collage.Alignment(shift_x=-0.02, shift_y=-0.02, scale=0.97),
+    ]
+    placement = collage.linked_placement(layout, Placement(), [size] * 4, alignments)
+    for slot, cell in enumerate(collage.cells(layout)):
+        rect = collage.placed_rect(layout, slot, size, placement, alignments[slot])
+        assert _covers(rect, cell)

@@ -1,9 +1,10 @@
-"""Two to four photos side by side or one above the other (PLAN.md 2.8, 3.13).
+"""Two to four photos side by side, one above the other, or four in a grid
+(PLAN.md 2.8, 3.13).
 
 A collage is a fixed canvas - one of the sizes the social platforms show
 best, from 1080 x 1920 standing up to 1080 x 566 lying down - split across or
-down into two
-to four pieces, with one photo in each piece. The gaps between the pieces are
+down into two to four pieces, or across and down into four, with one photo in
+each piece. The gaps between the pieces are
 taken out of the pieces, never added to the canvas, so the file always comes
 out at the size the platform wants.
 
@@ -74,10 +75,12 @@ PLATFORM_CANVASES: Final[dict[str, tuple[str, ...]]] = {
 PLATFORM_DEFAULT: Final[str] = PLATFORM_2
 CANVAS_DEFAULT: Final[str] = CANVAS_16X9
 
-#: Pieces left to right, or top to bottom.
+#: Pieces left to right, top to bottom, or two by two: a grid is read like
+#: a page, top left, top right, bottom left, bottom right.
 SPLIT_SIDE_BY_SIDE: Final[str] = "side_by_side"
 SPLIT_STACKED: Final[str] = "stacked"
-SPLITS: Final[tuple[str, ...]] = (SPLIT_SIDE_BY_SIDE, SPLIT_STACKED)
+SPLIT_GRID: Final[str] = "grid"
+SPLITS: Final[tuple[str, ...]] = (SPLIT_SIDE_BY_SIDE, SPLIT_STACKED, SPLIT_GRID)
 
 #: Fill the piece and lose the edges, or show the whole photo and leave a
 #: border of the background colour.
@@ -101,6 +104,8 @@ BACKGROUND_SRGB8: Final[dict[str, tuple[int, int, int]]] = {
 COUNT_MIN: Final[int] = 2
 COUNT_MAX: Final[int] = 4
 COUNTS: Final[tuple[int, ...]] = tuple(range(COUNT_MIN, COUNT_MAX + 1))
+#: A grid is always two by two; its count cannot be chosen.
+GRID_COUNT: Final[int] = 4
 
 #: The gap between each two pieces, in pixels of the canvas.
 GAP_MIN: Final[int] = 0
@@ -113,7 +118,9 @@ ZOOM_MAX: Final[float] = 4.0
 #: Where two pieces meet, as a fraction of the canvas along the split. The
 #: pieces are even unless a seam is moved, and never so narrow that one all
 #: but goes: two pieces keep the seam between 20 and 80 percent, three or
-#: four keep every piece at least a tenth of the canvas.
+#: four keep every piece at least a tenth of the canvas. A grid has two
+#: seams, the one down the canvas and the one across it, in that order, and
+#: each keeps between 20 and 80 percent like the seam of two pieces.
 SEAM_DEFAULT: Final[float] = 0.5
 SEAM_MIN: Final[float] = 0.2
 SEAM_MAX: Final[float] = 0.8
@@ -163,15 +170,18 @@ class Layout:
     #: All photos laid over the whole canvas with one placement, each piece
     #: showing its own part of the same scene.
     linked: bool = False
-    #: How many pieces the canvas is split into.
+    #: How many pieces the canvas is split into; a grid is always four.
     count: int = COUNT_MIN
-    #: Where each two pieces meet, one fewer than the pieces, in order; any
-    #: other number of them means the pieces are even.
+    #: Where each two pieces meet, one fewer than the pieces, in order - in
+    #: a grid, the seam down the canvas and then the one across; any other
+    #: number of them means the pieces are even.
     seams: tuple[float, ...] = (SEAM_DEFAULT,)
 
     def sane(self) -> "Layout":
         """Return this layout with every value one that can be drawn."""
-        count = _sane_count(self.count)
+        split = _one_of(self.split, SPLITS)
+        grid = split == SPLIT_GRID
+        count = GRID_COUNT if grid else _sane_count(self.count)
         platform = self.platform if self.platform in PLATFORMS else PLATFORM_DEFAULT
         canvases = PLATFORM_CANVASES[platform]
         if self.canvas in canvases:
@@ -182,13 +192,13 @@ class Layout:
         return Layout(
             platform=platform,
             canvas=canvas,
-            split=_one_of(self.split, SPLITS),
+            split=split,
             fit=_one_of(self.fit, FITS),
             gap=int(min(GAP_MAX, max(GAP_MIN, int(self.gap)))),
             background=_one_of(self.background, BACKGROUNDS),
             linked=bool(self.linked),
             count=count,
-            seams=_sane_seams(self.seams, count),
+            seams=_sane_grid_seams(self.seams) if grid else _sane_seams(self.seams, count),
         )
 
     @property
@@ -222,9 +232,25 @@ def even_seams(count: int) -> tuple[float, ...]:
     return tuple((index + 1) / count for index in range(count - 1))
 
 
+def even_layout(layout: Layout) -> Layout:
+    """Return *layout* with every piece the same size again."""
+    return replace(layout.sane(), seams=()).sane()
+
+
+def seam_runs_down(layout: Layout, index: int) -> bool:
+    """Return whether seam *index* runs from top to bottom, between pieces side by side."""
+    layout = layout.sane()
+    if layout.split == SPLIT_GRID:
+        return index == 0
+    return layout.split == SPLIT_SIDE_BY_SIDE
+
+
 def seam_range(layout: Layout, index: int) -> tuple[float, float]:
     """Return how far seam *index* can move without squeezing a piece too far."""
     layout = layout.sane()
+    if layout.split == SPLIT_GRID:
+        # The two seams of a grid cross; neither stops the other.
+        return SEAM_MIN, SEAM_MAX
     least = PIECE_MIN[layout.count]
     seams = layout.seams
     low = (seams[index - 1] if index > 0 else 0.0) + least
@@ -271,6 +297,18 @@ def _sane_seams(seams: Any, count: int) -> tuple[float, ...]:
         high = 1.0 - (count - 1 - index) * least
         kept.append(min(high, max(low, value)))
     return tuple(kept)
+
+
+def _sane_grid_seams(seams: Any) -> tuple[float, float]:
+    """Return a grid's two seams in range, or even ones if they are unusable."""
+    try:
+        values = [float(seam) for seam in seams]
+    except (TypeError, ValueError):
+        values = []
+    if len(values) != 2 or not all(math.isfinite(value) for value in values):
+        return SEAM_DEFAULT, SEAM_DEFAULT
+    down, across = (min(SEAM_MAX, max(SEAM_MIN, value)) for value in values)
+    return down, across
 
 
 @dataclass(frozen=True)
@@ -327,37 +365,59 @@ class Alignment:
 UNALIGNED: Final[Alignment] = Alignment()
 
 
-def cells(layout: Layout) -> tuple[Cell, ...]:
-    """Return the pieces of the canvas, first left or top.
+def _spans(length: int, seams: Sequence[float], gap: int) -> list[tuple[int, int]]:
+    """Return where each piece along *length* starts and how long it is.
 
     Each two meet at a seam, and the gap is taken out of them either side of
     it. When the gap is odd the later piece gets the pixel left over, which
     is the only way to keep the canvas its size.
     """
-    layout = layout.sane()
-    width, height = layout.canvas_size
-    gap = layout.gap
-    length = width if layout.split == SPLIT_SIDE_BY_SIDE else height
     spans: list[tuple[int, int]] = []
     start = 0
-    for index, seam in enumerate(layout.seams):
-        later = layout.count - 1 - index
+    for index, seam in enumerate(seams):
+        later = len(seams) - index
         end = math.floor(length * seam - gap / 2.0)
         end = max(start + 1, min(length - later * (gap + 1), end))
         spans.append((start, end - start))
         start = end + gap
     spans.append((start, length - start))
+    return spans
+
+
+def cells(layout: Layout) -> tuple[Cell, ...]:
+    """Return the pieces of the canvas, first left or top.
+
+    A grid's are read like a page: top left, top right, bottom left, bottom
+    right, with the same gap down the canvas and across it.
+    """
+    layout = layout.sane()
+    width, height = layout.canvas_size
+    gap = layout.gap
+    if layout.split == SPLIT_GRID:
+        down, across = layout.seams
+        columns = _spans(width, (down,), gap)
+        rows = _spans(height, (across,), gap)
+        return tuple(
+            Cell(x, y, cell_w, cell_h) for y, cell_h in rows for x, cell_w in columns
+        )
     if layout.split == SPLIT_SIDE_BY_SIDE:
-        return tuple(Cell(at, 0, size, height) for at, size in spans)
-    return tuple(Cell(0, at, width, size) for at, size in spans)
+        return tuple(Cell(at, 0, size, height) for at, size in _spans(width, layout.seams, gap))
+    return tuple(Cell(0, at, width, size) for at, size in _spans(height, layout.seams, gap))
 
 
 def seam_at(layout: Layout, index: int) -> float:
-    """Return the middle of the gap at seam *index*, in canvas pixels along the split."""
+    """Return the middle of the gap at seam *index*, in canvas pixels across it.
+
+    Along x for a seam that runs down the canvas, along y for one across it.
+    """
     layout = layout.sane()
     pieces = cells(layout)
-    before, after = pieces[index], pieces[index + 1]
-    if layout.split == SPLIT_SIDE_BY_SIDE:
+    if layout.split == SPLIT_GRID:
+        # Down: between top left and top right; across: top left and bottom left.
+        before, after = pieces[0], pieces[1 if index == 0 else 2]
+    else:
+        before, after = pieces[index], pieces[index + 1]
+    if seam_runs_down(layout, index):
         return (before.x + before.width + after.x) / 2.0
     return (before.y + before.height + after.y) / 2.0
 
@@ -770,7 +830,7 @@ def render_slot(
 
 
 def pieces(layout: Layout, canvas: NDArray[Any]) -> tuple[NDArray[Any], ...]:
-    """Return each piece cut out of the finished *canvas*, first left or top.
+    """Return each piece cut out of the finished *canvas*, in the order of :func:`cells`.
 
     The single photos of a carousel (PLAN.md 2.8 K-13) are the collage cut
     apart at its seams: every pixel is the collage's own, so the pieces put
