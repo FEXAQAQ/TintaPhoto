@@ -619,6 +619,7 @@ class MainWindow(QMainWindow):
             self.watermark_panel.set_state(
                 dialog.watermark_enabled, self._settings.watermark.spec
             )
+            self._draw_watermark()
 
     def _on_export_options(self, options: object) -> None:
         """Tell the dialog what its settings would come to (PLAN.md 3.11)."""
@@ -883,6 +884,7 @@ class MainWindow(QMainWindow):
         self.set_spot_tool(False)
         self.set_picking_white_balance(False)
         self._portrait_mode = True
+        self._draw_watermark()
         self.toolbar.portrait_button.setChecked(True)
         panel = self.portrait_panel
         panel.set_state(self.controller.state)
@@ -901,6 +903,7 @@ class MainWindow(QMainWindow):
         if not self._portrait_mode:
             return
         self._portrait_mode = False
+        self._draw_watermark()
         self.portrait_panel.set_brush(None)
         canvas = self.preview.canvas
         canvas.skin.set_open(False)
@@ -1000,6 +1003,7 @@ class MainWindow(QMainWindow):
         self.set_spot_tool(False)
         self.set_picking_white_balance(False)
         self._liquify_mode = True
+        self._draw_watermark()
         self.toolbar.liquify_button.setChecked(True)
         panel = self.liquify_panel
         panel.set_strokes(len(self.controller.liquify_strokes))
@@ -1022,6 +1026,7 @@ class MainWindow(QMainWindow):
             return
         self.set_editing_faces(False)
         self._liquify_mode = False
+        self._draw_watermark()
         self._face_hovered = ""
         self._face_dragged = ""
         self._clear_spotlight()
@@ -1245,7 +1250,7 @@ class MainWindow(QMainWindow):
         self._watermark_mode = False
         canvas = self.preview.canvas
         canvas.watermark.set_active(False)
-        canvas.update()
+        self._draw_watermark()
         self.toolbar.watermark_button.setChecked(False)
         self.preview.view_bar.compare_button.setEnabled(True)
         self.watermark_panel.hide()
@@ -1262,11 +1267,37 @@ class MainWindow(QMainWindow):
         """Return whether the watermark is being placed."""
         return self._watermark_mode
 
+    def _watermark_shown(self) -> bool:
+        """Return whether the watermark goes over the photo on screen.
+
+        While it is placed, always; while the photo is edited, when exports
+        carry it - except while cropping, where the photo on screen is not
+        the photo exported, and in the portrait and liquify modes, whose
+        brushes it would cover (W-13).
+        """
+        if self._watermark_mode:
+            return True
+        return (
+            self._settings.watermark.active is not None
+            and not self.controller.cropping
+            and not self._portrait_mode
+            and not self._liquify_mode
+        )
+
     def _draw_watermark(self) -> None:
-        """Draw the watermark for the photo on screen, unless it already is."""
-        if not self._watermark_mode:
-            return
+        """Show or hide the watermark, and draw it for the photo on screen.
+
+        It is drawn apart from the photo and laid over it, so adjusting the
+        photo never touches it; only another text, style or shape of photo
+        draws it again.
+        """
         canvas = self.preview.canvas
+        shown = self._watermark_shown()
+        if shown != canvas.watermark.visible:
+            canvas.watermark.set_shown(shown)
+            canvas.update()
+        if not shown:
+            return
         spec = self._settings.watermark.spec
         frame = canvas.frame_size
         if self._watermark_drawn == (spec, frame):
@@ -1297,6 +1328,7 @@ class MainWindow(QMainWindow):
     def _on_watermark_enabled(self, enabled: bool) -> None:
         """Remember whether exported photos carry the watermark (W-09)."""
         self._settings.watermark.enabled = enabled
+        self._draw_watermark()
 
     def _on_watermark_moved(self, spec: object, settled: bool) -> None:
         """Take on where the watermark was dragged; the picker follows."""
@@ -1820,6 +1852,7 @@ class MainWindow(QMainWindow):
         box.set_source(self.controller.photo_size)
         box.set_geometry(self.controller.geometry)
         box.set_active(cropping and has_photo)
+        self._draw_watermark()
         if not cropping:
             self.inspector.crop_tab.set_straightening(False)
             box.arm_straighten(False)

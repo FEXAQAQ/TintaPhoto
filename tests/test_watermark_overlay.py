@@ -41,6 +41,20 @@ def test_nothing_is_drawn_while_it_is_not_being_placed(overlay: WatermarkOverlay
     assert not overlay.press(QPointF(600, 410), PHOTO)
 
 
+def test_shown_while_editing_it_is_drawn_but_cannot_be_handled(
+    overlay: WatermarkOverlay,
+) -> None:
+    overlay.set_active(False)
+    overlay.set_shown(True)
+    assert overlay.visible
+    assert overlay.screen_rect(PHOTO) == QRectF(550, 400, 100, 20)
+    # A click on it is left for the tool in hand (W-13).
+    assert not overlay.over(QPointF(600, 410), PHOTO)
+    assert not overlay.press(QPointF(600, 410), PHOTO)
+    assert not overlay.double_click(QPointF(600, 410), PHOTO)
+    assert not overlay.move(QPointF(600, 410), PHOTO)
+
+
 def test_a_press_off_the_watermark_is_left_for_panning(overlay: WatermarkOverlay) -> None:
     assert not overlay.press(QPointF(100, 100), PHOTO)
     assert not overlay.dragging

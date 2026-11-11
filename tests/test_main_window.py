@@ -2286,6 +2286,47 @@ def test_typing_the_first_text_turns_the_watermark_on(
     assert not overlay.screen_rect(window.preview.canvas.photo_rect()).isEmpty()
 
 
+def test_the_watermark_stays_on_the_photo_after_done(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    from core.edit_state import EditState
+    from core.watermark import WatermarkSpec
+
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    canvas = window.preview.canvas
+    overlay = canvas.watermark
+    window.enter_watermark()
+    window.watermark_panel.spec_changed.emit(WatermarkSpec(text="© me"))
+    window.leave_watermark()
+    # Shown while editing, but not to be dragged (W-13).
+    assert overlay.visible and not overlay.active
+    picture = overlay._image
+    assert not overlay.screen_rect(canvas.photo_rect()).isEmpty()
+
+    # Adjusting the photo does not draw the watermark again.
+    window.controller.set_adjustments(EditState(exposure=1.0))
+    _wait_for_photo(window, qt_app)
+    qt_app.processEvents()  # type: ignore[attr-defined]
+    assert overlay.visible and overlay._image is picture
+
+    # Hidden while cropping, and back afterwards.
+    window.inspector.set_current_tab(InspectorTab.CROP)
+    assert not overlay.visible
+    window.finish_crop()
+    assert overlay.visible
+
+    # Hidden in the portrait, back after it.
+    window.enter_portrait()
+    assert not overlay.visible
+    window.leave_portrait()
+    assert overlay.visible
+
+    # Switched off for exports, it is not shown either.
+    window._on_watermark_enabled(False)
+    assert not overlay.visible
+
+
 def test_the_collage_and_the_watermark_switch_straight_to_each_other(
     window: MainWindow, tmp_path: object, qt_app: object
 ) -> None:

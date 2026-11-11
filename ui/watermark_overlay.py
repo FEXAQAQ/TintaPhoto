@@ -1,4 +1,7 @@
-"""The watermark drawn over the photo while it is being placed (PLAN.md 3.14).
+"""The watermark drawn over the photo (PLAN.md 2.9 W-13, 3.14).
+
+While it is being placed it can be dragged; while the photo is edited it is
+only shown, so a click on it goes to whatever tool is in hand.
 
 Like the crop box and the spot brush this is not a widget: the canvas hands
 it its painter and its mouse events, in the canvas's own coordinates, with
@@ -33,6 +36,8 @@ class WatermarkOverlay(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._active = False
+        #: Shown, but not to be handled: the photo is being edited (W-13).
+        self._shown = False
         self._spec = WatermarkSpec()
         self._image: QImage | None = None
         #: Pixels of the picture per pixel of the full size frame.
@@ -51,6 +56,11 @@ class WatermarkOverlay(QObject):
         return self._active
 
     @property
+    def visible(self) -> bool:
+        """Return whether the watermark is drawn over the photo."""
+        return self._active or self._shown
+
+    @property
     def dragging(self) -> bool:
         """Return whether the watermark is held."""
         return self._grab is not None
@@ -65,6 +75,10 @@ class WatermarkOverlay(QObject):
         self._active = active
         self._grab = None
         self._hovered = False
+
+    def set_shown(self, shown: bool) -> None:
+        """Show the watermark over the photo without letting it be handled."""
+        self._shown = shown
 
     def set_frame(self, frame: tuple[int, int]) -> None:
         """Take the size of the photo on screen, at full resolution."""
@@ -101,7 +115,7 @@ class WatermarkOverlay(QObject):
 
     def screen_rect(self, photo: QRectF) -> QRectF:
         """Return where the watermark is drawn on screen, or an empty rectangle."""
-        if not self._active or self._image is None or self._frame[0] <= 0 or photo.isEmpty():
+        if not self.visible or self._image is None or self._frame[0] <= 0 or photo.isEmpty():
             return QRectF()
         box = self._box()
         x, y = watermark.layout(self._spec, self._frame, box)
@@ -111,8 +125,8 @@ class WatermarkOverlay(QObject):
         )
 
     def over(self, point: QPointF, photo: QRectF) -> bool:
-        """Return whether *point* is on the watermark."""
-        return self.screen_rect(photo).contains(point)
+        """Return whether *point* is on the watermark, while it can be handled."""
+        return self._active and self.screen_rect(photo).contains(point)
 
     # -- drawing ---------------------------------------------------------
 
@@ -127,7 +141,7 @@ class WatermarkOverlay(QObject):
             self._paint_guides(painter, photo, rect)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.drawImage(rect, self._image)
-        if self._hovered or self.dragging:
+        if self._active and (self._hovered or self.dragging):
             gap = theme.WATERMARK_OUTLINE_GAP
             painter.setPen(
                 QPen(QColor(theme.TEXT_TERTIARY), theme.WATERMARK_OUTLINE_WIDTH, Qt.PenStyle.DashLine)
