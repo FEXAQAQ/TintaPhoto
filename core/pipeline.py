@@ -174,6 +174,39 @@ VIGNETTE_MAX_EV: Final[float] = 2.0
 #: because a transition has to have somewhere to happen.
 VIGNETTE_MIDPOINT_LIMIT: Final[float] = 0.99
 
+# -- black mist (PLAN.md section 6 step 6.5) ------------------------------
+#: A diffusion filter in front of the lens spreads a share of the light that
+#: reaches it into a wide, soft glow around where it came from. The share is
+#: what the slider sets: at 100 this much of the light of a highlight is
+#: spread, and the rest stays sharp where it was. Starting values, chosen by
+#: eye rather than measured from a filter (PLAN.md 12).
+MIST_SCATTER_MAX: Final[float] = 0.5
+#: How wide the glow is, as Gaussians in fractions of the long edge, and how
+#: much of the spread light each carries. A real filter's spread is sharp at
+#: the middle with a long tail; three Gaussians draw that closely enough.
+MIST_SIGMAS: Final[tuple[float, ...]] = (0.003, 0.012, 0.04)
+MIST_WEIGHTS: Final[tuple[float, ...]] = (0.35, 0.35, 0.3)
+#: Mostly the highlights glow. Below the knee only this share of the light is
+#: spread, which is what keeps the blacks of a black mist deep while the
+#: midtones still lose a little of their contrast.
+MIST_VEIL_SHARE: Final[float] = 0.15
+#: Where the knee starts and where all of the share is spread, in stops
+#: above the scene's middle grey, judged before the exposure slider - which
+#: is the camera's exposure and does not change what the filter does.
+MIST_KNEE_FROM_EV: Final[float] = 0.5
+MIST_KNEE_TO_EV: Final[float] = 3.0
+#: A JPEG has its brightest light cut off at white, two and a half stops
+#: above middle grey where a RAW still holds almost five, so a lamp would
+#: hardly glow. Only for the light that is spread, what is that close to
+#: white is taken as this many stops brighter than it reads.
+MIST_JPEG_RECOVERED_EV: Final[float] = 2.0
+#: From how bright the brightest channel of a JPEG pixel (linear) begins to
+#: be taken as cut off.
+MIST_JPEG_CLIPPED_FROM: Final[float] = 0.8
+#: The glow carries nothing finer than its narrowest Gaussian, so it is
+#: worked out on a copy of about this long edge and sampled back.
+MIST_FIELD_LONG_EDGE: Final[int] = 1024
+
 # -- film grain (PLAN.md section 6 step 11.5) -----------------------------
 #: Measured on 2026-10-30 from a camera's own JPEGs, shot one after another
 #: with its grain off, weak and strong (small grains, ISO 2500), by taking the
@@ -1475,6 +1508,202 @@ def camera_to_working_space(
 
 
 # --------------------------------------------------------------------------
+# Step 6.5: black mist
+# --------------------------------------------------------------------------
+#
+# A diffusion filter acts on the light before it reaches the sensor, so the
+# step works in linear light, before any tone step. Spreading light is
+# linear, so the camera's exposure scales the glow with the photo: the field
+# is worked out without the exposure slider and scaled by it in each band,
+# which is what lets that slider move without the field being worked out
+# again. The glow reaches far and carries nothing fine, so it is worked out
+# once over the whole frame on a small copy - like step 7's local
+# brightness - and every band, or window, samples its part of it.
+
+
+@dataclass(frozen=True)
+class MistField:
+    """The light the mist spreads, over a whole frame, at a small size.
+
+    *glow* is the spread light at the camera's exposure of zero. *factor* is
+    how many pixels of the frame it was made from one pixel of it covers, and
+    *frame* the width and height of that frame, which is what lets a window
+    of the same frame at another resolution - the full size photo behind a
+    zoomed in preview - find its part of it.
+    """
+
+    glow: NDArray[np.float32]
+    factor: int
+    frame: tuple[int, int]
+
+
+def has_mist(state: EditState) -> bool:
+    """Return whether the black mist asks for anything (A-33)."""
+    return state.mist > 0.0
+
+
+def mist_key(state: EditState) -> tuple[float, float, bool]:
+    """Return everything :func:`mist_field` depends on in *state*.
+
+    The white balance comes before the step and changes the light spread;
+    the exposure does not (see above), nor the mist's own amount, so a kept
+    field survives both sliders.
+    """
+    return (state.temperature, state.tint, has_mist(state))
+
+
+def _smoothstep(values: NDArray[np.float32]) -> NDArray[np.float32]:
+    """Return a step from 0 to 1 over 0 to 1 whose ends are flat."""
+    t = np.clip(values, np.float32(0.0), np.float32(1.0))
+    return (t * t * (np.float32(3.0) - np.float32(2.0) * t)).astype(np.float32)
+
+
+def mist_share(
+    image: NDArray[np.float32], is_raw: bool, recovered: bool = False
+) -> NDArray[np.float32]:
+    """Return how much of each pixel's light the mist spreads, per unit of amount.
+
+    *image* is linear light in the working space before the exposure slider.
+    The share climbs from :data:`MIST_VEIL_SHARE` to all of it across the
+    knee. With *recovered* a JPEG's nearly white light is taken as brighter
+    than it reads (:data:`MIST_JPEG_RECOVERED_EV`), which is only ever done to
+    the light spread and never to the photo itself.
+    """
+    middle = TONE_MID_INPUT / 2.0**RAW_BASE_EXPOSURE_EV if is_raw else TONE_MID_INPUT
+    stops = np.log2(
+        np.maximum(_luminance(image), np.float32(_EPSILON)) / np.float32(middle)
+    )
+    knee = _smoothstep(
+        (stops - np.float32(MIST_KNEE_FROM_EV))
+        / np.float32(MIST_KNEE_TO_EV - MIST_KNEE_FROM_EV)
+    )
+    share = np.float32(MIST_VEIL_SHARE) + np.float32(1.0 - MIST_VEIL_SHARE) * knee
+    if recovered and not is_raw:
+        cut = _smoothstep(
+            (cm.channel_max(image) - np.float32(MIST_JPEG_CLIPPED_FROM))
+            / np.float32(1.0 - MIST_JPEG_CLIPPED_FROM)
+        )
+        share = share * np.exp2(np.float32(MIST_JPEG_RECOVERED_EV) * cut)
+    return share.astype(np.float32)
+
+
+def _shrink_by(values: NDArray[np.float32], factor: int) -> NDArray[np.float32]:
+    """Return the average of every *factor* by *factor* block of *values*.
+
+    A partial block at the right or the bottom edge is filled out with its
+    last pixels. Averaging keeps all the light, so a lamp a pixel wide still
+    glows as brightly as it would at full size.
+    """
+    if factor == 1:
+        return values
+    height, width = values.shape[:2]
+    tall = -(-height // factor) * factor
+    wide = -(-width // factor) * factor
+    if (tall, wide) != (height, width):
+        values = np.pad(
+            values, ((0, tall - height), (0, wide - width), (0, 0)), mode="edge"
+        )
+    # Shrinking by a whole factor, the area resampling is the block average.
+    return cv2.resize(
+        values, (wide // factor, tall // factor), interpolation=cv2.INTER_AREA
+    )
+
+
+def mist_field(photo: DecodedPhoto, state: EditState) -> MistField | None:
+    """Return the light the black mist spreads over the whole of *photo*.
+
+    *photo* is the whole frame at whatever resolution is at hand; the glow
+    is no finer than a few thousandths of the long edge, so the proxy says
+    what the full size photo would. The light is weighed at the photo's own
+    resolution, so that a small lamp is not averaged away before it is known
+    to be bright, and only then shrunk. ``None`` comes back when the slider
+    is at zero.
+    """
+    if not has_mist(state):
+        return None
+    if photo.is_raw and photo.camera_to_xyz is None:
+        raise ValueError("a RAW photo must carry a camera colour matrix")
+    width, height = photo.size
+    long_edge = max(width, height)
+    factor = max(1, -(-long_edge // MIST_FIELD_LONG_EDGE))
+    weight = clipped_weight(photo.clipped, long_edge) if photo.is_raw else None
+    to_working_space = _working_space_step(photo, replace(state, exposure=0.0))
+    image = photo.image
+    rows = band_rows(image.itemsize * int(np.prod(image.shape[1:], dtype=np.int64)))
+    rows = max(1, rows // factor) * factor
+
+    def shrunk(start: int) -> NDArray[np.float32]:
+        """Weigh the light of one band and shrink it."""
+        stop = min(height, start + rows)
+        part = to_working_space(
+            np.ascontiguousarray(image[start:stop]),
+            None if weight is None else np.ascontiguousarray(weight[start:stop]),
+        )
+        spread = part * mist_share(part, photo.is_raw, recovered=True)[..., None]
+        return _shrink_by(spread.astype(np.float32), factor)
+
+    small = np.concatenate(list(_band_pool().map(shrunk, range(0, height, rows))), axis=0)
+    glow = np.zeros_like(small)
+    for sigma, share in zip(MIST_SIGMAS, MIST_WEIGHTS):
+        glow += np.float32(share) * _wide_blur(small, max(0.5, sigma * long_edge / factor))
+    return MistField(glow=glow, factor=factor, frame=(width, height))
+
+
+def mist_axes(
+    field: MistField, pane: Window
+) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+    """Return where each row and each column of *pane* lies in *field*.
+
+    The pane's frame may be at another resolution than the frame the field
+    was made from, so both are measured as parts of the frame, by pixel
+    centres. Rows are cut into bands with the photo; columns are the same
+    for every band.
+    """
+    across = field.frame[0] / pane.frame[0] / field.factor
+    down = field.frame[1] / pane.frame[1] / field.factor
+    columns = (np.arange(pane.left, pane.right, dtype=np.float64) + 0.5) * across - 0.5
+    rows = (np.arange(pane.top, pane.bottom, dtype=np.float64) + 0.5) * down - 0.5
+    return rows.astype(np.float32), columns.astype(np.float32)
+
+
+def sample_mist(
+    field: MistField, rows: NDArray[np.float32], columns: NDArray[np.float32]
+) -> NDArray[np.float32]:
+    """Return the spread light at the given rows and columns of *field*."""
+    shape = (rows.size, columns.size)
+    map_x = np.ascontiguousarray(np.broadcast_to(columns[None, :], shape))
+    map_y = np.ascontiguousarray(np.broadcast_to(rows[:, None], shape))
+    return cv2.remap(
+        field.glow, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+    )
+
+
+def apply_mist(
+    image: NDArray[np.float32],
+    glow: NDArray[np.float32],
+    amount: float,
+    is_raw: bool,
+    stops: float,
+) -> NDArray[np.float32]:
+    """Spread a share of the light of *image* into the *glow* around it (step 6.5).
+
+    *image* is one band after the exposure slider of *stops*, and *glow*
+    the field sampled at the same pixels. What is spread leaves the pixel it
+    came from, so the light of the whole photo stays the same: a small
+    highlight gives up a little of itself to the halo around it, a wide one
+    gets back as much as it gives. The share is judged as the light was
+    before the exposure, and the glow is scaled by it as the photo is.
+    """
+    if amount <= 0.0:
+        return image
+    gain = np.float32(2.0**stops)
+    scene = image if stops == 0.0 else image / gain
+    spread = scene * mist_share(scene, is_raw)[..., None]
+    scatter = np.float32(MIST_SCATTER_MAX * amount / 100.0)
+    return (image + scatter * gain * (glow - spread)).astype(np.float32)
+
+
+# --------------------------------------------------------------------------
 # Steps 6 to 8: exposure, highlights and shadows, contrast
 # --------------------------------------------------------------------------
 
@@ -2694,12 +2923,13 @@ def develop(
     look: Look | None = None,
     grain: NDArray[np.float32] | None = None,
     body: NDArray[np.float32] | None = None,
+    mist: MistField | None = None,
 ) -> NDArray[Any]:
     """Turn a decoded photo into 8 bit sRGB, in the order of PLAN.md section 6.
 
     Steps 2.5 to 12, in the order the plan fixes and never another: noise
     reduction and sharpening, white balance, clipped highlights, colour
-    space, exposure, highlights and shadows, contrast, the base tone curve,
+    space, exposure, the black mist, highlights and shadows, contrast, the base tone curve,
     the black and white points, the vignette, the film filter, vibrance and
     saturation with the skin's tone, gamut compression, film grain, output;
     the skin is smoothed right after the detail step (2.6). The screen's own profile is
@@ -2735,6 +2965,12 @@ def develop(
     skin it holds is the skin joined to a face, which may lie outside the
     window - so a caller developing a window hands it over. Without it the
     field is worked out here from *photo*.
+
+    *mist* is :func:`mist_field` of the whole frame, at whatever resolution
+    it was worked out, for the black mist. Like *body*, a window cannot work
+    it out for itself - a lamp outside the window still glows into it - so a
+    caller developing a window hands it over. Without it the field is worked
+    out here from *photo*, as if *photo* were the whole frame.
     """
     if bits not in (EIGHT_BIT, SIXTEEN_BIT):
         raise ValueError(f"an output depth of {bits} bits is not supported")
@@ -2828,6 +3064,18 @@ def develop(
                 f"grain of {field.shape} was given for a photo of {photo.image.shape[:2]}"
             )
 
+    # The mist's field is worked out from the photo as it is by now, after
+    # the detail step and the skin, unless the caller kept one for the frame.
+    mist_rows: NDArray[np.float32] | None = None
+    mist_columns: NDArray[np.float32] | None = None
+    if has_mist(state):
+        mist_pane = pane
+        if mist is None:
+            mist = mist_field(photo, state)
+            mist_pane = Window.whole(photo.size)
+        assert mist is not None  # has_mist says there is one to make
+        mist_rows, mist_columns = mist_axes(mist, mist_pane)
+
     to_working_space = _working_space_step(photo, state)
     needs_surroundings = state.highlights != 0.0 or state.shadows != 0.0
 
@@ -2838,8 +3086,18 @@ def develop(
         grain_part: NDArray[np.float32] | None,
         skin_part: NDArray[np.float32] | None,
         whiten_part: NDArray[np.float32] | None,
+        mist_part: NDArray[np.float32] | None,
     ) -> NDArray[Any]:
-        """Steps 7 to 12, on one band."""
+        """Steps 6.5 to 12, on one band."""
+        if mist_part is not None:
+            assert mist is not None and mist_columns is not None  # set together
+            part = apply_mist(
+                part,
+                sample_mist(mist, mist_part, mist_columns),
+                state.mist,
+                photo.is_raw,
+                state.exposure,
+            )
         if local_part is not None:
             part = _scale_evenly(
                 part, region_factor(local_part, state.highlights, state.shadows)
@@ -2874,7 +3132,7 @@ def develop(
         # so the band goes all the way from the sensor's numbers to the
         # finished pixels without the photo being written out in between.
         return in_bands(
-            lambda part, weight_part, local_part, down_part, grain_part, skin_part, whiten_part: (
+            lambda part, weight_part, local_part, down_part, grain_part, skin_part, whiten_part, mist_part: (
                 to_output(
                     to_working_space(part, weight_part),
                     local_part,
@@ -2882,6 +3140,7 @@ def develop(
                     grain_part,
                     skin_part,
                     whiten_part,
+                    mist_part,
                 )
             ),
             photo.image,
@@ -2891,6 +3150,7 @@ def develop(
             field,
             skin,
             whitened,
+            mist_rows,
         )
 
     image = in_bands(to_working_space, photo.image, weight)
@@ -2898,7 +3158,7 @@ def develop(
     # into a factor is per pixel, so that happens inside the band and never
     # has to be held for the whole photo at once.
     local = local_brightness(_luminance(image), (pane.frame[1], pane.frame[0]))
-    return in_bands(to_output, image, local, vignette_down, field, skin, whitened)
+    return in_bands(to_output, image, local, vignette_down, field, skin, whitened, mist_rows)
 
 
 def _white_balance_gains(

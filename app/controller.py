@@ -426,6 +426,13 @@ class Controller(QObject):
         #: of step 7's local brightness.
         self._body: _Kept[NDArray[np.float32]] = _Kept()
         self._body_window: _Kept[NDArray[np.float32]] = _Kept()
+        #: The light the black mist spreads over the whole frame (PLAN.md 6
+        #: step 6.5), for the whole preview and for the window. Only the white
+        #: balance and the frame change it, so the mist's own slider and the
+        #: exposure move without it being worked out again; the window takes
+        #: its part of it, as it does of step 7's local brightness.
+        self._mist: _Kept[pipeline.MistField] = _Kept()
+        self._mist_window: _Kept[pipeline.MistField] = _Kept()
         self._shot_white_balance: tuple[float, float] = (0.0, 0.0)
         self._preview_long_edge = decoder.PROXY_LONG_EDGE
         self._sized: dict[tuple[Path, int], DecodedPhoto] = {}
@@ -592,7 +599,9 @@ class Controller(QObject):
         self._detailed.clear()
         self._grain.clear()
         self._body.clear()
+        self._mist.clear()
         self._surroundings.clear()
+        self._mist_window.clear()
         self._developed = None
         self._before = None
         path = self.current
@@ -735,6 +744,7 @@ class Controller(QObject):
         kept_grain = self._grain_window
         kept_body = self._body_window
         kept_field = self._surroundings
+        kept_mist = self._mist_window
         # One framed photo is kept, so the key says which photo was framed
         # and how: its size tells the proxy and the full size one apart, and
         # whether its faces had been found yet tells the two framings apart.
@@ -748,6 +758,7 @@ class Controller(QObject):
         field_long_edge = self._preview_long_edge if draft else max(decoded.size)
         field_from = self._sized_photo(path, decoded, field_long_edge)
         field_token = (path, shape, field_long_edge, pipeline.surroundings_key(values))
+        mist_token = (path, shape, field_long_edge, pipeline.mist_key(values))
 
         corrected = self._corrected_lens
 
@@ -761,6 +772,7 @@ class Controller(QObject):
             asked: geometry.Window = inner,
             field_photo: DecodedPhoto = field_from,
             field_key: object = field_token,
+            mist_key: object = mist_token,
             look: Look | None = self._look_for(values),
             skin: SkinRange | None = skin,
         ) -> NDArray[np.uint8]:
@@ -794,6 +806,18 @@ class Controller(QObject):
                 if pipeline.needs_body(values, whole)
                 else None
             )
+            # The glow reaches in from outside the window, so it is worked
+            # out over the whole frame, on the same photo as step 7's field.
+            mist = (
+                kept_mist.get(
+                    mist_key,
+                    lambda: pipeline.mist_field(
+                        geometry.apply(corrected(path, field_photo, shape), shape), values
+                    ),
+                )
+                if pipeline.has_mist(values)
+                else None
+            )
             developed = pipeline.develop(
                 part,
                 values,
@@ -802,6 +826,7 @@ class Controller(QObject):
                 look=look,
                 grain=grain,
                 body=body,
+                mist=mist,
             )
             return around.trim(cm.apply_display_transform(developed, screen), asked)
 
@@ -937,6 +962,7 @@ class Controller(QObject):
         self._grain_window.clear()
         self._body_window.clear()
         self._surroundings.clear()
+        self._mist_window.clear()
         # Its lens corrected copy is as large; the small ones are quick to redo.
         self._lensed.clear()
 
@@ -2595,6 +2621,7 @@ class Controller(QObject):
         detailed = self._detailed
         kept_grain = self._grain
         kept_body = self._body
+        kept_mist = self._mist
         corrected = self._corrected_lens
 
         def develop_preview(
@@ -2632,8 +2659,19 @@ class Controller(QObject):
                 if pipeline.needs_body(values, framed)
                 else None
             )
+            mist = (
+                kept_mist.get(
+                    (token, pipeline.mist_key(values)),
+                    lambda: pipeline.mist_field(framed, values),
+                )
+                if pipeline.has_mist(values)
+                else None
+            )
             return cm.apply_display_transform(
-                pipeline.develop(sharpened, values, look=look, grain=grain, body=body), screen
+                pipeline.develop(
+                    sharpened, values, look=look, grain=grain, body=body, mist=mist
+                ),
+                screen,
             )
 
         self._submit(develop_preview, group, partial(handler, frame=on_screen), path)

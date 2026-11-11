@@ -45,7 +45,7 @@ GROUPS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
         ("exposure", "contrast", "highlights", "shadows", "whites", "blacks"),
     ),
     ("adjust.group.colour", ("vibrance", "saturation")),
-    ("adjust.group.effects", ("vignette", "vignette_midpoint", "grain")),
+    ("adjust.group.effects", ("vignette", "vignette_midpoint", "mist", "grain")),
     (
         "adjust.group.detail",
         ("sharpening", "sharpen_masking", "luminance_noise", "colour_noise"),
@@ -146,6 +146,7 @@ JPEG_SPECS: Final[dict[str, SliderSpec]] = {
         signed=False,
         fill_from=edit_state.MIDPOINT_MIN,
     ),
+    "mist": _amount("mist", "adjust.mist", edit_state.MIST_MAX),
     "grain": _amount("grain", "adjust.grain", edit_state.GRAIN_MAX),
     "skin": _amount("skin", "adjust.skin", edit_state.SKIN_MAX),
     "whiten": _amount("whiten", "adjust.whiten", edit_state.WHITEN_MAX),

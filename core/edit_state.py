@@ -75,6 +75,12 @@ RAW_COLOUR_NOISE_DEFAULT: Final[float] = 25.0
 GRAIN_MIN: Final[float] = 0.0
 GRAIN_MAX: Final[float] = 100.0
 
+#: The black mist (PLAN.md 2.2, A-33) is an amount with nothing below zero:
+#: how strongly the light of the photo is spread into a soft glow, as a
+#: diffusion filter in front of the lens would (PLAN.md 6 step 6.5).
+MIST_MIN: Final[float] = 0.0
+MIST_MAX: Final[float] = 100.0
+
 #: Skin enhancement (PLAN.md 2.2, A-29) is an amount with nothing below zero:
 #: how much of the smoothing and of the brighter, less yellow skin is laid
 #: over the faces the photo holds.
@@ -110,6 +116,8 @@ class EditState:
     #: How much of the frame the vignette leaves alone, as a percentage of
     #: the way out to the corner.
     vignette_midpoint: float = MIDPOINT_DEFAULT
+    #: How strongly the light is spread into a glow (PLAN.md 6 step 6.5).
+    mist: float = 0.0
     #: How much film grain is laid over the photo (PLAN.md 6 step 11.5).
     grain: float = 0.0
     #: How much the skin of the faces is smoothed and brightened (PLAN.md 6
@@ -179,6 +187,7 @@ class EditState:
             and self.vibrance == 0.0
             and self.saturation == 0.0
             and self.vignette == 0.0
+            and self.mist == 0.0
             and self.grain == 0.0
             and self.skin == 0.0
             and self.whiten == 0.0
@@ -261,6 +270,8 @@ class EditState:
             return EXPOSURE_MIN_EV, EXPOSURE_MAX_EV
         if name == "vignette_midpoint":
             return MIDPOINT_MIN, MIDPOINT_MAX
+        if name == "mist":
+            return MIST_MIN, MIST_MAX
         if name == "grain":
             return GRAIN_MIN, GRAIN_MAX
         if name == "skin":
@@ -367,6 +378,7 @@ ADJUSTMENT_NAMES: Final[tuple[str, ...]] = (
     "whiten",
     "vignette",
     "vignette_midpoint",
+    "mist",
     "grain",
     "sharpening",
     "sharpen_masking",
