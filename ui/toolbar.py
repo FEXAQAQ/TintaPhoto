@@ -1,7 +1,7 @@
 """The 44 px toolbar across the top of the window (PLAN.md 3.1).
 
 Left: application menu, undo, redo, the info card, the portrait, liquify,
-the collage and the watermark. Centre: folder name and file name of the
+the collage, cutting the photo into pieces and the watermark. Centre: folder name and file name of the
 current photo. Right: the export button, the only filled button in the whole
 interface.
 """
@@ -57,6 +57,10 @@ class Toolbar(QWidget):
             icons.ICON_COLLAGE, "toolbar.collage", "shortcut.collage", self
         )
         self.collage_button.setCheckable(True)
+        #: Cuts the photo into pieces (PLAN.md 3.17); checked while that is
+        #: open, like the collage.
+        self.split_button = IconButton(icons.ICON_SCISSORS, "toolbar.split", "shortcut.split", self)
+        self.split_button.setCheckable(True)
         #: Opens the watermark (PLAN.md 3.14); checked while it is open, like
         #: the collage.
         self.watermark_button = IconButton(
@@ -91,6 +95,7 @@ class Toolbar(QWidget):
         layout.addWidget(self.portrait_button)
         layout.addWidget(self.liquify_button)
         layout.addWidget(self.collage_button)
+        layout.addWidget(self.split_button)
         layout.addWidget(self.watermark_button)
         layout.addStretch(1)
         layout.addWidget(self.title_label)
@@ -124,6 +129,7 @@ class Toolbar(QWidget):
             self.portrait_button,
             self.liquify_button,
             self.collage_button,
+            self.split_button,
             self.watermark_button,
             self.info_button,
             self.title_label,

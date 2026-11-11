@@ -332,3 +332,24 @@ def test_a_damaged_watermark_falls_back_to_the_defaults(tmp_path: Path) -> None:
     )
     loaded = Settings.load(path)
     assert loaded.watermark == WatermarkSettings()
+
+
+def test_how_the_photo_is_cut_is_remembered() -> None:
+    """PLAN.md 7.3: the cut, and the count to go back to after a grid."""
+    from core import split
+    from core.split import SplitSpec
+
+    settings = Settings()
+    assert settings.split.spec == SplitSpec(split.SPLIT_SIDE_BY_SIDE, 2)
+    settings.split.remember(SplitSpec(split.SPLIT_STACKED, 3))
+    settings.split.remember(SplitSpec(split.SPLIT_GRID))
+    again = Settings.from_dict(settings.to_dict()).split
+    assert again.spec == SplitSpec(split.SPLIT_GRID, 4)
+    assert again.line_count == 3
+
+
+def test_a_cut_that_makes_no_sense_is_dropped() -> None:
+    from core.split import SplitSpec
+
+    stored = Settings.from_dict({"split": {"split": "diagonal", "count": 9}}).split
+    assert stored.spec == SplitSpec()

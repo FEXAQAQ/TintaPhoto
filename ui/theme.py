@@ -256,6 +256,9 @@ WATERMARK_OUTLINE_WIDTH: Final[int] = 1
 WATERMARK_OUTLINE_GAP: Final[int] = 4
 WATERMARK_GUIDE_WIDTH: Final[int] = 1
 WATERMARK_GUIDE_GAP: Final[int] = 8
+#: The cuts over a photo being cut into pieces (PLAN.md 3.17): a 1 px white
+#: line with the spot brush's dark edge either side.
+SPLIT_LINE_WIDTH: Final[int] = 1
 #: The position picker (PLAN.md 3.14): three by three squares.
 ANCHOR_CELL: Final[int] = 20
 ANCHOR_GAP: Final[int] = 4
@@ -652,7 +655,7 @@ QToolTip {{
     padding: {SPACE_XS}px {SPACE_SM}px;
 }}
 
-#Inspector, #CollagePanel, #WatermarkPanel, #PortraitPanel, #LiquifyPanel {{
+#Inspector, #CollagePanel, #WatermarkPanel, #PortraitPanel, #LiquifyPanel, #SplitPanel {{
     background-color: {BG_PANEL};
     border-left: {BORDER_WIDTH}px solid {BORDER};
 }}

@@ -20,6 +20,7 @@ from typing import Any, Final
 from app.i18n import AVAILABLE_LANGUAGES, DEFAULT_LANGUAGE
 from app.paths import ensure_dir, settings_file
 from core import collage, exporter
+from core import split as splitting
 from core.cache import CACHE_LIMITS_BYTES, DEFAULT_CACHE_LIMIT_BYTES
 from core.exporter import ExportOptions
 from core.watermark import WatermarkSpec
@@ -255,6 +256,47 @@ class CollageSettings:
         return settings
 
 
+@dataclass
+class SplitSettings:
+    """How the photo was last cut into pieces (PLAN.md 2.12, 7.3)."""
+
+    split: str = splitting.SPLIT_SIDE_BY_SIDE
+    count: int = splitting.COUNT_DEFAULT
+    #: The count chosen side by side or stacked, which a grid's fixed four
+    #: leaves alone, so that leaving the grid goes back to it.
+    line_count: int = splitting.COUNT_DEFAULT
+
+    @property
+    def spec(self) -> splitting.SplitSpec:
+        """Return these choices as the cut they describe."""
+        return splitting.SplitSpec(self.split, self.count).sane()
+
+    def remember(self, spec: splitting.SplitSpec) -> None:
+        """Take on *spec*."""
+        spec = spec.sane()
+        self.split = spec.split
+        self.count = spec.count
+        if spec.split != splitting.SPLIT_GRID:
+            self.line_count = spec.count
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the choices as a JSON compatible dictionary."""
+        return {"split": self.split, "count": self.line_count}
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "SplitSettings":
+        """Build the choices from stored data, ignoring anything unusable."""
+        if not isinstance(data, dict):
+            data = {}
+        settings = cls()
+        stored = _as_int(data.get("count"), settings.count)
+        line = splitting.SplitSpec(splitting.SPLIT_SIDE_BY_SIDE, stored).sane()
+        settings.line_count = line.count
+        chosen = str(data.get("split", settings.split))
+        settings.remember(splitting.SplitSpec(chosen, line.count))
+        return settings
+
+
 @dataclass(frozen=True)
 class RecentFolder:
     """What the welcome screen says about a folder opened lately (PLAN.md 3.7)."""
@@ -362,6 +404,8 @@ class Settings:
     collage: CollageSettings = field(default_factory=CollageSettings)
     #: The watermark on exported photos (PLAN.md 2.9).
     watermark: WatermarkSettings = field(default_factory=WatermarkSettings)
+    #: How the photo is cut into pieces (PLAN.md 2.12).
+    split: SplitSettings = field(default_factory=SplitSettings)
     #: Fields written by other versions, kept so they survive a round trip.
     extra: dict[str, Any] = field(default_factory=dict, repr=False)
 
@@ -398,6 +442,7 @@ class Settings:
                 "export": self.export.to_dict(),
                 "collage": self.collage.to_dict(),
                 "watermark": self.watermark.to_dict(),
+                "split": self.split.to_dict(),
             }
         )
         return data
@@ -428,6 +473,7 @@ class Settings:
             "export",
             "collage",
             "watermark",
+            "split",
         }
         panels = data.get("panels")
         panels = panels if isinstance(panels, dict) else {}
@@ -482,6 +528,7 @@ class Settings:
             export=ExportSettings.from_dict(data.get("export", {})),
             collage=CollageSettings.from_dict(data.get("collage")),
             watermark=WatermarkSettings.from_dict(data.get("watermark")),
+            split=SplitSettings.from_dict(data.get("split")),
             extra={key: value for key, value in data.items() if key not in known},
         )
 

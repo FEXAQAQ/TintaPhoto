@@ -59,6 +59,7 @@ from ui.about_dialog import AboutDialog
 from ui.collage_panel import CollagePanel
 from ui.liquify_panel import PAGE_BRUSH, PAGE_FACE, LiquifyPanel
 from ui.portrait_panel import BRUSH_ADD, BRUSH_REMOVE, PortraitPanel
+from ui.split_panel import SplitPanel
 from ui.watermark_panel import WatermarkPanel
 from ui.collage_view import CollageCanvas
 from ui.devlog_dialog import DevlogDialog
@@ -115,6 +116,8 @@ class MainWindow(QMainWindow):
         self._collage_mode = False
         #: Whether the watermark is being placed (PLAN.md 3.14).
         self._watermark_mode = False
+        #: Whether the photo is being cut into pieces (PLAN.md 3.17).
+        self._split_mode = False
         #: Whether the portrait is open (PLAN.md 3.15).
         self._portrait_mode = False
         #: Whether liquify is open (PLAN.md 3.16).
@@ -205,6 +208,11 @@ class MainWindow(QMainWindow):
         self.watermark_panel = WatermarkPanel(middle)
         middle_layout.addWidget(self.watermark_panel)
         self.watermark_panel.hide()
+        #: In the inspector's place while the photo is cut (PLAN.md 3.17).
+        self.split_panel = SplitPanel(middle)
+        self.split_panel.set_spec(settings.split.spec, settings.split.line_count)
+        middle_layout.addWidget(self.split_panel)
+        self.split_panel.hide()
         #: In the inspector's place while the portrait is open (PLAN.md 3.15).
         self.portrait_panel = PortraitPanel(middle)
         middle_layout.addWidget(self.portrait_panel)
@@ -306,6 +314,7 @@ class MainWindow(QMainWindow):
         self._connect_filters()
         self._connect_collage()
         self._connect_watermark()
+        self._connect_split()
         self._connect_portrait()
         self._connect_liquify()
 
@@ -356,6 +365,12 @@ class MainWindow(QMainWindow):
         panel.leave_requested.connect(self.leave_watermark)
         self.preview.canvas.watermark.moved.connect(self._on_watermark_moved)
         self.toolbar.watermark_button.clicked.connect(self.toggle_watermark)
+
+    def _connect_split(self) -> None:
+        """Join the cutting panel to the settings and the photo (PLAN.md 3.17)."""
+        self.split_panel.spec_changed.connect(self._on_split_spec)
+        self.split_panel.leave_requested.connect(self.leave_split)
+        self.toolbar.split_button.clicked.connect(self.toggle_split)
 
     def _connect_collage(self) -> None:
         """Join the collage's panel and canvas to its controller (PLAN.md 3.13)."""
@@ -514,6 +529,7 @@ class MainWindow(QMainWindow):
         # Another folder starts in the editor, where the panels are set up
         # for what was opened.
         self.leave_watermark()
+        self.leave_split()
         self.leave_portrait()
         self.leave_liquify()
         self.filmstrip.set_photos(photos)
@@ -531,6 +547,7 @@ class MainWindow(QMainWindow):
             return
         # The modes all work on the photo shown, and there is none now.
         self.leave_watermark()
+        self.leave_split()
         self.leave_portrait()
         self.leave_liquify()
         self.preview.canvas.clear()
@@ -554,8 +571,9 @@ class MainWindow(QMainWindow):
             # The collage keeps the toolbar until it is left.
             return
         current = self.controller.current
-        if current is not None and not self._watermark_mode:
-            # The watermark keeps its title while photos are stepped through.
+        if current is not None and not self._watermark_mode and not self._split_mode:
+            # The watermark and the cutting keep their title while photos
+            # are stepped through.
             self.toolbar.set_title(current.parent.name, current.name)
         self._enable_export()
 
@@ -574,6 +592,9 @@ class MainWindow(QMainWindow):
             return
         if self._collage_mode:
             self._export_collage()
+            return
+        if self._split_mode:
+            self._export_split()
             return
         if self.filmstrip.choosing:
             self._export_batch()
@@ -632,7 +653,8 @@ class MainWindow(QMainWindow):
             self.collage.request_export_estimate(options)
             return
         dialog.set_output_size(*self.controller.export_output_size(options))
-        dialog.set_copying(self.controller.export_will_copy(options))
+        # A piece is never the original file (PLAN.md 2.12).
+        dialog.set_copying(not self._split_mode and self.controller.export_will_copy(options))
         self.controller.request_export_estimate(options)
 
     def _on_export_progress(self, fraction: float) -> None:
@@ -648,6 +670,9 @@ class MainWindow(QMainWindow):
         singles = getattr(result, "singles", ())
         if singles:
             message = tr("export.done_carousel", name=result.path.name, count=len(singles))
+        pieces = getattr(result, "pieces", ())
+        if pieces:
+            message = tr("export.done_split", name=result.path.name, count=len(pieces))
         self.toast.show_message(
             message,
             tr("export.reveal"),
@@ -877,6 +902,7 @@ class MainWindow(QMainWindow):
             self.toolbar.portrait_button.setChecked(self._portrait_mode)
             return
         self.leave_watermark()
+        self.leave_split()
         self.leave_collage()
         self.leave_liquify()
         if self.controller.cropping:
@@ -997,6 +1023,7 @@ class MainWindow(QMainWindow):
             return
         self.leave_portrait()
         self.leave_watermark()
+        self.leave_split()
         self.leave_collage()
         if self.controller.cropping:
             self.finish_crop()
@@ -1222,6 +1249,7 @@ class MainWindow(QMainWindow):
             return
         self.leave_portrait()
         self.leave_liquify()
+        self.leave_split()
         self.leave_collage()
         if self.controller.cropping:
             self.finish_crop()
@@ -1272,8 +1300,9 @@ class MainWindow(QMainWindow):
 
         While it is placed, always; while the photo is edited, when exports
         carry it - except while cropping, where the photo on screen is not
-        the photo exported, and in the portrait and liquify modes, whose
-        brushes it would cover (W-13).
+        the photo exported, in the portrait and liquify modes, whose
+        brushes it would cover (W-13), and while the photo is cut, where
+        each piece gets a watermark of its own (PLAN.md 2.12).
         """
         if self._watermark_mode:
             return True
@@ -1282,6 +1311,7 @@ class MainWindow(QMainWindow):
             and not self.controller.cropping
             and not self._portrait_mode
             and not self._liquify_mode
+            and not self._split_mode
         )
 
     def _draw_watermark(self) -> None:
@@ -1338,6 +1368,122 @@ class MainWindow(QMainWindow):
         if settled:
             self.preview.canvas.update()
 
+    # -- cutting the photo into pieces (PLAN.md 2.12, 3.17) ---------------
+
+    def toggle_split(self) -> None:
+        """Cut the photo into pieces, or go back to editing if that is open (S)."""
+        if self._split_mode:
+            self.leave_split()
+        else:
+            self.enter_split()
+
+    def enter_split(self) -> None:
+        """Show where the photo is cut, its panel in the inspector's place.
+
+        As for the watermark, the photo on screen is the photo as it will be
+        exported, so a crop in progress is finished first and the tools that
+        take the click on the photo are put down; another mode, if open, is
+        left first. The pieces are written one photo at a time, so choosing
+        photos in the filmstrip ends here.
+        """
+        if self._split_mode or self.controller.current is None:
+            self.toolbar.split_button.setChecked(self._split_mode)
+            return
+        self.leave_portrait()
+        self.leave_liquify()
+        self.leave_watermark()
+        self.leave_collage()
+        if self.controller.cropping:
+            self.finish_crop()
+        self.set_spot_tool(False)
+        self.set_picking_white_balance(False)
+        self.controller.set_comparing(False)
+        self.filmstrip.stop_choosing()
+        self.filmstrip.set_choosing_allowed(False)
+        self._split_mode = True
+        self.toolbar.split_button.setChecked(True)
+        self.toolbar.set_title(None, tr("split.title"))
+        self.toolbar.undo_button.setEnabled(False)
+        self.toolbar.redo_button.setEnabled(False)
+        self.preview.view_bar.compare_button.setEnabled(False)
+        self.inspector.hide()
+        self.split_panel.show()
+        self._draw_watermark()
+        self._show_cuts()
+        self.preview.canvas.setFocus()
+
+    def leave_split(self) -> None:
+        """Go back to editing; exports are written whole again."""
+        if not self._split_mode:
+            return
+        self._split_mode = False
+        self.filmstrip.set_choosing_allowed(True)
+        self._show_cuts()
+        self._draw_watermark()
+        self.toolbar.split_button.setChecked(False)
+        self.preview.view_bar.compare_button.setEnabled(True)
+        self.split_panel.hide()
+        if not self.is_inspector_collapsed():
+            self.inspector.show()
+        current = self.controller.current
+        if current is not None:
+            self.toolbar.set_title(current.parent.name, current.name)
+        self._on_history_changed(self.controller.can_undo, self.controller.can_redo)
+        self.preview.setFocus()
+
+    @property
+    def in_split(self) -> bool:
+        """Return whether the photo is being cut into pieces."""
+        return self._split_mode
+
+    def _split_photo_size(self) -> tuple[int, int] | None:
+        """Return the size of the photo exported whole, which is what is cut."""
+        if self.controller.current is None:
+            return None
+        return geometry.output_size(self.controller.full_photo_size, self.controller.geometry)
+
+    def _show_cuts(self) -> None:
+        """Draw the cuts over the photo while cutting, and say how large each piece is."""
+        canvas = self.preview.canvas
+        canvas.cuts.set_shown(self._split_mode)
+        canvas.cuts.set_spec(self._settings.split.spec)
+        if self._split_mode:
+            self.split_panel.set_photo_size(self._split_photo_size())
+        canvas.update()
+
+    def _on_split_spec(self, spec: object) -> None:
+        """Remember how the photo is to be cut, and show it."""
+        self._settings.split.remember(spec)  # type: ignore[arg-type]
+        self._show_cuts()
+
+    def _export_split(self) -> None:
+        """Ask how to write the pieces, then write them in the background."""
+        photo = self.controller.current
+        if photo is None or self.controller.exporting:
+            return
+        cut = self._settings.split.spec
+        dialog = ExportDialog(
+            photo, self._settings.export, self, watermark=self._settings.watermark, cut=cut
+        )
+        dialog.options_changed.connect(self._on_export_options)
+        self.controller.export_estimate_ready.connect(dialog.set_estimate)
+        self._dialog = dialog
+        self._on_export_options(dialog.options)
+        try:
+            accepted = self._run_dialog(dialog, send_off=True)
+        finally:
+            self.controller.export_estimate_ready.disconnect(dialog.set_estimate)
+            self._dialog = None
+        if not accepted:
+            return
+        self._remember_export(dialog)
+        button = self.toolbar.export_button
+        button.start(self.flight.remaining_ms())
+        if self.controller.export(dialog.target, dialog.options, cut):
+            button.setEnabled(False)
+        else:
+            self._call_off_export()
+
     def toggle_collage(self) -> None:
         """Open the collage, or go back to editing if it is open."""
         if self._collage_mode:
@@ -1358,6 +1504,7 @@ class MainWindow(QMainWindow):
         self.leave_portrait()
         self.leave_liquify()
         self.leave_watermark()
+        self.leave_split()
         if self.controller.cropping:
             self.finish_crop()
         self.set_spot_tool(False)
@@ -1424,6 +1571,7 @@ class MainWindow(QMainWindow):
         self.toolbar.portrait_button.setEnabled(has_photo)
         self.toolbar.liquify_button.setEnabled(has_photo)
         self.toolbar.watermark_button.setEnabled(has_photo)
+        self.toolbar.split_button.setEnabled(has_photo)
 
     def choose_collage_photo(self, slot: int) -> None:
         """Ask for the photo to put in one half of the collage."""
@@ -1536,6 +1684,9 @@ class MainWindow(QMainWindow):
         # Another photo, or another crop, may be another shape: the watermark
         # is drawn again for it (PLAN.md 3.14).
         self._draw_watermark()
+        # So are the cuts, and the size of each piece (PLAN.md 3.17).
+        if self._split_mode:
+            self._show_cuts()
         if not preview.provisional and preview.path == self.controller.current:
             self._developed_path = preview.path
             self._stop_developing()
@@ -1584,8 +1735,9 @@ class MainWindow(QMainWindow):
 
     def _on_history_changed(self, can_undo: bool, can_redo: bool) -> None:
         """Enable undo and redo according to the current photo's history."""
-        if self._collage_mode or self._watermark_mode:
-            # Neither the collage nor the watermark is in the photo's history.
+        if self._collage_mode or self._watermark_mode or self._split_mode:
+            # Neither the collage, the watermark nor the cutting is in the
+            # photo's history.
             return
         self.toolbar.undo_button.setEnabled(can_undo)
         self.toolbar.redo_button.setEnabled(can_redo)
@@ -1957,6 +2109,9 @@ class MainWindow(QMainWindow):
     def _on_metadata_ready(self, info: PhotoMetadata) -> None:
         self.info_card.set_metadata(info)
         self.info_card.set_edited(self.controller.is_edited(info.path))
+        if self._split_mode:
+            # The photo's own size is known now, which is what is cut.
+            self._show_cuts()
 
     def _on_edited_photos(self, edited: set) -> None:
         """Mark the edited photos of the folder, in the strip and the info tab."""
@@ -2219,6 +2374,7 @@ class MainWindow(QMainWindow):
             "shortcut.check_all": self.check_all_photos,
             "shortcut.check_none": self.check_no_photos,
             "shortcut.collage": self.toggle_collage,
+            "shortcut.split": self.toggle_split,
             "shortcut.watermark": self.toggle_watermark,
             "shortcut.portrait": self.toggle_portrait,
             "shortcut.portrait_add": lambda: self.toggle_portrait_brush(BRUSH_ADD),
@@ -2259,6 +2415,8 @@ class MainWindow(QMainWindow):
             return
         if self._watermark_mode and key not in _WATERMARK_SHORTCUTS:
             return
+        if self._split_mode and key not in _SPLIT_SHORTCUTS:
+            return
         if self._portrait_mode and key in _NOT_IN_PORTRAIT:
             return
         if not self._portrait_mode and key in _PORTRAIT_ONLY:
@@ -2296,6 +2454,8 @@ class MainWindow(QMainWindow):
         """
         if self._watermark_mode:
             self.leave_watermark()
+        elif self._split_mode:
+            self.leave_split()
         elif self._portrait_mode and self.portrait_panel.brush is not None:
             # The brush is put down first, then the portrait is left.
             self.portrait_panel.set_brush(None)
@@ -2387,6 +2547,7 @@ class MainWindow(QMainWindow):
             and not event.isAutoRepeat()
             and not self._collage_mode
             and not self._watermark_mode
+            and not self._split_mode
         ):
             self.controller.set_comparing(True)
             event.accept()
@@ -2423,10 +2584,15 @@ class MainWindow(QMainWindow):
             return False
         if event.key() not in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
             return False
-        if self._watermark_mode or self._portrait_mode or self._liquify_mode:
-            # None of the watermark's, the portrait's or the liquify panel
-            # is the inspector the key folds away, so Tab moves between its
-            # controls as usual.
+        if (
+            self._watermark_mode
+            or self._split_mode
+            or self._portrait_mode
+            or self._liquify_mode
+        ):
+            # None of the watermark's, the cutting's, the portrait's or the
+            # liquify panel is the inspector the key folds away, so Tab moves
+            # between its controls as usual.
             return False
         self.toggle_focus_mode()
         return True
@@ -2559,6 +2725,7 @@ _COLLAGE_SHORTCUTS: frozenset[str] = frozenset(
         "shortcut.open_folder",
         "shortcut.export",
         "shortcut.collage",
+        "shortcut.split",
         "shortcut.watermark",
         "shortcut.portrait",
         "shortcut.liquify",
@@ -2615,6 +2782,7 @@ _WATERMARK_SHORTCUTS: frozenset[str] = frozenset(
         "shortcut.portrait",
         "shortcut.liquify",
         "shortcut.collage",
+        "shortcut.split",
         "shortcut.crop_cancel",
         "shortcut.toggle_filmstrip",
         "shortcut.open_file",
@@ -2628,6 +2796,11 @@ _WATERMARK_SHORTCUTS: frozenset[str] = frozenset(
         "shortcut.zoom_fit",
     }
 )
+
+#: What still works while the photo is cut into pieces (PLAN.md 3.17): the
+#: same as for the watermark, the other mode that only shows something over
+#: the photo as it will be exported.
+_SPLIT_SHORTCUTS: frozenset[str] = _WATERMARK_SHORTCUTS
 
 
 def _supported_suffixes() -> set[str]:

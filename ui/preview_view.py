@@ -52,6 +52,7 @@ from ui.spot_overlay import SpotOverlay
 from ui.face_overlay import FaceOverlay
 from ui.liquify_overlay import LiquifyOverlay
 from ui.skin_overlay import SkinOverlay
+from ui.split_overlay import SplitOverlay
 from ui.watermark_overlay import WatermarkOverlay
 from ui.welcome_view import WelcomeView
 from ui.widgets.buttons import TextButton, tooltip
@@ -159,6 +160,9 @@ class PhotoCanvas(QWidget):
         #: The watermark, drawn over the photo while it is being placed
         #: (PLAN.md 3.14). A press on it drags it; anywhere else still pans.
         self.watermark = WatermarkOverlay(self)
+        #: Where the photo is cut, while it is being cut into pieces
+        #: (PLAN.md 3.17). Only drawn: the photo pans and zooms as usual.
+        self.cuts = SplitOverlay(self)
 
     @property
     def frame_size(self) -> tuple[int, int]:
@@ -265,6 +269,7 @@ class PhotoCanvas(QWidget):
         self._pixmap = _to_pixmap(image)
         self._frame = whole
         self.watermark.set_frame((whole.width(), whole.height()))
+        self.cuts.set_frame((whole.width(), whole.height()))
         self._source = _source_rect(whole, region)
         if region is None:
             # The whole photo: what every window of it is drawn on top of.
@@ -706,6 +711,7 @@ class PhotoCanvas(QWidget):
         self.faces.paint(painter, photo)
         self.spots.paint(painter, photo)
         self.watermark.paint(painter, photo)
+        self.cuts.paint(painter, photo)
 
     def _draw_edge(self, painter: QPainter, photo: QRectF) -> None:
         """Draw the hairline that separates the photo from the background.

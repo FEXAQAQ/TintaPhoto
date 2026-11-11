@@ -15,7 +15,7 @@
 ; presets and parameter files alone.
 
 #define AppName "TintaPhoto"
-#define AppVersion "0.47.0"
+#define AppVersion "0.48.0"
 #define AppExe "TintaPhoto.exe"
 #define BuildDir "dist\TintaPhoto"
 

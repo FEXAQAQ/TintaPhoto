@@ -30,8 +30,9 @@ from PySide6.QtWidgets import (
 
 from app.i18n import tr
 from app.settings import ExportSettings, WatermarkSettings
-from core import exporter, watermark
+from core import exporter, split, watermark
 from core.exporter import ExportOptions
+from core.split import SplitSpec
 from core.watermark import WatermarkSpec
 from ui import theme
 from ui.widgets.buttons import PrimaryButton, TextButton
@@ -40,7 +41,7 @@ from ui.widgets.focus import ring_on_keyboard_only
 from ui.widgets.segmented import Segmented
 from ui.widgets.slider_row import SliderRow, SliderSpec
 from ui.widgets.switch import Switch
-from ui.widgets.text import elide_middle, format_number
+from ui.widgets.text import elide_middle, format_number, use_tabular_figures
 
 
 #: A megabyte, for the estimate at the bottom of the dialog.
@@ -94,6 +95,7 @@ class ExportDialog(Dialog):
         carousel: bool = False,
         batch: int | None = None,
         watermark: WatermarkSettings | None = None,
+        cut: SplitSpec | None = None,
     ) -> None:
         """Ask about exporting *source*, or a collage beside it.
 
@@ -110,6 +112,9 @@ class ExportDialog(Dialog):
 
         *watermark* is the watermark set up in the toolbar's watermark mode;
         the dialog only turns it on or off for this export (X-10).
+
+        With *cut* the photo is written in the pieces it asks for (PLAN.md
+        2.12), which a row says, with the size of each piece.
         """
         super().__init__(parent)
         self._source = source
@@ -119,6 +124,7 @@ class ExportDialog(Dialog):
         self._settings = ExportSettings(**vars(settings))
         self._folder = Path(self._settings.folder) if self._settings.folder else source.parent
         self._watermark = watermark if watermark is not None else WatermarkSettings()
+        self._cut = cut.sane() if cut is not None else None
 
         self.setWindowTitle(tr("export.title"))
         self.setModal(True)
@@ -152,6 +158,7 @@ class ExportDialog(Dialog):
         self._build_metadata(layout)
         self._build_watermark(layout)
         self._build_carousel(layout)
+        self._build_cut(layout)
         layout.addStretch(1)
         self._build_footer(layout)
 
@@ -159,6 +166,7 @@ class ExportDialog(Dialog):
             self._fix_size(*collage_size)
         self.carousel_switch.setChecked(carousel)
         self._show_row(self._carousel_row, self._collage)
+        self._show_row(self._cut_row, self._cut is not None)
         self._show_settings()
         if batch is not None:
             # Nobody is asked about several photos, so nothing will hide it.
@@ -348,6 +356,14 @@ class ExportDialog(Dialog):
         self.carousel_switch.toggled.connect(lambda _on: self._changed())
         self._carousel_row.addWidget(self.carousel_switch)
 
+    def _build_cut(self, layout: QVBoxLayout) -> None:
+        """Into how many pieces the photo is cut, and how large each is (PLAN.md 2.12)."""
+        self._cut_row = self._row(layout, "export.split")
+        self.cut_label = QLabel("", self)
+        self.cut_label.setWordWrap(True)
+        use_tabular_figures(self.cut_label)
+        self._cut_row.addWidget(self.cut_label, 1)
+
     @staticmethod
     def _show_row(row: QHBoxLayout, visible: bool) -> None:
         """Show or hide every widget of *row*, its label included."""
@@ -471,6 +487,17 @@ class ExportDialog(Dialog):
     def set_output_size(self, width: int, height: int) -> None:
         """Show how many pixels the exported file will be (PLAN.md 3.11)."""
         self.pixels_label.setText(tr("export.pixels", width=width, height=height))
+        cut = self._cut
+        if cut is not None:
+            if split.can_cut((width, height), cut):
+                piece_width, piece_height = split.piece_size((width, height), cut)
+                size = tr("export.pixels", width=piece_width, height=piece_height)
+            else:
+                size = tr("export.split_too_small")
+            last = split.LETTERS[cut.pieces - 1]
+            self.cut_label.setText(
+                tr("export.split_note", count=cut.pieces, size=size, last=last)
+            )
 
     def set_estimate(self, size: int) -> None:
         """Show roughly how large the file will be (PLAN.md 3.11)."""

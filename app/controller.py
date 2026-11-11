@@ -75,6 +75,7 @@ from core.cache import ThumbnailCache
 from core.decoder import DecodedPhoto, DecodeError
 from core.metadata import PhotoMetadata
 from core.presets import Preset
+from core.split import SplitSpec
 from core.watermark import WatermarkSpec
 
 logger = logging.getLogger(__name__)
@@ -2873,11 +2874,15 @@ class Controller(QObject):
             path, self._state, self._geometry, options, self.faces_of_current()
         )
 
-    def export(self, target: Path, options: ExportOptions) -> bool:
+    def export(
+        self, target: Path, options: ExportOptions, cut: SplitSpec | None = None
+    ) -> bool:
         """Write the photo now open to *target* in the background (X-07).
 
-        Returns whether the export was started: one runs at a time, which is
-        what the progress on the toolbar button reports.
+        With *cut* the photo is written in the pieces it asks for, each to a
+        file of its own beside *target* (PLAN.md 2.12). Returns whether the
+        export was started: one runs at a time, which is what the progress
+        on the toolbar button reports.
         """
         path = self.current
         if path is None or self._exporting:
@@ -2889,7 +2894,7 @@ class Controller(QObject):
         found = self.faces_of_current()
         self._submit(
             lambda source=path, where=target, values=state, shape=frame: self._run_export(
-                source, where, values, shape, options, found
+                source, where, values, shape, options, found, cut
             ),
             None,
             self._on_exported,
@@ -2905,6 +2910,7 @@ class Controller(QObject):
         frame: Geometry,
         options: ExportOptions,
         found: tuple[Face, ...] | None = None,
+        cut: SplitSpec | None = None,
     ) -> exporter.ExportResult | None:
         """Write the file on a background thread; never raise from there.
 
@@ -2913,6 +2919,18 @@ class Controller(QObject):
         either way (PLAN.md section 10 rule 11).
         """
         try:
+            if cut is not None:
+                return exporter.export_split(
+                    source,
+                    target,
+                    cut,
+                    state,
+                    frame,
+                    options,
+                    progress=self.export_progress.emit,
+                    look=self._look_for(state),
+                    faces=found,
+                )
             return exporter.export(
                 source,
                 target,

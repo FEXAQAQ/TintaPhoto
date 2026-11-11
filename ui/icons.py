@@ -78,6 +78,9 @@ ICON_PORTRAIT: Final[str] = "portrait"
 #: Three waves, the picture flowing under the brush: the toolbar's liquify
 #: (PLAN.md 3.16), drawn here after Lucide's "waves".
 ICON_LIQUIFY: Final[str] = "liquify"
+#: A pair of scissors, blades open to the right: the toolbar button that
+#: cuts the photo into pieces (PLAN.md 3.17).
+ICON_SCISSORS: Final[str] = "scissors"
 
 
 def icons_dir() -> Path:

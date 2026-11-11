@@ -44,7 +44,7 @@ from numpy.typing import NDArray
 from PIL import Image
 
 from core import color_management as cm
-from core import decoder, face_detector, metadata, pipeline, skin_range, watermark
+from core import decoder, face_detector, metadata, pipeline, skin_range, split, watermark
 from core import geometry as geometry_module
 from core.decoder import DecodedPhoto, DecodeError
 from core.edit_state import EditState
@@ -52,6 +52,7 @@ from core.faces import Face
 from core.filters import Look
 from core.geometry import Geometry
 from core.metadata import PhotoMetadata
+from core.split import SplitSpec
 from core.watermark import WatermarkSpec
 
 logger = logging.getLogger(__name__)
@@ -177,6 +178,9 @@ class ExportResult:
     #: True when the original file was copied rather than developed again
     #: (X-08), which also means the dialog's quality was not used.
     copied: bool
+    #: The files a photo cut into pieces went to, first to last (PLAN.md
+    #: 2.12); empty when it was written whole. *path* is then the first.
+    pieces: tuple[Path, ...] = ()
 
 
 # --------------------------------------------------------------------------
@@ -327,6 +331,57 @@ def export_decoded(
     return ExportResult(path=path, copied=False)
 
 
+def export_split(
+    source: Path,
+    target: Path,
+    spec: SplitSpec,
+    state: EditState | None = None,
+    geometry: Geometry | None = None,
+    options: ExportOptions | None = None,
+    progress: Callable[[float], None] | None = None,
+    look: Look | None = None,
+    faces: tuple[Face, ...] | None = None,
+) -> ExportResult:
+    """Write the photo at *source* cut into the pieces *spec* asks for (PLAN.md 2.12).
+
+    The photo is developed once, as :func:`export` would write it whole, and
+    cut afterwards, so the pieces put together are that file's pixels. Each
+    piece goes to *target* with its letter added - ``X_edit_a.jpg``,
+    ``X_edit_b.jpg`` - and carries the details of the shot and a watermark
+    of its own, as the dialog asks. The original file is never copied: a
+    piece is not the original. Should one piece fail, the pieces already
+    written by this export are taken away again, so no half set is left.
+    """
+    options = (options or ExportOptions()).sane()
+    spec = spec.sane()
+    report = progress if progress is not None else _ignore
+    report(_PROGRESS_START)
+    written: list[Path] = []
+    try:
+        photo = decoder.decode(source)
+        photo = face_detector.attach(photo, state, geometry, faces)
+        report(_PROGRESS_DECODED)
+        image = _rendered(photo, state, geometry, options, look)
+        report(_PROGRESS_DEVELOPED)
+        pieces = split.cut(image, spec)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        base = split.free_base(target.with_suffix(options.extension), len(pieces))
+        info = metadata.read(source) if options.keep_metadata else None
+        step = (_PROGRESS_DONE - _PROGRESS_DEVELOPED) / len(pieces)
+        for index, (piece, path) in enumerate(
+            zip(pieces, split.piece_paths(base, len(pieces)), strict=True)
+        ):
+            _write_pixels(_watermarked(piece, options), path, options, info)
+            written.append(path)
+            report(_PROGRESS_DEVELOPED + step * (index + 1))
+    except (DecodeError, OSError, ValueError, MemoryError) as error:
+        for path in written:
+            path.unlink(missing_ok=True)
+        raise ExportError(f"{source.name} could not be exported in pieces: {error}") from error
+    report(_PROGRESS_DONE)
+    return ExportResult(path=written[0], copied=False, pieces=tuple(written))
+
+
 def export_pixels(
     image: NDArray[Any], target: Path, options: ExportOptions
 ) -> ExportResult:
@@ -364,6 +419,17 @@ def _develop(
     a radius measured against the long edge, so developing a shrunken photo
     would not look like what the preview showed.
     """
+    return _watermarked(_rendered(photo, state, geometry, options, look), options)
+
+
+def _rendered(
+    photo: DecodedPhoto,
+    state: EditState | None,
+    geometry: Geometry | None,
+    options: ExportOptions,
+    look: Look | None = None,
+) -> NDArray[Any]:
+    """Return the finished pixels at the size asked for, before any watermark."""
     depth = options.depth
     image = pipeline.render(
         photo,
@@ -373,7 +439,7 @@ def _develop(
         bits=depth,
         look=look,
     )
-    return _watermarked(_scaled(image, options.long_edge), options)
+    return _scaled(image, options.long_edge)
 
 
 def _watermarked(image: NDArray[Any], options: ExportOptions) -> NDArray[Any]:
