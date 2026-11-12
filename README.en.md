@@ -129,12 +129,17 @@ a rule-of-thirds grid.
 
 <img src="docs/media/en/collage.webp" width="100%" alt="Selecting two photos in the filmstrip, opening the collage, and widening the gap">
 
-`Ctrl`-click a few photos in the filmstrip, press Collage, and they
+`Ctrl`-click a few photos in the filmstrip, press Collage (`C`), and they
 become a single post sized for social feeds.
-Two to four photos, side by side or top and bottom, on a 9:16, 3:4, 4:5, 1:1,
+Two to four photos, side by side, top and bottom or in a 2 × 2 grid, on a 9:16, 3:4, 4:5, 1:1,
 16:9 or 1.91:1 canvas, with the gap and background colour you like. Day and night shots of the same scene can be
 overlaid, aligned and joined along a seam you drag. Export can also write the
-images a carousel needs: the collage, and each photo on its own.
+images a carousel needs: the collage, and each piece cut apart at its seams.
+
+It works the other way round too: press Split (`S`) to cut **one** photo into
+two to four even pieces, side by side or top and bottom, or into a 2 × 2 grid,
+with the cuts drawn on the photo. Export writes each piece to a file of its
+own, named `_a`, `_b` and so on; put back together they are the photo again.
 
 <br>
 
@@ -238,7 +243,7 @@ Settings and presets are kept in `%APPDATA%\TintaPhoto` and the thumbnail cache 
 | Flip horizontally / vertically | `Shift+H` / `Shift+V` |
 | Copy / paste adjustments | `Ctrl+Shift+C` / `Ctrl+Shift+V` |
 | Save as preset | `Ctrl+Shift+N` |
-| Collage | Toolbar button |
+| Collage / split | `C` / `S` |
 | 100% / zoom / fit | `Z` / `Ctrl++` `Ctrl+-` / `Ctrl+0` |
 | Pan a zoomed photo | Hold Space and drag |
 | Clipping warnings / histogram mode | `J` / `H` |
