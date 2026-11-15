@@ -81,6 +81,9 @@ ICON_LIQUIFY: Final[str] = "liquify"
 #: A pair of scissors, blades open to the right: the toolbar button that
 #: cuts the photo into pieces (PLAN.md 3.17).
 ICON_SCISSORS: Final[str] = "scissors"
+#: A lens's opening, six blades closing round a hexagon: the toolbar button
+#: that opens the depth of field (PLAN.md 3.18), drawn here in Lucide's style.
+ICON_APERTURE: Final[str] = "aperture"
 
 
 def icons_dir() -> Path:

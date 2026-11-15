@@ -58,6 +58,7 @@ from ui.histogram_widget import clipping_overlay
 from ui.about_dialog import AboutDialog
 from ui.collage_panel import CollagePanel
 from ui.liquify_panel import PAGE_BRUSH, PAGE_FACE, LiquifyPanel
+from ui.depth_panel import BRUSH_BLUR, BRUSH_SHARP, DepthPanel
 from ui.portrait_panel import BRUSH_ADD, BRUSH_REMOVE, PortraitPanel
 from ui.split_panel import SplitPanel
 from ui.watermark_panel import WatermarkPanel
@@ -122,6 +123,8 @@ class MainWindow(QMainWindow):
         self._portrait_mode = False
         #: Whether liquify is open (PLAN.md 3.16).
         self._liquify_mode = False
+        #: Whether the depth of field is open (PLAN.md 3.18).
+        self._depth_mode = False
         #: How the photo was shown before it was zoomed onto the faces to
         #: place their points (L-12), and which photo that was; the view
         #: goes back to it when placing ends.
@@ -221,6 +224,10 @@ class MainWindow(QMainWindow):
         self.liquify_panel = LiquifyPanel(middle)
         middle_layout.addWidget(self.liquify_panel)
         self.liquify_panel.hide()
+        #: In the inspector's place while the depth of field is open (PLAN.md 3.18).
+        self.depth_panel = DepthPanel(middle)
+        middle_layout.addWidget(self.depth_panel)
+        self.depth_panel.hide()
 
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -317,6 +324,23 @@ class MainWindow(QMainWindow):
         self._connect_split()
         self._connect_portrait()
         self._connect_liquify()
+        self._connect_depth()
+
+    def _connect_depth(self) -> None:
+        """Join the depth of field's panel and overlay to the controller (PLAN.md 3.18)."""
+        panel = self.depth_panel
+        panel.value_set.connect(self.controller.set_depth_value)
+        panel.shape_chosen.connect(self.controller.set_depth_shape)
+        panel.bokeh_chosen.connect(self.controller.set_depth_bokeh)
+        panel.reset_requested.connect(self.controller.reset_depth_range)
+        panel.leave_requested.connect(self.leave_depth)
+        panel.brush_changed.connect(self._show_depth_brush)
+        panel.brush_size_set.connect(lambda _radius, _dragging: self._show_depth_brush())
+        panel.showing_changed.connect(self._on_depth_showing)
+        overlay = self.preview.canvas.depth
+        overlay.focus_changed.connect(self._on_depth_focus)
+        overlay.stroke_painted.connect(self._on_depth_painted)
+        self.toolbar.depth_button.clicked.connect(self.toggle_depth)
 
     def _connect_liquify(self) -> None:
         """Join the liquify panel and brush to the controller (PLAN.md 3.16)."""
@@ -532,6 +556,7 @@ class MainWindow(QMainWindow):
         self.leave_split()
         self.leave_portrait()
         self.leave_liquify()
+        self.leave_depth()
         self.filmstrip.set_photos(photos)
         self.controller.request_thumbnails(photos)
         self._show_recent_folders()
@@ -550,6 +575,7 @@ class MainWindow(QMainWindow):
         self.leave_split()
         self.leave_portrait()
         self.leave_liquify()
+        self.leave_depth()
         self.preview.canvas.clear()
         self.preview.show_welcome()
         self._enable_photo_modes()
@@ -905,6 +931,7 @@ class MainWindow(QMainWindow):
         self.leave_split()
         self.leave_collage()
         self.leave_liquify()
+        self.leave_depth()
         if self.controller.cropping:
             self.finish_crop()
         self.set_spot_tool(False)
@@ -1002,6 +1029,134 @@ class MainWindow(QMainWindow):
             points, panel.brush_size, adding=brush == BRUSH_ADD, snap=panel.snap
         )
 
+    # -- the depth of field (PLAN.md 2.13, 3.18) -------------------------
+
+    def toggle_depth(self) -> None:
+        """Open the depth of field, or go back to editing if it is open (D)."""
+        if self._depth_mode:
+            self.leave_depth()
+        else:
+            self.enter_depth()
+
+    def enter_depth(self) -> None:
+        """Put the depth of field's panel in the inspector's place, its shape on the photo.
+
+        As for the portrait: the tools that take the click on the photo are
+        put down, a crop in progress is finished, and another mode, if open,
+        is left first. Undo and redo go on working.
+        """
+        if self._depth_mode or self.controller.current is None:
+            self.toolbar.depth_button.setChecked(self._depth_mode)
+            return
+        self.leave_portrait()
+        self.leave_liquify()
+        self.leave_watermark()
+        self.leave_split()
+        self.leave_collage()
+        if self.controller.cropping:
+            self.finish_crop()
+        self.set_spot_tool(False)
+        self.set_picking_white_balance(False)
+        self._depth_mode = True
+        self._draw_watermark()
+        self.toolbar.depth_button.setChecked(True)
+        self.inspector.hide()
+        self.depth_panel.show()
+        self.preview.canvas.depth.set_open(True)
+        self._show_depth()
+        self.preview.canvas.setFocus()
+
+    def leave_depth(self) -> None:
+        """Go back to editing; the depth of field stays with each photo."""
+        if not self._depth_mode:
+            return
+        self._depth_mode = False
+        self._draw_watermark()
+        self.depth_panel.set_brush(None)
+        canvas = self.preview.canvas
+        canvas.depth.set_open(False)
+        canvas.depth.set_range(None)
+        canvas.refresh_cursor()
+        canvas.update()
+        self.toolbar.depth_button.setChecked(False)
+        self.depth_panel.hide()
+        if not self.is_inspector_collapsed():
+            self.inspector.show()
+        self.preview.setFocus()
+
+    @property
+    def in_depth(self) -> bool:
+        """Return whether the depth of field is open."""
+        return self._depth_mode
+
+    def toggle_depth_brush(self, brush: str) -> None:
+        """Take the brush up for *brush*, or put it down if it already does that (B, E)."""
+        panel = self.depth_panel
+        panel.set_brush(None if panel.brush == brush else brush)
+
+    def toggle_depth_showing(self) -> None:
+        """Show what is blurred over the photo, or stop showing it (M)."""
+        self.depth_panel.set_showing(not self.depth_panel.showing)
+
+    def _show_depth(self) -> None:
+        """Give the panel and the photo the depth of field of the photo now open."""
+        if not self._depth_mode:
+            return
+        has_photo = self.controller.current is not None
+        depth = self.controller.depth
+        self.depth_panel.set_depth(depth)
+        overlay = self.preview.canvas.depth
+        if has_photo:
+            overlay.set_depth(self.controller.depth_on_screen())
+        self._show_depth_range()
+        self._show_depth_brush()
+
+    def _show_depth_range(self) -> None:
+        """Show what is blurred, when it is asked for or the brush is painting."""
+        overlay = self.preview.canvas.depth
+        wanted = self.depth_panel.showing or self.depth_panel.brush is not None
+        if not wanted or self.controller.current is None:
+            overlay.set_range(None)
+            return
+        long_edge = max(self.preview.canvas.width(), self.preview.canvas.height())
+        overlay.set_range(
+            self.controller.depth_shown(min(long_edge, theme.DEPTH_RANGE_LONG_EDGE))
+        )
+
+    def _show_depth_brush(self) -> None:
+        """Give the photo's brush what the panel says, at the size it is on screen."""
+        panel = self.depth_panel
+        brush = panel.brush
+        canvas = self.preview.canvas
+        has_photo = self.controller.current is not None
+        canvas.depth.set_brush(
+            self._depth_mode and brush is not None and has_photo,
+            brush != BRUSH_BLUR,
+            self.controller.shown_radius(panel.brush_size) if has_photo else 0.0,
+        )
+        self._show_depth_range()
+        canvas.refresh_cursor()
+        canvas.update()
+
+    def _on_depth_showing(self, showing: bool) -> None:
+        self.preview.canvas.depth.set_showing(showing)
+        self._show_depth_range()
+        self.preview.canvas.update()
+
+    def _on_depth_focus(
+        self, centre: object, handle: object, ratio: float, dragging: bool
+    ) -> None:
+        """Move the sharp shape to where it was dragged on the photo."""
+        self.controller.set_depth_focus(centre, handle, ratio, dragging)  # type: ignore[arg-type]
+
+    def _on_depth_painted(self, points: list[tuple[float, float]]) -> None:
+        """Keep sharp or blur what the brush painted over, as the brush says."""
+        panel = self.depth_panel
+        brush = panel.brush
+        if brush is None:
+            return
+        self.controller.add_depth_stroke(points, panel.brush_size, sharp=brush == BRUSH_SHARP)
+
     # -- liquify (PLAN.md 2.11, 3.16) ------------------------------------
 
     def toggle_liquify(self) -> None:
@@ -1022,6 +1177,7 @@ class MainWindow(QMainWindow):
             self.toolbar.liquify_button.setChecked(self._liquify_mode)
             return
         self.leave_portrait()
+        self.leave_depth()
         self.leave_watermark()
         self.leave_split()
         self.leave_collage()
@@ -1249,6 +1405,7 @@ class MainWindow(QMainWindow):
             return
         self.leave_portrait()
         self.leave_liquify()
+        self.leave_depth()
         self.leave_split()
         self.leave_collage()
         if self.controller.cropping:
@@ -1311,6 +1468,7 @@ class MainWindow(QMainWindow):
             and not self.controller.cropping
             and not self._portrait_mode
             and not self._liquify_mode
+            and not self._depth_mode
             and not self._split_mode
         )
 
@@ -1391,6 +1549,7 @@ class MainWindow(QMainWindow):
             return
         self.leave_portrait()
         self.leave_liquify()
+        self.leave_depth()
         self.leave_watermark()
         self.leave_collage()
         if self.controller.cropping:
@@ -1503,6 +1662,7 @@ class MainWindow(QMainWindow):
             return
         self.leave_portrait()
         self.leave_liquify()
+        self.leave_depth()
         self.leave_watermark()
         self.leave_split()
         if self.controller.cropping:
@@ -1570,6 +1730,7 @@ class MainWindow(QMainWindow):
         has_photo = self.controller.current is not None
         self.toolbar.portrait_button.setEnabled(has_photo)
         self.toolbar.liquify_button.setEnabled(has_photo)
+        self.toolbar.depth_button.setEnabled(has_photo)
         self.toolbar.watermark_button.setEnabled(has_photo)
         self.toolbar.split_button.setEnabled(has_photo)
 
@@ -1783,6 +1944,7 @@ class MainWindow(QMainWindow):
             self._show_face_guides()
             if self.preview.canvas.faces.spotlit:
                 self._show_spotlight()
+        self._show_depth()
         self.preview.canvas.update()
 
     def _on_lens_set(self, settings: LensSettings, dragging: bool) -> None:
@@ -1961,6 +2123,12 @@ class MainWindow(QMainWindow):
             factor = SPOT_SIZE_STEP if larger else 1.0 / SPOT_SIZE_STEP
             liquify_panel.set_brush_size(liquify_panel.brush_size * factor)
             self._show_liquify_brush()
+            return
+        if self._depth_mode:
+            depth_panel = self.depth_panel
+            factor = SPOT_SIZE_STEP if larger else 1.0 / SPOT_SIZE_STEP
+            depth_panel.set_brush_size(depth_panel.brush_size * factor)
+            self._show_depth_brush()
             return
         if not self.spot_tool_on:
             return
@@ -2377,10 +2545,11 @@ class MainWindow(QMainWindow):
             "shortcut.split": self.toggle_split,
             "shortcut.watermark": self.toggle_watermark,
             "shortcut.portrait": self.toggle_portrait,
-            "shortcut.portrait_add": lambda: self.toggle_portrait_brush(BRUSH_ADD),
-            "shortcut.portrait_remove": lambda: self.toggle_portrait_brush(BRUSH_REMOVE),
-            "shortcut.portrait_show": self.toggle_portrait_showing,
+            "shortcut.portrait_add": lambda: self._brush_key(BRUSH_ADD),
+            "shortcut.portrait_remove": lambda: self._brush_key(BRUSH_REMOVE),
+            "shortcut.portrait_show": self._show_key,
             "shortcut.liquify": self.toggle_liquify,
+            "shortcut.depth": self.toggle_depth,
             "shortcut.settings": self.open_settings,
             "shortcut.fullscreen": self.toggle_full_screen,
             "shortcut.zoom_in": canvas.zoom_in,
@@ -2393,6 +2562,24 @@ class MainWindow(QMainWindow):
             "shortcut.tab_crop": lambda: self._show_tab(InspectorTab.CROP),
             "shortcut.info": self.toggle_info,
         }
+
+    def _brush_key(self, brush: str) -> None:
+        """Take the open mode's brush up for one job or the other (B, E).
+
+        The portrait and the depth of field share the keys: each adds with
+        B and takes away with E, and only one of them is open at a time.
+        """
+        if self._depth_mode:
+            self.toggle_depth_brush(BRUSH_SHARP if brush == BRUSH_ADD else BRUSH_BLUR)
+        else:
+            self.toggle_portrait_brush(brush)
+
+    def _show_key(self) -> None:
+        """Show the open mode's range over the photo, or stop (M)."""
+        if self._depth_mode:
+            self.toggle_depth_showing()
+        else:
+            self.toggle_portrait_showing()
 
     def _register_shortcuts(self) -> None:
         """Ask Qt to listen for every combination :mod:`ui.shortcuts` lists.
@@ -2419,7 +2606,9 @@ class MainWindow(QMainWindow):
             return
         if self._portrait_mode and key in _NOT_IN_PORTRAIT:
             return
-        if not self._portrait_mode and key in _PORTRAIT_ONLY:
+        if not (self._portrait_mode or self._depth_mode) and key in _PORTRAIT_ONLY:
+            return
+        if self._depth_mode and key in _NOT_IN_PORTRAIT:
             return
         if self._liquify_mode and self.editing_faces and key == "shortcut.crop_apply":
             # Enter finishes placing the points, as it applies a crop.
@@ -2466,6 +2655,11 @@ class MainWindow(QMainWindow):
             self.cancel_editing_faces()
         elif self._liquify_mode:
             self.leave_liquify()
+        elif self._depth_mode and self.depth_panel.brush is not None:
+            # The brush is put down first, then the depth of field is left.
+            self.depth_panel.set_brush(None)
+        elif self._depth_mode:
+            self.leave_depth()
         elif self._collage_mode and self.collage_canvas.aligning:
             # Esc ends the nearer thing first: aligning, then the collage.
             self.collage_panel.set_aligning(False)
@@ -2589,10 +2783,11 @@ class MainWindow(QMainWindow):
             or self._split_mode
             or self._portrait_mode
             or self._liquify_mode
+            or self._depth_mode
         ):
-            # None of the watermark's, the cutting's, the portrait's or the
-            # liquify panel is the inspector the key folds away, so Tab moves
-            # between its controls as usual.
+            # None of the watermark's, the cutting's, the portrait's, the
+            # liquify or the depth of field's panel is the inspector the key
+            # folds away, so Tab moves between its controls as usual.
             return False
         self.toggle_focus_mode()
         return True
@@ -2717,7 +2912,8 @@ class MainWindow(QMainWindow):
 
 #: What the keyboard still does while the collage is open: everything else
 #: acts on the photo being edited, which the collage covers (PLAN.md 3.13).
-#: The portrait, liquify and watermark keys leave the collage for that mode.
+#: The portrait, liquify, depth of field and watermark keys leave the
+#: collage for that mode.
 _COLLAGE_SHORTCUTS: frozenset[str] = frozenset(
     {
         "shortcut.toggle_filmstrip",
@@ -2729,6 +2925,7 @@ _COLLAGE_SHORTCUTS: frozenset[str] = frozenset(
         "shortcut.watermark",
         "shortcut.portrait",
         "shortcut.liquify",
+        "shortcut.depth",
         "shortcut.settings",
         "shortcut.fullscreen",
         "shortcut.crop_cancel",
@@ -2767,7 +2964,8 @@ _NOT_IN_PORTRAIT: frozenset[str] = frozenset(
     }
 )
 
-#: The portrait's own keys, which mean nothing anywhere else.
+#: The portrait's own keys, which the depth of field shares (B, E and M)
+#: and which mean nothing anywhere else.
 _PORTRAIT_ONLY: frozenset[str] = frozenset(
     {"shortcut.portrait_add", "shortcut.portrait_remove", "shortcut.portrait_show"}
 )
@@ -2781,6 +2979,7 @@ _WATERMARK_SHORTCUTS: frozenset[str] = frozenset(
         "shortcut.watermark",
         "shortcut.portrait",
         "shortcut.liquify",
+        "shortcut.depth",
         "shortcut.collage",
         "shortcut.split",
         "shortcut.crop_cancel",

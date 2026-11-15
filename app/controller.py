@@ -46,6 +46,7 @@ from app.workers import TaskRunner
 from core import color_management as cm
 from core import (
     decoder,
+    depth_of_field,
     exporter,
     face_detector,
     geometry,
@@ -69,6 +70,7 @@ from core.faces import Face
 
 from core.geometry import Geometry
 from core.healing import Spot
+from core.depth_of_field import DEFAULT_DEPTH, DepthOfField
 from core.skin_range import SkinRange, SkinStroke
 from core.lens import LensSettings
 from core.cache import ThumbnailCache
@@ -434,6 +436,15 @@ class Controller(QObject):
         #: its part of it, as it does of step 7's local brightness.
         self._mist: _Kept[pipeline.MistField] = _Kept()
         self._mist_window: _Kept[pipeline.MistField] = _Kept()
+        #: The light the depth of field blurs, weighed and shrunk (PLAN.md 6
+        #: step 6.4), and the blurred layers made of it, for the whole
+        #: preview and for the window. The light only changes with the white
+        #: balance, the highlights slider and the frame, so moving the sharp
+        #: shape or painting only makes the layers again.
+        self._depth_light: _Kept[NDArray[np.float32]] = _Kept()
+        self._depth: _Kept[pipeline.DepthField] = _Kept()
+        self._depth_light_window: _Kept[NDArray[np.float32]] = _Kept()
+        self._depth_window: _Kept[pipeline.DepthField] = _Kept()
         self._shot_white_balance: tuple[float, float] = (0.0, 0.0)
         self._preview_long_edge = decoder.PROXY_LONG_EDGE
         self._sized: dict[tuple[Path, int], DecodedPhoto] = {}
@@ -601,8 +612,12 @@ class Controller(QObject):
         self._grain.clear()
         self._body.clear()
         self._mist.clear()
+        self._depth_light.clear()
+        self._depth.clear()
         self._surroundings.clear()
         self._mist_window.clear()
+        self._depth_light_window.clear()
+        self._depth_window.clear()
         self._developed = None
         self._before = None
         path = self.current
@@ -746,11 +761,14 @@ class Controller(QObject):
         kept_body = self._body_window
         kept_field = self._surroundings
         kept_mist = self._mist_window
+        kept_light = self._depth_light_window
+        kept_depth = self._depth_window
         # One framed photo is kept, so the key says which photo was framed
         # and how: its size tells the proxy and the full size one apart, and
         # whether its faces had been found yet tells the two framings apart.
         token = (path, source.size, geometry.frame_key(shape), (path, shape.lens) in self._faces)
         skin = geometry.framed_skin(shape, source.size)
+        depth = geometry.framed_depth(shape, source.size)
         transform = self._display_transform
         # The local brightness is a blur a hundredth of the frame wide, so it
         # is worked out on the proxy rather than on the full size photo. A
@@ -760,6 +778,10 @@ class Controller(QObject):
         field_from = self._sized_photo(path, decoded, field_long_edge)
         field_token = (path, shape, field_long_edge, pipeline.surroundings_key(values))
         mist_token = (path, shape, field_long_edge, pipeline.mist_key(values))
+        field_frame = (path, field_long_edge, geometry.frame_key(shape))
+        field_depth = geometry.framed_depth(shape, field_from.size)
+        light_token = (field_frame, pipeline.depth_light_key(values, field_depth))
+        depth_token = (field_frame, pipeline.depth_key(values, field_depth))
 
         corrected = self._corrected_lens
 
@@ -776,6 +798,10 @@ class Controller(QObject):
             mist_key: object = mist_token,
             look: Look | None = self._look_for(values),
             skin: SkinRange | None = skin,
+            depth: DepthOfField | None = depth,
+            field_depth: DepthOfField | None = field_depth,
+            light_key: object = light_token,
+            depth_key: object = depth_token,
         ) -> NDArray[np.uint8]:
             """Develop the window, on whichever thread takes this on."""
             whole = framed.get(
@@ -783,8 +809,9 @@ class Controller(QObject):
             )
             assert whole is not None  # the maker always returns a photo
             # The framed photo is kept from one stroke of the portrait brush
-            # to the next; the newest skin range is put on it here.
-            whole = replace(whole, skin=skin)
+            # to the next; the newest skin range and depth of field are put
+            # on it here.
+            whole = replace(whole, skin=skin, depth=depth)
             field = kept_field.get(
                 field_key,
                 lambda: pipeline.surroundings_field(
@@ -796,7 +823,7 @@ class Controller(QObject):
                 lambda: pipeline.with_detail(geometry.window_of(whole, around), values),
             )
             assert part is not None  # the maker always returns a photo
-            part = replace(part, skin=skin)
+            part = replace(part, skin=skin, depth=depth)
             grain = (
                 kept_grain.get((key, around), lambda: pipeline.grain_field(part, around))
                 if pipeline.has_grain(values)
@@ -819,6 +846,20 @@ class Controller(QObject):
                 if pipeline.has_mist(values)
                 else None
             )
+            # The blur reaches in from outside the window as the glow does.
+            blur = None
+            if depth is not None and depth.blurs:
+                def made_field() -> pipeline.DepthField | None:
+                    framed_field = replace(
+                        geometry.apply(corrected(path, field_photo, shape), shape),
+                        depth=field_depth,
+                    )
+                    light = kept_light.get(
+                        light_key, lambda: pipeline.depth_light(framed_field, values)
+                    )
+                    return pipeline.depth_field(framed_field, values, light)
+
+                blur = kept_depth.get(depth_key, made_field)
             developed = pipeline.develop(
                 part,
                 values,
@@ -828,6 +869,7 @@ class Controller(QObject):
                 grain=grain,
                 body=body,
                 mist=mist,
+                depth=blur,
             )
             return around.trim(cm.apply_display_transform(developed, screen), asked)
 
@@ -964,6 +1006,8 @@ class Controller(QObject):
         self._body_window.clear()
         self._surroundings.clear()
         self._mist_window.clear()
+        self._depth_light_window.clear()
+        self._depth_window.clear()
         # Its lens corrected copy is as large; the small ones are quick to redo.
         self._lensed.clear()
 
@@ -1722,8 +1766,9 @@ class Controller(QObject):
     def reset_crop(self) -> None:
         """Put the crop and rotation back to the whole photo (PLAN.md 3.2).
 
-        The lens correction, the mended spots, the portrait's skin range and
-        liquify are not the crop tab's and are left as they are.
+        The lens correction, the mended spots, the portrait's skin range,
+        liquify and the depth of field are not the crop tab's and are left
+        as they are.
         """
         fresh = Geometry(
             lens=self._geometry.lens,
@@ -1731,6 +1776,7 @@ class Controller(QObject):
             skin=self._geometry.skin,
             liquify=self._geometry.liquify,
             face_shape=self._geometry.face_shape,
+            depth=self._geometry.depth,
         )
         if self._cropping:
             fresh = replace(fresh, crop=geometry.start_crop(self.photo_size, fresh))
@@ -1952,6 +1998,137 @@ class Controller(QObject):
         """Hand the skin on screen over, if it is still the photo's."""
         if path == self.current:
             self.skin_shown.emit(skin)
+
+    # -- the depth of field (PLAN.md 2.13 and 3.18) ----------------------
+
+    @property
+    def depth(self) -> DepthOfField:
+        """Return the depth of field of the photo now open."""
+        return self._geometry.depth
+
+    def _depth_frame(self) -> tuple[tuple[int, int], Geometry, bool]:
+        """Return the frame the depth of field's points are placed on.
+
+        The frame on screen, taken back through the turn and the crop but
+        not through liquify: the pipeline lays the sharp shape on the frame
+        that way (:func:`core.geometry.framed_depth`), so what is drawn is
+        where the photo is sharp.
+        """
+        size, shape, crop = self._spot_frame()
+        return size, replace(shape, liquify=(), face_shape=liquify.DEFAULT_FACE_SHAPE), crop
+
+    def depth_on_screen(self) -> DepthOfField:
+        """Return the depth of field as it lies on the frame on screen.
+
+        Its points are in fractions of that frame, and the strokes' radii
+        fractions of its long edge.
+        """
+        size, shape, crop = self._depth_frame()
+        # Laid on the frame as if it blurred, so it is mapped whatever the amount.
+        carried = replace(shape, depth=replace(shape.depth, amount=depth_of_field.AMOUNT_MAX))
+        shown = geometry.framed_depth(carried, size, crop)
+        assert shown is not None  # an amount above zero is always carried
+        return replace(shown, amount=shape.depth.amount)
+
+    def depth_shown(self, long_edge: int) -> NDArray[np.uint8] | None:
+        """Return how blurred the frame on screen is, 0 to 255, at about *long_edge*.
+
+        For the depth of field's range shown over the photo (M). Worked out
+        here and at once: at this size it takes a few milliseconds.
+        """
+        if self.current is None:
+            return None
+        size, shape, crop = self._depth_frame()
+        frame = geometry.output_size(size, shape) if crop else geometry.frame_size(size, shape)
+        scale = min(1.0, long_edge / max(max(frame), 1))
+        small = (max(1, round(frame[0] * scale)), max(1, round(frame[1] * scale)))
+        blurred = depth_of_field.blurriness(self.depth_on_screen(), small)
+        return np.round(blurred * 255.0).astype(np.uint8)
+
+    def set_depth(self, depth: DepthOfField, dragging: bool = False) -> None:
+        """Give the photo this depth of field, the way any change of geometry is given.
+
+        While *dragging* the change is shown but not yet a step of history,
+        as for a slider.
+        """
+        if self.current is None:
+            return
+        self.set_geometry(replace(self._geometry, depth=depth), dragging)
+        self.geometry_changed.emit(self._geometry)
+
+    def set_depth_value(self, name: str, value: float, dragging: bool = False) -> None:
+        """Set one of the depth of field's sliders: amount, transition or highlights."""
+        self.set_depth(self._geometry.depth.with_values(**{name: value}), dragging)
+
+    def set_depth_shape(self, shape: str) -> None:
+        """Make the sharp shape an ellipse or a band, where that shape starts."""
+        self.set_depth(self._geometry.depth.with_shape(shape))
+
+    def set_depth_bokeh(self, bokeh: str) -> None:
+        """Say what shape out of focus light takes."""
+        if bokeh in depth_of_field.BOKEHS:
+            self.set_depth(replace(self._geometry.depth, bokeh=bokeh))
+
+    def set_depth_focus(
+        self,
+        centre: tuple[float, float],
+        handle: tuple[float, float],
+        ratio: float,
+        dragging: bool = False,
+    ) -> None:
+        """Move the sharp shape to where it is drawn on screen.
+
+        *centre* and *handle* are in fractions of the frame on screen, and
+        *ratio* the ellipse's short axis over its long one.
+        """
+        if self.current is None:
+            return
+        size, shape, crop = self._depth_frame()
+        on_photo = [geometry.source_point(point, size, shape, crop) for point in (centre, handle)]
+        depth = replace(
+            self._geometry.depth.with_values(ratio=ratio),
+            centre=on_photo[0],
+            handle=on_photo[1],
+        )
+        self.set_depth(depth, dragging)
+
+    def add_depth_stroke(
+        self, points: Sequence[tuple[float, float]], radius: float, sharp: bool
+    ) -> None:
+        """Keep what the brush painted over sharp, or blur it, as one step of history.
+
+        *points* is the path the pointer took, in fractions of the frame on
+        screen, and *radius* the brush's, a fraction of the photo's long
+        edge, as for :meth:`add_skin_stroke`.
+        """
+        if self.current is None or not points:
+            return
+        size, shape, crop = self._depth_frame()
+        on_photo = [geometry.source_point(point, size, shape, crop) for point in points]
+        on_photo = [(min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0)) for x, y in on_photo]
+        radius = skin_range.clamp_radius(radius)
+        stroke = SkinStroke(
+            points=skin_range.thinned(on_photo, radius, size),
+            radius=radius,
+            adding=sharp,
+            snap=False,
+        )
+        self.set_depth(self._geometry.depth.with_stroke(stroke))
+
+    def reset_depth_range(self) -> None:
+        """Put the sharp shape back where it starts and take every stroke away, as one step.
+
+        The sliders and the bokeh are left as they are.
+        """
+        depth = self._geometry.depth
+        fresh = replace(
+            DEFAULT_DEPTH,
+            amount=depth.amount,
+            transition=depth.transition,
+            bokeh=depth.bokeh,
+            highlights=depth.highlights,
+        ).with_shape(depth.shape)
+        self.set_depth(fresh)
 
     # -- liquify (PLAN.md 2.11 and 3.16) ---------------------------------
 
@@ -2577,16 +2754,24 @@ class Controller(QObject):
         """Return the geometry a preview for *purpose* is framed with.
 
         The photo as it was found keeps its crop (PLAN.md 3.3) but not its
-        mended spots or its liquify: comparing is how the mending and the
-        reshaping are checked (A-32, L-08). While the face's points are
-        placed by hand the photo is shown without liquify (L-12).
+        mended spots, its liquify or its depth of field: comparing is how
+        the mending, the reshaping and the blur are checked (A-32, L-08,
+        D-10). While the face's points are placed by hand the photo is
+        shown without liquify (L-12).
         """
         shape = self._geometry
         if purpose == _BEFORE and (
-            shape.spots or shape.liquify or not shape.face_shape.is_default
+            shape.spots
+            or shape.liquify
+            or not shape.face_shape.is_default
+            or shape.depth.blurs
         ):
             return replace(
-                shape, spots=(), liquify=(), face_shape=liquify.DEFAULT_FACE_SHAPE
+                shape,
+                spots=(),
+                liquify=(),
+                face_shape=liquify.DEFAULT_FACE_SHAPE,
+                depth=DEFAULT_DEPTH,
             )
         if self._editing_faces and shape.liquified:
             # The face's points are placed on the photo as it is (L-12).
@@ -2618,11 +2803,14 @@ class Controller(QObject):
         whole = self._cropping
         key = (path, long_edge, geometry.frame_key(frame), whole, (path, frame.lens) in self._faces)
         skin = geometry.framed_skin(frame, sized.size, crop=not whole)
+        depth = geometry.framed_depth(frame, sized.size, crop=not whole)
         on_screen = self._frame_of(path)
         detailed = self._detailed
         kept_grain = self._grain
         kept_body = self._body
         kept_mist = self._mist
+        kept_light = self._depth_light
+        kept_depth = self._depth
         corrected = self._corrected_lens
 
         def develop_preview(
@@ -2634,6 +2822,7 @@ class Controller(QObject):
             token: object = key,
             look: Look | None = self._look_for(values),
             skin: SkinRange | None = skin,
+            depth: DepthOfField | None = depth,
         ) -> NDArray[np.uint8]:
             """Develop the whole photo, on whichever thread takes this on."""
             framed = self._framed.get(
@@ -2642,14 +2831,14 @@ class Controller(QObject):
             )
             assert framed is not None  # the maker always returns a photo
             # Kept from one stroke of the portrait brush to the next; the
-            # newest skin range is put on it here.
-            framed = replace(framed, skin=skin)
+            # newest skin range and depth of field are put on it here.
+            framed = replace(framed, skin=skin, depth=depth)
             sharpened = detailed.get(
                 (token, pipeline.detail_key(values)),
                 lambda: pipeline.with_detail(framed, values),
             )
             assert sharpened is not None  # the maker always returns a photo
-            sharpened = replace(sharpened, skin=skin)
+            sharpened = replace(sharpened, skin=skin, depth=depth)
             grain = (
                 kept_grain.get(token, lambda: pipeline.grain_field(framed))
                 if pipeline.has_grain(values)
@@ -2668,9 +2857,25 @@ class Controller(QObject):
                 if pipeline.has_mist(values)
                 else None
             )
+            blur = None
+            if pipeline.has_depth(framed):
+                light = kept_light.get(
+                    (token, pipeline.depth_light_key(values, depth)),
+                    lambda: pipeline.depth_light(framed, values),
+                )
+                blur = kept_depth.get(
+                    (token, pipeline.depth_key(values, depth)),
+                    lambda: pipeline.depth_field(framed, values, light),
+                )
             return cm.apply_display_transform(
                 pipeline.develop(
-                    sharpened, values, look=look, grain=grain, body=body, mist=mist
+                    sharpened,
+                    values,
+                    look=look,
+                    grain=grain,
+                    body=body,
+                    mist=mist,
+                    depth=blur,
                 ),
                 screen,
             )

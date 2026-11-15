@@ -2448,11 +2448,114 @@ def test_the_portrait_and_the_watermark_take_turns(
 def test_the_portrait_keys(window: MainWindow) -> None:
     handlers = window.shortcut_handlers()
     assert handlers["shortcut.portrait"] == window.toggle_portrait
-    assert handlers["shortcut.portrait_show"] == window.toggle_portrait_showing
     assert [tr(key) for key in (
         "shortcut.portrait", "shortcut.portrait_add", "shortcut.portrait_remove",
         "shortcut.portrait_show",
     )] == ["P", "B", "E", "M"]
+
+
+# -- the depth of field (PLAN.md 2.13, 3.18) ---------------------------------
+
+
+def test_the_depth_of_field_needs_a_photo(window: MainWindow) -> None:
+    window.toggle_depth()
+    assert not window.in_depth
+    assert not window.toolbar.depth_button.isChecked()
+
+
+def test_the_depth_of_field_takes_the_inspectors_place_and_keeps_the_history(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.toggle_depth()
+    qt_app.processEvents()  # type: ignore[attr-defined]
+    assert window.in_depth and window.toolbar.depth_button.isChecked()
+    assert window.depth_panel.isVisible() and not window.inspector.isVisible()
+    canvas = window.preview.canvas
+    assert canvas.depth.open and not canvas.depth.active  # the brush waits
+
+    window.depth_panel.rows()["amount"].set_value(70.0, announce=True)
+    assert window.controller.depth.amount == 70.0
+    assert window.toolbar.undo_button.isEnabled()
+
+    window.toggle_depth_brush("sharp")
+    assert canvas.depth.active
+    window.on_escape()  # puts the brush down first
+    assert window.in_depth and not canvas.depth.active
+    window.on_escape()
+    qt_app.processEvents()  # type: ignore[attr-defined]
+    assert not window.in_depth and not canvas.depth.open
+    assert window.inspector.isVisible() and not window.depth_panel.isVisible()
+
+
+def test_the_shape_and_the_brush_on_the_photo_reach_the_controller(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    window.enter_depth()
+    overlay = window.preview.canvas.depth
+    overlay.focus_changed.emit((0.3, 0.4), (0.3, 0.2), 0.5, False)
+    shown = window.controller.depth_on_screen()
+    assert shown.centre == pytest.approx((0.3, 0.4), abs=1e-6)
+    assert shown.ratio == 0.5
+
+    window.toggle_depth_brush("blur")
+    overlay.stroke_painted.emit([(0.4, 0.5), (0.6, 0.5)])
+    depth = window.controller.depth
+    assert len(depth.strokes) == 1 and not depth.strokes[0].adding
+    assert window.depth_panel.reset_button.isEnabled()
+    window.controller.undo()
+    assert window.controller.depth.strokes == ()
+
+
+def test_the_depth_of_field_and_the_other_modes_take_turns(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    handlers = window.shortcut_handlers()
+    window.enter_depth()
+    window.enter_portrait()
+    assert window.in_portrait and not window.in_depth
+    window._on_shortcut("shortcut.depth", handlers["shortcut.depth"])
+    assert window.in_depth and not window.in_portrait
+    window.enter_liquify()
+    assert window.in_liquify and not window.in_depth
+    window.enter_depth()
+    window.enter_watermark()
+    assert window.in_watermark and not window.in_depth
+    window._on_shortcut("shortcut.depth", handlers["shortcut.depth"])
+    assert window.in_depth and not window.in_watermark
+
+
+def test_the_brush_keys_follow_the_mode_that_is_open(
+    window: MainWindow, tmp_path: object, qt_app: object
+) -> None:
+    _open_photos(window, tmp_path, qt_app)
+    _wait_for_photo(window, qt_app)
+    handlers = window.shortcut_handlers()
+    assert tr("shortcut.depth") == "D"
+
+    def press(key: str) -> None:
+        window._on_shortcut(key, handlers[key])
+
+    window.enter_depth()
+    press("shortcut.portrait_add")
+    assert window.depth_panel.brush == "sharp"
+    press("shortcut.portrait_remove")
+    assert window.depth_panel.brush == "blur"
+    press("shortcut.portrait_show")
+    assert window.depth_panel.showing
+    press("shortcut.crop")  # the editing panel's keys do nothing here
+    assert window.in_depth and not window.controller.cropping
+
+    window.enter_portrait()
+    press("shortcut.portrait_add")
+    assert window.portrait_panel.brush == "add"
+    press("shortcut.portrait_show")
+    assert window.portrait_panel.showing
 
 
 # -- liquify (PLAN.md 2.11, 3.16) --------------------------------------------

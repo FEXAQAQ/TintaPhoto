@@ -225,6 +225,18 @@ SKIN_REMOVE_WASH: Final[str] = "#000000"
 SKIN_REMOVE_ALPHA: Final[int] = 112
 #: Half the length of the + or − drawn in the brush's middle.
 SKIN_BRUSH_MARK: Final[int] = 4
+#: The depth of field (PLAN.md 3.18): what is blurred is shown as a blue
+#: wash over the photo, a mark that says something about the photo as the
+#: portrait's rose wash does, in a colour of its own so the two are never
+#: mistaken. The sharp shape's handles are rings this many pixels across,
+#: filled while held, and the pointer takes hold of one this near it.
+DEPTH_RANGE: Final[str] = "#4C8DFF"
+DEPTH_RANGE_ALPHA: Final[int] = 120
+DEPTH_HANDLE_SIZE: Final[int] = 12
+DEPTH_HANDLE_GRAB: Final[int] = 12
+#: The range is worked out for the screen at no more than this long edge:
+#: it is soft everywhere but at the brush's edge, and a few milliseconds.
+DEPTH_RANGE_LONG_EDGE: Final[int] = 512
 #: The liquify brush (PLAN.md 3.16): the spot brush's circle with a dot in
 #: its middle, this many pixels across, where the brush pushes from.
 LIQUIFY_BRUSH_DOT: Final[int] = 4
@@ -655,7 +667,8 @@ QToolTip {{
     padding: {SPACE_XS}px {SPACE_SM}px;
 }}
 
-#Inspector, #CollagePanel, #WatermarkPanel, #PortraitPanel, #LiquifyPanel, #SplitPanel {{
+#Inspector, #CollagePanel, #WatermarkPanel, #PortraitPanel, #LiquifyPanel, #SplitPanel,
+#DepthPanel {{
     background-color: {BG_PANEL};
     border-left: {BORDER_WIDTH}px solid {BORDER};
 }}

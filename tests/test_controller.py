@@ -2546,6 +2546,75 @@ def test_the_range_is_kept_by_both_resets_and_cleared_by_its_own(
     assert not controller.skin.auto and len(controller.skin.strokes) == 1
 
 
+# -- the depth of field (PLAN.md 2.13, 3.18) ---------------------------------
+
+
+def _speckled_folder(tmp_path: Path) -> Path:
+    """Return a folder holding one photo of grey speckles, which a blur smooths."""
+    photos = tmp_path / "speckled"
+    photos.mkdir()
+    rng = np.random.default_rng(3)
+    grey = rng.integers(40, 200, (160, 240), dtype=np.uint8)
+    Image.fromarray(np.repeat(grey[..., None], 3, axis=2)).save(photos / "a.jpg", quality=95)
+    return photos
+
+
+def test_the_depth_of_field_blurs_the_preview_as_one_step_and_is_stored(
+    controller: Controller, tmp_path: Path
+) -> None:
+    photo, before = _shown(controller, _speckled_folder(tmp_path))
+    controller.set_depth_value("amount", 100.0)
+    after = _wait_for_preview(controller)
+
+    corner = (slice(0, 30), slice(0, 30))
+    assert after.image[corner].std() < 0.5 * before.image[corner].std()
+    middle = (slice(75, 85), slice(115, 125))
+    assert np.array_equal(after.image[middle], before.image[middle])
+
+    controller.flush()
+    stored = sidecar.read(photo, controller.state, controller._store)
+    assert stored is not None and stored.geometry.depth.amount == 100.0
+    controller.undo()
+    assert controller.depth.amount == 0.0
+
+
+def test_the_sharp_shape_is_placed_where_it_is_drawn_on_screen(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _shown(controller, _speckled_folder(tmp_path))
+    controller.set_geometry(replace(controller.geometry, quarter_turns=1))
+    controller.set_depth_value("amount", 60.0)
+    controller.set_depth_focus((0.3, 0.4), (0.3, 0.2), 0.5)
+
+    shown = controller.depth_on_screen()
+    assert shown.centre == pytest.approx((0.3, 0.4), abs=1e-6)
+    assert shown.handle == pytest.approx((0.3, 0.2), abs=1e-6)
+    assert shown.ratio == 0.5
+    blurred = controller.depth_shown(64)
+    assert blurred is not None
+    height, width = blurred.shape
+    assert blurred[round(0.4 * height), round(0.3 * width)] == 0
+    assert blurred[height - 1, width - 1] == 255
+
+
+def test_the_depth_of_field_brush_and_its_reset(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _shown(controller, _speckled_folder(tmp_path))
+    controller.set_depth_value("amount", 80.0)
+    controller.add_depth_stroke([(0.1, 0.1), (0.15, 0.1)], 0.05, sharp=True)
+    controller.set_depth_shape("band")
+    controller.reset_crop()
+    controller.reset()
+    assert controller.depth.shape == "band" and len(controller.depth.strokes) == 1
+
+    controller.reset_depth_range()
+    depth = controller.depth
+    assert depth.strokes == () and depth.shape == "band" and depth.amount == 80.0
+    controller.undo()
+    assert len(controller.depth.strokes) == 1
+
+
 # -- liquify (PLAN.md 2.11, 3.16) --------------------------------------------
 
 

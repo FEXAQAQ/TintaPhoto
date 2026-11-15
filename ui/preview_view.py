@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
 from app.i18n import tr
 from ui import native, theme
 from ui.crop_overlay import CropOverlay
+from ui.depth_overlay import DepthOverlay
 from ui.spot_overlay import SpotOverlay
 from ui.face_overlay import FaceOverlay
 from ui.liquify_overlay import LiquifyOverlay
@@ -154,6 +155,10 @@ class PhotoCanvas(QWidget):
         #: The liquify brush (PLAN.md 3.16); it takes the click while liquify
         #: is open, and panning goes to the space bar.
         self.liquify = LiquifyOverlay(self)
+        #: The depth of field's sharp shape and brush (PLAN.md 3.18). A press
+        #: on the shape drags it, the brush paints when it is taken up;
+        #: anywhere else still pans.
+        self.depth = DepthOverlay(self)
         #: The face's points while they are placed by hand (L-12). A press
         #: on a point drags it; anywhere else still pans.
         self.faces = FaceOverlay(self)
@@ -707,6 +712,7 @@ class PhotoCanvas(QWidget):
         painter.setOpacity(1.0)
         self.crop.paint(painter, photo)
         self.skin.paint(painter, photo)
+        self.depth.paint(painter, photo)
         self.liquify.paint(painter, photo)
         self.faces.paint(painter, photo)
         self.spots.paint(painter, photo)
@@ -775,6 +781,10 @@ class PhotoCanvas(QWidget):
         if self._skin_has_the_click() and self.skin.press(event.position(), self.photo_rect()):
             self.update()
             return
+        if self._depth_has_the_click() and self.depth.press(event.position(), self.photo_rect()):
+            self._update_cursor(event.position())
+            self.update()
+            return
         if self._faces_have_the_click() and self.faces.press(event.position(), self.photo_rect()):
             self._update_cursor(event.position())
             self.update()
@@ -804,6 +814,10 @@ class PhotoCanvas(QWidget):
                 self.update()
             if self.skin.active:
                 self.skin.move(event.position(), self.photo_rect())
+                self.update()
+            if self.depth.open and self.depth.move(event.position(), self.photo_rect()):
+                self.update()
+            elif self.depth.active:
                 self.update()
             if self.liquify.active:
                 self.liquify.move(event.position(), self.photo_rect())
@@ -838,6 +852,8 @@ class PhotoCanvas(QWidget):
             self.update()
         if self._panning_from is None and self.skin.release(event.position(), self.photo_rect()):
             self.update()
+        if self._panning_from is None and self.depth.release(event.position(), self.photo_rect()):
+            self.update()
         if self._panning_from is None and self.liquify.release(
             event.position(), self.photo_rect()
         ):
@@ -860,6 +876,8 @@ class PhotoCanvas(QWidget):
             or self._picking
             or self.spots.active
             or self.skin.active
+            or self.depth.active
+            or self.depth.over(event.position(), self.photo_rect())
             or self.liquify.active
             or (self.faces.active and self.faces.over_handle(event.position(), self.photo_rect()))
         ):
@@ -923,6 +941,10 @@ class PhotoCanvas(QWidget):
         """Return whether a click belongs to the portrait brush right now."""
         return self.skin.active and not self._space_held
 
+    def _depth_has_the_click(self) -> bool:
+        """Return whether a click belongs to the depth of field's shape or brush right now."""
+        return self.depth.open and not self._space_held
+
     def _liquify_has_the_click(self) -> bool:
         """Return whether a click belongs to the liquify brush right now."""
         return self.liquify.active and not self._space_held
@@ -945,6 +967,9 @@ class PhotoCanvas(QWidget):
             self.update()
         if self.skin.active:
             self.skin.set_pointer(None)
+            self.update()
+        if self.depth.open and not self.depth.painting:
+            self.depth.leave()
             self.update()
         if self.liquify.active and not self.liquify.painting:
             self.liquify.set_pointer(None)
@@ -987,8 +1012,18 @@ class PhotoCanvas(QWidget):
         ):
             self.setCursor(Qt.CursorShape.SizeAllCursor)
             return
-        if self._skin_has_the_click() or self._liquify_has_the_click():
+        if (
+            self._skin_has_the_click()
+            or self._liquify_has_the_click()
+            or (self._depth_has_the_click() and self.depth.active)
+        ):
             self.setCursor(Qt.CursorShape.CrossCursor)
+            return
+        if self._depth_has_the_click() and (
+            self.depth.dragging
+            or (point is not None and self.depth.over(point, self.photo_rect()))
+        ):
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
             return
         if self.watermark.active and (
             self.watermark.dragging

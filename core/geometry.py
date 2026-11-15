@@ -39,6 +39,7 @@ from core import healing
 from core import lens as lens_module
 from core import liquify as liquify_module
 from core.decoder import DecodedPhoto
+from core.depth_of_field import DEFAULT_DEPTH, DepthOfField
 from core.faces import Face
 from core.healing import Spot
 from core.lens import DEFAULT_SETTINGS, LensSettings
@@ -277,6 +278,10 @@ class Geometry:
     #: were set on, held for the same reasons; the strokes are laid over
     #: what they make.
     face_shape: liquify_module.FaceShape = liquify_module.DEFAULT_FACE_SHAPE
+    #: The depth of field (PLAN.md 2.13): the amount of blur, the shape that
+    #: stays sharp and the brush's strokes, held like the skin and for its
+    #: reasons.
+    depth: DepthOfField = DEFAULT_DEPTH
 
     def __post_init__(self) -> None:
         """Name the ratio the way round the crop is (PLAN.md 3.2).
@@ -364,6 +369,7 @@ class Geometry:
             "skin": self.skin.to_dict(),
             "liquify": liquify_module.strokes_to_list(self.liquify),
             "face_shape": self.face_shape.to_dict(),
+            "depth": self.depth.to_dict(),
         }
 
     @classmethod
@@ -386,6 +392,7 @@ class Geometry:
             skin=SkinRange.from_dict(data.get("skin")),
             liquify=liquify_module.strokes_from_list(data.get("liquify")),
             face_shape=liquify_module.FaceShape.from_dict(data.get("face_shape")),
+            depth=DepthOfField.from_dict(data.get("depth")),
         )
 
 
@@ -1035,6 +1042,9 @@ def apply(photo: DecodedPhoto, geometry: Geometry | None, crop: bool = True) -> 
         )
         if photo.skin != skin:
             photo = replace(photo, skin=skin)
+        depth = _depth_or_none(geometry.depth)
+        if photo.depth != depth:
+            photo = replace(photo, depth=depth)
     if geometry is None or geometry.is_default:
         return photo
     if (
@@ -1105,14 +1115,20 @@ def apply(photo: DecodedPhoto, geometry: Geometry | None, crop: bool = True) -> 
         faces = tuple(moved_faces)
 
     skin = photo.skin
-    if skin is not None and skin.strokes:
+    depth = photo.depth
+    if (skin is not None and skin.strokes) or depth is not None:
         matrix, _frame = _frame_matrix(source_size, geometry, crop)
-        skin = skin.mapped(matrix, source_size, (image.shape[1], image.shape[0]))
+        shown = (image.shape[1], image.shape[0])
+        if skin is not None and skin.strokes:
+            skin = skin.mapped(matrix, source_size, shown)
+        if depth is not None:
+            depth = depth.mapped(matrix, source_size, shown)
 
     return replace(
         photo,
         faces=faces,
         skin=skin,
+        depth=depth,
         image=np.ascontiguousarray(image),
         clipped=np.ascontiguousarray(clipped),
         encoded=None if encoded is None else np.ascontiguousarray(encoded),
@@ -1151,18 +1167,45 @@ def framed_skin(
     return skin.mapped(matrix, size, frame)
 
 
-def frame_key(geometry: Geometry) -> Geometry:
-    """Return *geometry* without its skin range, which does not change the frame.
+def framed_depth(
+    geometry: Geometry, size: tuple[int, int], crop: bool = True
+) -> DepthOfField | None:
+    """Return *geometry*'s depth of field as it lies on the frame :func:`apply` makes.
 
-    What a caller keeping framed photos keys them by, so that a stroke of
-    the portrait brush does not throw away the photo it was painted on.
+    As :func:`framed_skin`, for the depth of field (PLAN.md 2.13): a caller
+    keeping framed photos puts the newest one on them with this.
     """
-    return geometry if geometry.skin.is_default else replace(geometry, skin=DEFAULT_RANGE)
+    depth = _depth_or_none(geometry.depth)
+    if depth is None or geometry.is_default:
+        return depth
+    if not crop and geometry.quarter_turns == 0 and not geometry.mirrored and geometry.angle == 0.0:
+        return depth
+    matrix, frame = _frame_matrix(size, geometry, crop)
+    return depth.mapped(matrix, size, frame)
+
+
+def frame_key(geometry: Geometry) -> Geometry:
+    """Return *geometry* without its skin range and depth of field.
+
+    Neither changes the frame. What a caller keeping framed photos keys them
+    by, so that a stroke of the portrait brush, or the sharp shape of the
+    depth of field moved, does not throw away the photo it was put on.
+    """
+    if not geometry.skin.is_default:
+        geometry = replace(geometry, skin=DEFAULT_RANGE)
+    if geometry.depth != DEFAULT_DEPTH:
+        geometry = replace(geometry, depth=DEFAULT_DEPTH)
+    return geometry
 
 
 def _skin_or_none(skin: SkinRange) -> SkinRange | None:
     """Return *skin*, or ``None`` for the default, which is what a photo carries then."""
     return None if skin.is_default else skin
+
+
+def _depth_or_none(depth: DepthOfField) -> DepthOfField | None:
+    """Return *depth*, or ``None`` when it blurs nothing, which is what a photo carries then."""
+    return depth if depth.blurs else None
 
 
 def _turned_points(

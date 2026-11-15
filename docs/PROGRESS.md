@@ -15,7 +15,8 @@
   **PLAN.md 已補上濾鏡**（2.2、3.1、6、7.1.5、8、13.3 節），文件也不再出現相機廠牌。
   F1 完成：三個濾鏡已從素材擬合出來，同相機 ΔE 0.78 ～ 0.92、
   跨相機 1.56 ～ 1.73。見「濾鏡功能 F1」、「濾鏡功能 F2」
-- **最後更新**：2026-11-13（最後一項工作：發行 0.48.0——`tools/build_release.py` 產出安裝檔與 zip，main 快轉到 develop，打 tag `v0.48.0`，GitHub Releases 附上兩個檔案。見文末「發行 0.48.0」）
+- **最後更新**：2026-11-16（最後一項工作：景深（階段 23），0.49.0。使用者問有沒有景深、請我規劃；我提「先手動、之後再接深度模型」，解釋手動是什麼之後使用者說「好的」。見文末「景深（階段 23）」）
+  在此之前：2026-11-13（發行 0.48.0——`tools/build_release.py` 產出安裝檔與 zip，main 快轉到 develop，打 tag `v0.48.0`，GitHub Releases 附上兩個檔案。見文末「發行 0.48.0」）
   在此之前：2026-11-12（最後一項工作：一圖切割（階段 22），0.48.0。使用者要把一張照片切成好幾張；看過「放在匯出對話框」與「獨立模式」兩種做法，選了獨立模式、但切線平均不能拖，看過規劃後「照規劃動工」。見文末「一圖切割（階段 22）」）
   在此之前：修圖時也顯示浮水印（W-13），0.47.0。使用者要按「完成」後浮水印留在照片上、調色不影響它；我提做法，使用者「照建議動工」。見文末「修圖時顯示浮水印」）
   在此之前：拼貼四宮格，0.46.0。使用者要在分割加四宮格、選了就不能選張數；我提做法，使用者「照建議做」。見文末「拼貼四宮格」）
@@ -5900,3 +5901,44 @@ app 樣式表的通用 `QPushButton` 最小高度會把標籤撐成 27 px，所�
 - 還沒做：實機看切割模式的外觀與實際切圖發社群（階段 22 最後兩項）；切線不能拖、不能多張一起切（使用者這次不要）。
 
 **發行 0.48.0（2026-11-13）**：使用者說「幫我上版，想再包一包 release」。`tools/build_release.py`：程式 62.5 秒、安裝檔 49.2 秒、zip 9.6 秒；`TintaPhoto-0.48.0-setup.exe` 57 MB、`TintaPhoto-0.48.0-windows-x64.zip` 84 MB。以暫存的 APPDATA 啟動打包好的程式，日誌寫出「Starting TintaPhoto 0.48.0」且持續執行。README 中英文補上一圖切割、拼貼四宮格與新的輪播說明，快捷鍵表的拼貼改為 `C` 並加上切割 `S`。main 從 0.41.0 快轉到 develop，tag `v0.48.0`，GitHub Releases 的說明沿用 0.41.0 的格式，「這個版本」整理 0.41.0 之後的重點。
+
+## 景深（階段 23，D-01 ～ D-12，0.49.0，2026-11-16）
+
+使用者問「目前有景深功能嗎」（沒有），接著請我規劃。我提了兩期：先手動（橢圓／平面帶＋筆刷），之後再接估計遠近的模型；
+使用者問「手動是什麼」，我說明之後使用者回「好的」。快捷鍵 D 是規劃時一起提的，使用者沒有反對。
+
+- 決定：獨立的景深模式，做法照人像模式（工具列「液化」右邊、D、復原照常、範圍記在 `geometry` 裡、不進複製貼上與預設集）。
+  模糊程度、散景（圓形／六角形）、亮點強化、清楚範圍（橢圓／平面）、過渡寬度、「保持清楚」「設為模糊」筆刷、顯示範圍。
+  規劃時提過的「自動保護人臉」沒有做：找臉只在用到人像滑桿時才跑，景深的橢圓加筆刷已經能圍住人；要加時再提。
+  B／E／M 與人像共用（兩個模式不會同時開著），由 `_brush_key()`、`_show_key()` 分派；Qt 同一個鍵不能註冊兩次。
+- `core/depth_of_field.py`（新）：`DepthOfField`（滑桿、形狀、兩個點、比例、散景、筆跡，筆跡沿用 `SkinStroke`，
+  `adding` 是保持清楚）、`outside()`（到形狀的距離，橢圓用一階近似）、`blurriness()`（smoothstep 加上依序的筆跡）、
+  `mapped()`（借 `SkinRange.mapped()` 換算筆跡）。
+- `core/pipeline.py`：步驟 6.4。常數 `DEPTH_*`；`depth_light()`（原解析度轉工作空間、亮點權重，整數倍縮到長邊約 1024）、
+  `depth_field()`（5 層，各自縮到半徑約 6 px 再以圓盤／六角形核做加權平均，權重＝模糊值×亮點權重，加 2% 不加權的平均墊底）、
+  `apply_depth()`（帶子裡依模糊值在相鄰兩層間內插，清楚處用原像素）、`depth_axes()`／`sample_depth()`（以畫面比例取樣，
+  局部與整張一致）。`develop()` 多一個 `depth` 參數；`is_passthrough()` 看 `photo.depth`。
+  速度（2560 代理圖）：光約 0.2 秒、各層約 0.05 秒、`develop()` 多約 0.13 秒。第一版各層在 2048 上做、核半徑 10，
+  要 0.5 秒，改成 1024／6 後畫面看不出差別。
+- `core/geometry.py`：`Geometry.depth`、`framed_depth()`、`frame_key()` 也去掉景深；`apply()` 把換算好的景深掛在照片上。
+  `core/decoder.py`：`DecodedPhoto.depth`。`core/edit_state.py`：景深和預設不同就算調整過。`core/exporter.py`：有模糊就不直接複製原檔。
+- `app/controller.py`：`depth`、`depth_on_screen()`、`depth_shown()`、`set_depth()`／`set_depth_value()`／`set_depth_shape()`／
+  `set_depth_bokeh()`／`set_depth_focus()`／`add_depth_stroke()`／`reset_depth_range()`；整張與放大檢視各有
+  `_depth_light`、`_depth` 快取；前後對比不套用景深；裁切分頁的重設保留景深。座標換算不經過液化（`_depth_frame()`），和管線一致。
+- `ui/depth_panel.py`、`ui/depth_overlay.py`（新）；`ui/preview_view.py` 加 `canvas.depth`；`ui/toolbar.py` 加 `depth_button`；
+  `resources/icons/aperture.svg`（自繪，圓裡六片葉片，Lucide 風格；一開始照抄了 Lucide 的 aperture，發現 THIRD_PARTY_NOTICES 寫
+  「不含 Lucide 檔案」後改成自己畫）；`ui/theme.py` 加 `DEPTH_RANGE`（藍）、`DEPTH_RANGE_ALPHA`、`DEPTH_HANDLE_SIZE`、
+  `DEPTH_HANDLE_GRAB`、`DEPTH_RANGE_LONG_EDGE`、面板背景樣式；`ui/shortcuts.py` 加 D。
+- `ui/main_window.py`：`enter_depth()`／`leave_depth()`／`toggle_depth()`，其他模式進入時先離開景深；Esc 先放下筆刷；
+  Tab、調整面板的快捷鍵同人像；景深模式不顯示修圖時的浮水印；`[ ]` 改景深筆刷。
+- 翻譯：`toolbar.depth`、`shortcut.depth`、`depth.*`。
+- 測試：`tests/test_depth_of_field.py`（22 項：存讀、形狀、筆跡順序、轉向裁切、清楚處逐位元不變、主體不暈進背景、
+  亮點、六角形、曝光、局部＝整張、代理圖≈原尺寸、直通與複製原檔）、`tests/test_depth_panel.py`（面板與照片上的拖曳、塗抹）、
+  `tests/test_controller.py` 3 項、`tests/test_main_window.py` 5 項；`test_the_portrait_keys` 不再比對 M 的處理函式（改由分派）。
+- 參考影像比對（`tests/test_reference.py`）通過：沒開景深時顏色完全沒變。
+- 離屏截圖看過：橢圓與平面帶、控制點、虛線、藍色範圍、玩具樣張上的散景；中文在離屏環境沒有字型（方塊），版面以英文 100%／150% 檢查。
+- PLAN.md：第 1 節範圍與「不做的事」、R-12、新 2.13、第 3 節與 3.1、新 3.18、第 5 節結構、第 6 節開頭與新步驟 6.4、7.1（`depth`）、
+  第 8 節快捷鍵、新階段 23、第 12 節（自動深度、係數待實機確認）。
+- 已知限制：液化過的照片，範圍不跟著液化的位移走；係數是目視訂的；完整 pytest 偶爾在 `test_controller` 中途 access violation
+  （見 0.33.0 那段的紀錄，背景執行緒列資料夾、主執行緒垃圾回收時），這次又遇到，原因仍未找到。
+- 還沒做：實機看景深的外觀與手感（階段 23 最後三項）；自動深度（第 12 節）。

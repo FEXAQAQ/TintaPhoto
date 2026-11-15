@@ -29,6 +29,7 @@ from PIL import Image, ImageCms, UnidentifiedImageError
 from core import color_management as cm
 from core import embedded_lens
 from core import lens as lens_module
+from core.depth_of_field import DepthOfField
 from core.faces import Face
 from core.lens import LensProfile, LensShot
 from core.skin_range import SkinRange
@@ -154,6 +155,10 @@ class DecodedPhoto:
     #: step from the photo's geometry and moved with the frame like the
     #: faces; ``None`` is the skin found by itself, with no strokes.
     skin: SkinRange | None = None
+    #: The depth of field (PLAN.md 2.13), in fractions of this photo's own
+    #: frame, set by the geometry step and moved with the frame like the
+    #: skin; ``None`` blurs nothing.
+    depth: DepthOfField | None = None
 
     @property
     def size(self) -> tuple[int, int]:

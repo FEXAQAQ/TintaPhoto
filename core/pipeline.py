@@ -28,10 +28,12 @@ import numpy as np
 from numpy.typing import NDArray
 
 from core import color_management as cm
+from core import depth_of_field
 from core import faces as faces_module
 from core import geometry as geometry_module
 from core import skin_range
 from core.decoder import PROXY_LONG_EDGE, ColorSpace, DecodedPhoto
+from core.depth_of_field import DepthOfField
 from core.filters import Look
 from core.geometry import Geometry, Window
 from core.edit_state import EditState
@@ -173,6 +175,41 @@ VIGNETTE_MAX_EV: Final[float] = 2.0
 #: How far in the midpoint may bring the falloff. Short of the corner itself,
 #: because a transition has to have somewhere to happen.
 VIGNETTE_MIDPOINT_LIMIT: Final[float] = 0.99
+
+# -- depth of field (PLAN.md section 6 step 6.4) --------------------------
+#: The widest the blur gets - its radius at the amount slider's 100, all the
+#: way out of focus - as a share of the long edge: a portrait lens wide open
+#: blurs a background a few metres behind the subject about this much.
+#: Starting values, chosen by eye (PLAN.md 12).
+DEPTH_BLUR_MAX: Final[float] = 0.03
+#: The blur is made as a few layers, each the whole frame blurred by its own
+#: radius - these shares of the widest - and each pixel takes the two
+#: around how blurred it is, mixed; between sharp and the first, the sharp
+#: pixel and the first.
+DEPTH_LAYERS: Final[tuple[float, ...]] = (0.125, 0.25, 0.5, 0.75, 1.0)
+#: Each layer is blurred on a copy shrunk until its radius is about this
+#: many pixels: a blur that wide carries nothing finer, and the disc still
+#: keeps its edge.
+DEPTH_LAYER_RADIUS: Final[float] = 6.0
+#: The light is first shrunk to a copy no longer than this, by whole pixels
+#: averaged so that no small lamp is lost before its light is spread.
+DEPTH_FIELD_LONG_EDGE: Final[int] = 1024
+#: Out of focus, a bright point of light becomes a bright disc. A photo
+#: holds the light of a lamp only up to white, so light this many stops
+#: above the scene's middle grey and brighter (fully at the second) weighs
+#: up to 2^DEPTH_HIGHLIGHT_EV times as much in the blur at the highlights
+#: slider's 100. Judged before the exposure slider, as the mist's knee is.
+DEPTH_HIGHLIGHT_EV: Final[float] = 4.0
+DEPTH_KNEE_FROM_EV: Final[float] = 1.0
+DEPTH_KNEE_TO_EV: Final[float] = 2.5
+#: The sharp parts are left out of the blur, so the background does not
+#: take on a halo of the subject's colour. Where next to nothing blurred is
+#: near - a pixel just outside the sharp shape, ringed by it - this much of
+#: the blur with them left in steps in, so there is always something to show.
+DEPTH_FALLBACK_WEIGHT: Final[float] = 0.02
+#: The disc and the hexagon are drawn this many times larger and shrunk, so
+#: their edges are smooth however small they are.
+DEPTH_KERNEL_SUPERSAMPLE: Final[int] = 4
 
 # -- black mist (PLAN.md section 6 step 6.5) ------------------------------
 #: A diffusion filter in front of the lens spreads a share of the light that
@@ -1508,6 +1545,285 @@ def camera_to_working_space(
 
 
 # --------------------------------------------------------------------------
+# Step 6.4: depth of field
+# --------------------------------------------------------------------------
+#
+# A lens out of focus spreads each point of light into a disc, in linear
+# light and before any tone step, which is why the step comes right after
+# the exposure. The discs are as wide as the photo is out of focus there,
+# which :mod:`core.depth_of_field` says pixel by pixel. Like the mist, the
+# blur reaches far and carries nothing fine, so it is worked out once over
+# the whole frame on small copies - one per layer, each shrunk as far as its
+# own radius allows - and every band, or window, samples its part of them;
+# what stays sharp is the band's own pixels. Spreading light is linear, so
+# the layers are made without the exposure slider and scaled by it.
+
+
+@dataclass(frozen=True)
+class DepthField:
+    """The blurred light of the depth of field, over a whole frame, at small sizes.
+
+    *layers* are the frame blurred by each of DEPTH_LAYERS of the widest
+    radius, at the camera's exposure of zero, each at a size of its own;
+    *blurred* is how blurred each pixel is
+    (:func:`core.depth_of_field.blurriness`). Each covers the whole frame,
+    whatever its size, which is what lets a window of the frame at another
+    resolution find its part.
+    """
+
+    layers: tuple[NDArray[np.float32], ...]
+    blurred: NDArray[np.float32]
+
+
+def has_depth(photo: DecodedPhoto) -> bool:
+    """Return whether the depth of field blurs anything (PLAN.md 2.13)."""
+    return photo.depth is not None and photo.depth.blurs
+
+
+def depth_key(state: EditState, depth: DepthOfField | None) -> tuple[object, ...]:
+    """Return everything :func:`depth_field` depends on besides the photo.
+
+    The white balance comes before the step and changes the light that is
+    blurred; the exposure does not, nor does any slider after the step.
+    *depth* is the depth of field as it lies on the frame.
+    """
+    return (state.temperature, state.tint, depth)
+
+
+def bokeh_kernel(radius: float, bokeh: str) -> NDArray[np.float32]:
+    """Return the shape out of focus light takes, *radius* pixels from its middle.
+
+    A disc, or a hexagon with a corner either side, drawn larger and shrunk
+    so that its edge is smooth; its peak is one. Its sum does not matter:
+    the blur divides by the same kernel's weight.
+    """
+    reach = max(1, int(np.ceil(radius)))
+    side = 2 * reach + 1
+    unit = DEPTH_KERNEL_SUPERSAMPLE
+    big = np.zeros((side * unit, side * unit), dtype=np.uint8)
+    middle = (side * unit - 1) / 2.0
+    scaled = max(radius, 0.5) * unit
+    # OpenCV draws in fixed point with four bits of fraction.
+    fixed = 16
+    if bokeh == depth_of_field.BOKEH_HEXAGON:
+        corners = np.array(
+            [
+                (
+                    middle + scaled * np.cos(np.pi / 3.0 * index),
+                    middle + scaled * np.sin(np.pi / 3.0 * index),
+                )
+                for index in range(6)
+            ]
+        )
+        cv2.fillPoly(big, [np.round(corners * fixed).astype(np.int32)], 255, cv2.LINE_AA, 4)
+    else:
+        centre = (round(middle * fixed), round(middle * fixed))
+        cv2.circle(big, centre, round(scaled * fixed), 255, -1, cv2.LINE_AA, 4)
+    kernel = cv2.resize(big.astype(np.float32), (side, side), interpolation=cv2.INTER_AREA)
+    return (kernel / max(float(kernel.max()), 1e-6)).astype(np.float32)
+
+
+def depth_weight(
+    image: NDArray[np.float32], is_raw: bool, highlights: float
+) -> NDArray[np.float32]:
+    """Return how much each pixel's light weighs in the blur, from 1 up.
+
+    *image* is linear light in the working space before the exposure slider.
+    Light above the knee weighs up to 2^DEPTH_HIGHLIGHT_EV times as much at
+    *highlights* 100, which is what makes a lamp a bright disc rather than a
+    grey smear once it is out of focus. A wide bright sky weighs the same
+    all over and so stays as bright as it was.
+    """
+    if highlights <= 0.0:
+        return np.ones(image.shape[:2], dtype=np.float32)
+    middle = TONE_MID_INPUT / 2.0**RAW_BASE_EXPOSURE_EV if is_raw else TONE_MID_INPUT
+    stops = np.log2(
+        np.maximum(_luminance(image), np.float32(_EPSILON)) / np.float32(middle)
+    )
+    knee = _smoothstep(
+        (stops - np.float32(DEPTH_KNEE_FROM_EV))
+        / np.float32(DEPTH_KNEE_TO_EV - DEPTH_KNEE_FROM_EV)
+    )
+    return np.exp2(np.float32(DEPTH_HIGHLIGHT_EV * highlights / 100.0) * knee).astype(
+        np.float32
+    )
+
+
+def depth_light_key(state: EditState, depth: DepthOfField | None) -> tuple[object, ...]:
+    """Return everything :func:`depth_light` depends on besides the photo.
+
+    The white balance and how strongly highlights weigh: the sharp shape,
+    the strokes and the amount can all move without it being made again.
+    """
+    return (state.temperature, state.tint, None if depth is None else depth.highlights)
+
+
+def depth_light(photo: DecodedPhoto, state: EditState) -> NDArray[np.float32] | None:
+    """Return the light the depth of field blurs, weighed and shrunk, over all of *photo*.
+
+    Four channels on a copy no longer than about DEPTH_FIELD_LONG_EDGE: the
+    light in the working space at the camera's exposure of zero times its
+    weight (:func:`depth_weight`), and the weight. The light is weighed at
+    the photo's own resolution, so that a small lamp is not averaged away
+    before it is known to be bright, and only then shrunk. ``None`` comes
+    back when the photo blurs nothing.
+    """
+    depth = photo.depth
+    if depth is None or not depth.blurs:
+        return None
+    if photo.is_raw and photo.camera_to_xyz is None:
+        raise ValueError("a RAW photo must carry a camera colour matrix")
+    width, height = photo.size
+    long_edge = max(width, height)
+    factor = max(1, -(-long_edge // DEPTH_FIELD_LONG_EDGE))
+    weight = clipped_weight(photo.clipped, long_edge) if photo.is_raw else None
+    to_working_space = _working_space_step(photo, replace(state, exposure=0.0))
+    image = photo.image
+    rows = band_rows(image.itemsize * int(np.prod(image.shape[1:], dtype=np.int64)))
+    rows = max(1, rows // factor) * factor
+
+    def shrunk(start: int) -> NDArray[np.float32]:
+        """Weigh the light of one band and shrink it, the weight beside it."""
+        stop = min(height, start + rows)
+        part = to_working_space(
+            np.ascontiguousarray(image[start:stop]),
+            None if weight is None else np.ascontiguousarray(weight[start:stop]),
+        )
+        heavy = depth_weight(part, photo.is_raw, depth.highlights)
+        both = np.concatenate([part * heavy[..., None], heavy[..., None]], axis=2)
+        return _shrink_by(both.astype(np.float32), factor)
+
+    return np.concatenate(list(_band_pool().map(shrunk, range(0, height, rows))), axis=0)
+
+
+def depth_field(
+    photo: DecodedPhoto, state: EditState, light: NDArray[np.float32] | None = None
+) -> DepthField | None:
+    """Return the blurred light of the depth of field over the whole of *photo*.
+
+    *photo* is the whole frame at whatever resolution is at hand, carrying
+    its depth of field; the blur is no finer than its narrowest layer, so
+    the proxy says what the full size photo would. *light* is
+    :func:`depth_light` of the same photo, which a caller may have kept;
+    without it it is made here. ``None`` comes back when nothing is blurred.
+
+    Each layer is a weighted average over the bokeh's shape: the weight is
+    how blurred a pixel is - so what stays sharp is left out of the blur
+    around it - times how bright its light is (:func:`depth_weight`).
+    """
+    depth = photo.depth
+    if depth is None or not depth.blurs:
+        return None
+    small = depth_light(photo, state) if light is None else light
+    assert small is not None  # the photo blurs something
+    blurred = depth_of_field.blurriness(depth, depth_of_field.field_size(photo.size))
+    widest = DEPTH_BLUR_MAX * depth.amount / 100.0 * max(small.shape[:2])
+    layers = tuple(
+        _depth_layer(small, blurred, widest * share, depth.bokeh) for share in DEPTH_LAYERS
+    )
+    return DepthField(layers=layers, blurred=blurred)
+
+
+def _depth_layer(
+    small: NDArray[np.float32], blurred: NDArray[np.float32], radius: float, bokeh: str
+) -> NDArray[np.float32]:
+    """Return *small*'s light blurred by *radius* of its pixels, its sharp parts left out.
+
+    *small* holds the weighted light in its first three channels and the
+    weight in the fourth; *blurred* says how blurred each pixel is, at any
+    size. The layer is shrunk first until the radius is DEPTH_LAYER_RADIUS
+    of its pixels.
+    """
+    height, width = small.shape[:2]
+    shrink = max(1.0, radius / DEPTH_LAYER_RADIUS)
+    size = (max(2, round(width / shrink)), max(2, round(height / shrink)))
+    light = (
+        cv2.resize(small, size, interpolation=cv2.INTER_AREA) if size != (width, height) else small
+    )
+    out_of_focus = cv2.resize(blurred, size, interpolation=cv2.INTER_AREA)
+    kernel = bokeh_kernel(radius * size[0] / width, bokeh)
+    near = np.concatenate([light, light * out_of_focus[..., None]], axis=2)
+    spread = np.empty_like(near)
+    # filter2D takes at most four channels at a time.
+    for start in (0, 4):
+        spread[..., start : start + 4] = cv2.filter2D(
+            np.ascontiguousarray(near[..., start : start + 4]),
+            -1,
+            kernel,
+            borderType=cv2.BORDER_REFLECT,
+        )
+    fallback = np.float32(DEPTH_FALLBACK_WEIGHT)
+    light_sum = spread[..., 4:7] + fallback * spread[..., 0:3]
+    weight_sum = spread[..., 7] + fallback * spread[..., 3]
+    return (light_sum / np.maximum(weight_sum, np.float32(1e-12))[..., None]).astype(
+        np.float32
+    )
+
+
+def depth_axes(pane: Window) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+    """Return where each row and each column of *pane* lies, as a share of its frame.
+
+    By pixel centres, so that a plane of any size covering the whole frame
+    can be sampled at them (:func:`sample_depth`). Rows are cut into bands
+    with the photo; columns are the same for every band.
+    """
+    columns = (np.arange(pane.left, pane.right, dtype=np.float64) + 0.5) / pane.frame[0]
+    rows = (np.arange(pane.top, pane.bottom, dtype=np.float64) + 0.5) / pane.frame[1]
+    return rows.astype(np.float32), columns.astype(np.float32)
+
+
+def sample_depth(
+    plane: NDArray[np.float32], rows: NDArray[np.float32], columns: NDArray[np.float32]
+) -> NDArray[np.float32]:
+    """Return *plane*, which covers the whole frame, at the given shares of it."""
+    tall, wide = plane.shape[:2]
+    shape = (rows.size, columns.size)
+    map_x = np.ascontiguousarray(
+        np.broadcast_to(columns[None, :] * np.float32(wide) - np.float32(0.5), shape)
+    )
+    map_y = np.ascontiguousarray(
+        np.broadcast_to(rows[:, None] * np.float32(tall) - np.float32(0.5), shape)
+    )
+    return cv2.remap(plane, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+
+
+def apply_depth(
+    image: NDArray[np.float32],
+    field: DepthField,
+    rows: NDArray[np.float32],
+    columns: NDArray[np.float32],
+    stops: float,
+) -> NDArray[np.float32]:
+    """Blur one band of *image* as the depth of field says (step 6.4).
+
+    *image* is the band after the exposure slider of *stops*, lying at
+    *rows* and *columns* of the frame (:func:`depth_axes`). Each pixel keeps
+    its own light where it is sharp and takes the two layers around how
+    blurred it is, mixed, where it is not.
+    """
+    blurred = sample_depth(field.blurred, rows, columns)
+    if not (blurred > np.float32(0.0)).any():
+        return image
+    gain = np.float32(2.0**stops)
+    result = image.copy()
+    positions = (0.0, *DEPTH_LAYERS)
+    below: NDArray[np.float32] | None = image
+    for index, layer in enumerate(field.layers):
+        low, high = positions[index], positions[index + 1]
+        inside = (blurred > np.float32(low)) & (blurred <= np.float32(high))
+        if not inside.any():
+            below = None
+            continue
+        above = sample_depth(layer, rows, columns) * gain
+        if below is None:
+            below = sample_depth(field.layers[index - 1], rows, columns) * gain
+        share = ((blurred[inside] - np.float32(low)) / np.float32(high - low))[:, None]
+        result[inside] = below[inside] + (above[inside] - below[inside]) * share
+        below = above
+    return result
+
+
+# --------------------------------------------------------------------------
 # Step 6.5: black mist
 # --------------------------------------------------------------------------
 #
@@ -2770,7 +3086,9 @@ def is_passthrough(photo: DecodedPhoto, state: EditState | None = None) -> bool:
     if photo.is_raw or photo.color_space is not ColorSpace.SRGB or photo.encoded is None:
         return False
     if state is None:
-        return True
+        return not has_depth(photo)
+    if has_depth(photo):
+        return False
     if skin_range.reaches_nothing(photo.faces, photo.skin):
         # The face sliders change nothing on a photo without skin for them,
         # so they do not take the photo out of passing through.
@@ -2924,12 +3242,13 @@ def develop(
     grain: NDArray[np.float32] | None = None,
     body: NDArray[np.float32] | None = None,
     mist: MistField | None = None,
+    depth: DepthField | None = None,
 ) -> NDArray[Any]:
     """Turn a decoded photo into 8 bit sRGB, in the order of PLAN.md section 6.
 
     Steps 2.5 to 12, in the order the plan fixes and never another: noise
     reduction and sharpening, white balance, clipped highlights, colour
-    space, exposure, the black mist, highlights and shadows, contrast, the base tone curve,
+    space, exposure, the depth of field, the black mist, highlights and shadows, contrast, the base tone curve,
     the black and white points, the vignette, the film filter, vibrance and
     saturation with the skin's tone, gamut compression, film grain, output;
     the skin is smoothed right after the detail step (2.6). The screen's own profile is
@@ -2971,6 +3290,10 @@ def develop(
     it out for itself - a lamp outside the window still glows into it - so a
     caller developing a window hands it over. Without it the field is worked
     out here from *photo*, as if *photo* were the whole frame.
+
+    *depth* is :func:`depth_field` of the whole frame, for the depth of
+    field the photo carries (``photo.depth``), and is handed over for the
+    mist's reasons.
     """
     if bits not in (EIGHT_BIT, SIXTEEN_BIT):
         raise ValueError(f"an output depth of {bits} bits is not supported")
@@ -3076,6 +3399,19 @@ def develop(
         assert mist is not None  # has_mist says there is one to make
         mist_rows, mist_columns = mist_axes(mist, mist_pane)
 
+    # The depth of field's layers likewise, from the photo as it is by now.
+    depth_rows: NDArray[np.float32] | None = None
+    depth_columns: NDArray[np.float32] | None = None
+    if has_depth(photo):
+        depth_pane = pane
+        if depth is None:
+            depth = depth_field(photo, state)
+            depth_pane = Window.whole(photo.size)
+        assert depth is not None  # has_depth says there is one to make
+        depth_rows, depth_columns = depth_axes(depth_pane)
+    else:
+        depth = None
+
     to_working_space = _working_space_step(photo, state)
     needs_surroundings = state.highlights != 0.0 or state.shadows != 0.0
 
@@ -3087,8 +3423,12 @@ def develop(
         skin_part: NDArray[np.float32] | None,
         whiten_part: NDArray[np.float32] | None,
         mist_part: NDArray[np.float32] | None,
+        depth_part: NDArray[np.float32] | None,
     ) -> NDArray[Any]:
-        """Steps 6.5 to 12, on one band."""
+        """Steps 6.4 to 12, on one band."""
+        if depth_part is not None:
+            assert depth is not None and depth_columns is not None  # set together
+            part = apply_depth(part, depth, depth_part, depth_columns, state.exposure)
         if mist_part is not None:
             assert mist is not None and mist_columns is not None  # set together
             part = apply_mist(
@@ -3132,7 +3472,7 @@ def develop(
         # so the band goes all the way from the sensor's numbers to the
         # finished pixels without the photo being written out in between.
         return in_bands(
-            lambda part, weight_part, local_part, down_part, grain_part, skin_part, whiten_part, mist_part: (
+            lambda part, weight_part, local_part, down_part, grain_part, skin_part, whiten_part, mist_part, depth_part: (
                 to_output(
                     to_working_space(part, weight_part),
                     local_part,
@@ -3141,6 +3481,7 @@ def develop(
                     skin_part,
                     whiten_part,
                     mist_part,
+                    depth_part,
                 )
             ),
             photo.image,
@@ -3151,6 +3492,7 @@ def develop(
             skin,
             whitened,
             mist_rows,
+            depth_rows,
         )
 
     image = in_bands(to_working_space, photo.image, weight)
@@ -3158,7 +3500,9 @@ def develop(
     # into a factor is per pixel, so that happens inside the band and never
     # has to be held for the whole photo at once.
     local = local_brightness(_luminance(image), (pane.frame[1], pane.frame[0]))
-    return in_bands(to_output, image, local, vignette_down, field, skin, whitened, mist_rows)
+    return in_bands(
+        to_output, image, local, vignette_down, field, skin, whitened, mist_rows, depth_rows
+    )
 
 
 def _white_balance_gains(

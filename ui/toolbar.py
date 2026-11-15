@@ -1,7 +1,8 @@
 """The 44 px toolbar across the top of the window (PLAN.md 3.1).
 
 Left: application menu, undo, redo, the info card, the portrait, liquify,
-the collage, cutting the photo into pieces and the watermark. Centre: folder name and file name of the
+the depth of field, the collage, cutting the photo into pieces and the
+watermark. Centre: folder name and file name of the
 current photo. Right: the export button, the only filled button in the whole
 interface.
 """
@@ -51,6 +52,12 @@ class Toolbar(QWidget):
             icons.ICON_LIQUIFY, "toolbar.liquify", "shortcut.liquify", self
         )
         self.liquify_button.setCheckable(True)
+        #: Opens the depth of field (PLAN.md 3.18); checked while it is open,
+        #: like the portrait.
+        self.depth_button = IconButton(
+            icons.ICON_APERTURE, "toolbar.depth", "shortcut.depth", self
+        )
+        self.depth_button.setCheckable(True)
         # Checked while the collage is open: the one place in the toolbar
         # that shows a current state (PLAN.md 3.13).
         self.collage_button = IconButton(
@@ -94,6 +101,7 @@ class Toolbar(QWidget):
         layout.addWidget(self.info_button)
         layout.addWidget(self.portrait_button)
         layout.addWidget(self.liquify_button)
+        layout.addWidget(self.depth_button)
         layout.addWidget(self.collage_button)
         layout.addWidget(self.split_button)
         layout.addWidget(self.watermark_button)
@@ -128,6 +136,7 @@ class Toolbar(QWidget):
             self.redo_button,
             self.portrait_button,
             self.liquify_button,
+            self.depth_button,
             self.collage_button,
             self.split_button,
             self.watermark_button,
