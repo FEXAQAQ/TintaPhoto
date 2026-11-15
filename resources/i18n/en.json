@@ -642,5 +642,7 @@
   "depth.strokes.one": "1 stroke painted",
   "depth.strokes.many": "{count} strokes painted",
   "depth.reset": "Reset range",
-  "depth.leave": "Done"
+  "depth.leave": "Done",
+  "depth.enabled": "Apply depth of field",
+  "depth.hint.off": "Depth of field is off and nothing is blurred. Everything set here is kept: switch it on to bring it back."
 }

@@ -642,5 +642,7 @@
   "depth.strokes.one": "已手動修改 1 筆",
   "depth.strokes.many": "已手動修改 {count} 筆",
   "depth.reset": "重設範圍",
-  "depth.leave": "完成"
+  "depth.leave": "完成",
+  "depth.enabled": "套用景深",
+  "depth.hint.off": "景深已關閉，照片不會模糊；設定都還留著，打開開關就恢復"
 }

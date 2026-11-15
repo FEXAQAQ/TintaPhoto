@@ -96,6 +96,20 @@ def test_odd_stored_data_falls_back() -> None:
     assert Geometry.from_dict({}).depth == DEFAULT_DEPTH
 
 
+def test_switched_off_nothing_is_blurred_and_everything_is_kept() -> None:
+    off = replace(BLURRED, enabled=False, centre=(0.3, 0.3))
+
+    assert not off.blurs
+    assert not off.is_default
+    assert DepthOfField.from_dict(off.to_dict()) == off
+    assert DepthOfField.from_dict({"amount": 40}).enabled
+    photo = _photo(_noise(), encoded=True)
+    framed = geometry.apply(photo, Geometry(depth=off))
+    assert framed.depth is None
+    assert pipeline.is_passthrough(framed, JPEG)
+    assert can_copy_original(Path("photo.jpg"), JPEG, Geometry(depth=off), ExportOptions())
+
+
 def test_changing_the_shape_puts_it_where_that_shape_starts() -> None:
     moved = replace(BLURRED, centre=(0.2, 0.2), handle=(0.3, 0.2))
     band = moved.with_shape(dof.SHAPE_BAND)

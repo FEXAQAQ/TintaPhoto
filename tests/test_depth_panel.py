@@ -82,6 +82,19 @@ def test_the_caption_says_what_to_do_next(panel: DepthPanel) -> None:
     assert panel.reset_button.isEnabled()
 
 
+def test_the_switch_comes_first_and_says_when_it_is_off(panel: DepthPanel) -> None:
+    heard: list[bool] = []
+    panel.enabled_set.connect(heard.append)
+    assert panel.enabled_switch.isChecked()
+
+    panel.set_depth(replace(DEFAULT_DEPTH, amount=50.0, enabled=False))
+    assert heard == [] and not panel.enabled_switch.isChecked()
+    assert panel.caption.text() == tr("depth.hint.off")
+
+    panel.enabled_switch.setChecked(True)
+    assert heard == [True]
+
+
 def test_the_choices_and_sliders_are_announced(panel: DepthPanel) -> None:
     values: list[tuple[str, float, bool]] = []
     shapes: list[str] = []

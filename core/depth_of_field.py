@@ -89,6 +89,10 @@ class DepthOfField:
 
     #: How much the parts out of focus are blurred, 0 to 100.
     amount: float = 0.0
+    #: Whether the depth of field is applied at all. Switched off, the photo
+    #: is as if it had none, and everything set here is kept for when it is
+    #: switched on again (2026-11-16).
+    enabled: bool = True
     #: Which shape stays sharp.
     shape: str = SHAPE_ELLIPSE
     #: The middle of the shape.
@@ -116,8 +120,8 @@ class DepthOfField:
 
     @property
     def blurs(self) -> bool:
-        """Return whether anything is blurred at all."""
-        return self.amount > 0.0
+        """Return whether anything is blurred at all: switched on, with some blur."""
+        return self.enabled and self.amount > 0.0
 
     def with_stroke(self, stroke: SkinStroke) -> "DepthOfField":
         """Return this depth of field with *stroke* painted on top."""
@@ -148,6 +152,7 @@ class DepthOfField:
         """Return the depth of field as it is stored (PLAN.md 7.1)."""
         return {
             "amount": self.amount,
+            "enabled": self.enabled,
             "shape": self.shape,
             "centre": list(self.centre),
             "handle": list(self.handle),
@@ -173,6 +178,7 @@ class DepthOfField:
             read = (SkinStroke.from_dict(item) for item in raw[:STROKES_MAX])
             strokes = tuple(replace(stroke, snap=False) for stroke in read if stroke is not None)
         depth = cls(
+            enabled=data.get("enabled") is not False,
             shape=shape,
             centre=_as_point(data.get("centre"), DEFAULT_CENTRE),
             handle=_as_point(data.get("handle"), default_handle),

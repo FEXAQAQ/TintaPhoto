@@ -2060,6 +2060,11 @@ class Controller(QObject):
         """Set one of the depth of field's sliders: amount, transition or highlights."""
         self.set_depth(self._geometry.depth.with_values(**{name: value}), dragging)
 
+    def set_depth_enabled(self, enabled: bool) -> None:
+        """Switch the depth of field on or off, as one step; what is set is kept."""
+        if self.current is not None and self._geometry.depth.enabled != enabled:
+            self.set_depth(replace(self._geometry.depth, enabled=enabled))
+
     def set_depth_shape(self, shape: str) -> None:
         """Make the sharp shape an ellipse or a band, where that shape starts."""
         self.set_depth(self._geometry.depth.with_shape(shape))
@@ -2118,12 +2123,13 @@ class Controller(QObject):
     def reset_depth_range(self) -> None:
         """Put the sharp shape back where it starts and take every stroke away, as one step.
 
-        The sliders and the bokeh are left as they are.
+        The sliders, the bokeh and the switch are left as they are.
         """
         depth = self._geometry.depth
         fresh = replace(
             DEFAULT_DEPTH,
             amount=depth.amount,
+            enabled=depth.enabled,
             transition=depth.transition,
             bokeh=depth.bokeh,
             highlights=depth.highlights,

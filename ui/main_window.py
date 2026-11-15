@@ -329,6 +329,7 @@ class MainWindow(QMainWindow):
     def _connect_depth(self) -> None:
         """Join the depth of field's panel and overlay to the controller (PLAN.md 3.18)."""
         panel = self.depth_panel
+        panel.enabled_set.connect(self.controller.set_depth_enabled)
         panel.value_set.connect(self.controller.set_depth_value)
         panel.shape_chosen.connect(self.controller.set_depth_shape)
         panel.bokeh_chosen.connect(self.controller.set_depth_bokeh)

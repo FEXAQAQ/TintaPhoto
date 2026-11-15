@@ -2578,6 +2578,24 @@ def test_the_depth_of_field_blurs_the_preview_as_one_step_and_is_stored(
     assert controller.depth.amount == 0.0
 
 
+def test_the_depth_of_field_can_be_switched_off_and_on(
+    controller: Controller, tmp_path: Path
+) -> None:
+    _photo, before = _shown(controller, _speckled_folder(tmp_path))
+    controller.set_depth_value("amount", 100.0)
+    blurred = _wait_for_preview(controller)
+
+    controller.set_depth_enabled(False)
+    off = _wait_for_preview(controller)
+    assert np.array_equal(off.image, before.image)
+    assert controller.depth.amount == 100.0
+
+    controller.undo()
+    assert controller.depth.enabled
+    again = _wait_for_preview(controller)
+    assert np.array_equal(again.image, blurred.image)
+
+
 def test_the_sharp_shape_is_placed_where_it_is_drawn_on_screen(
     controller: Controller, tmp_path: Path
 ) -> None:

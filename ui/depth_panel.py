@@ -80,6 +80,8 @@ BRUSH_SIZE_SPEC: Final[SliderSpec] = SliderSpec(
 class DepthPanel(QWidget):
     """The depth of field's blur and the range that stays sharp, in the inspector's place."""
 
+    #: The switch that applies the depth of field or leaves it off.
+    enabled_set = Signal(bool)
     #: One slider moved: amount, highlights or transition, its value, and
     #: whether a drag is still going on.
     value_set = Signal(str, float, bool)
@@ -117,7 +119,7 @@ class DepthPanel(QWidget):
         body = QVBoxLayout(content)
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
-        body.addSpacing(theme.SPACE_SM)
+        body.addWidget(self._build_switch(content))
         body.addWidget(self._build_effect_group(content))
         body.addWidget(self._build_range_group(content))
         body.addStretch(1)
@@ -139,6 +141,22 @@ class DepthPanel(QWidget):
         row.addWidget(TranslatedLabel("depth.title", bar))
         row.addStretch(1)
         return bar
+
+    def _build_switch(self, parent: QWidget) -> QWidget:
+        """Whether the depth of field is applied: first, since it decides whether the rest counts."""
+        holder = QWidget(parent)
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(
+            theme.PANEL_PADDING, theme.SPACE_MD, theme.PANEL_PADDING, theme.SPACE_MD
+        )
+        row.setSpacing(theme.SPACE_SM)
+        row.addWidget(TranslatedLabel("depth.enabled", holder), 1)
+        self.enabled_switch = Switch(holder)
+        self.enabled_switch.setToolTip(tr("depth.enabled"))
+        self.enabled_switch.setChecked(True)
+        self.enabled_switch.toggled.connect(self.enabled_set.emit)
+        row.addWidget(self.enabled_switch)
+        return holder
 
     def _slider(self, group: ControlGroup, name: str) -> SliderRow:
         """Add the slider *name* to *group*."""
@@ -310,6 +328,7 @@ class DepthPanel(QWidget):
         self.leave_button.retranslate()
         self.leave_button.setToolTip(tooltip("depth.leave", "shortcut.depth"))
         self.show_switch.setToolTip(tooltip("depth.show", "shortcut.portrait_show"))
+        self.enabled_switch.setToolTip(tr("depth.enabled"))
         self._show_depth()
 
     def _show_depth(self) -> None:
@@ -318,10 +337,15 @@ class DepthPanel(QWidget):
             row.blockSignals(True)
             row.set_value(getattr(depth, name))
             row.blockSignals(False)
+        self.enabled_switch.blockSignals(True)
+        self.enabled_switch.setChecked(depth.enabled)
+        self.enabled_switch.blockSignals(False)
         self.shape_choice.set_value(depth.shape)
         self.bokeh_choice.set_value(depth.bokeh)
         count = len(depth.strokes)
-        if not depth.blurs:
+        if not depth.enabled:
+            caption = tr("depth.hint.off")
+        elif not depth.blurs:
             caption = tr("depth.hint.amount")
         elif count == 0:
             caption = tr("depth.hint")
