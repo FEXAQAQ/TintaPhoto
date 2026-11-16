@@ -33,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
+from core import tone_curve
 from core.edit_state import NUMERIC_NAMES, PORTRAIT_NAMES, EditState, as_float
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,9 @@ class Preset:
     #: mention one. An empty string is a preset that takes the filter off,
     #: which is a thing it can be asked to remember.
     filter: str | None = None
+    #: The luminance curve this preset draws, or ``None`` when it does not
+    #: mention one. The straight curve is a preset that takes the curve off.
+    luma_curve: tone_curve.Curve | None = None
     created_at: str = ""
     #: Where it was read from, for renaming and deleting.
     path: Path | None = None
@@ -79,7 +83,7 @@ class Preset:
     @property
     def is_empty(self) -> bool:
         """Return whether this preset would change nothing."""
-        return not self.adjustments and self.filter is None
+        return not self.adjustments and self.filter is None and self.luma_curve is None
 
     def suits(self, state: EditState) -> bool:
         """Return whether the white balance of this preset fits *state*.
@@ -108,6 +112,8 @@ class Preset:
             changed = changed.with_value(name, value)
         if self.filter is not None:
             changed = changed.with_filter(self.filter)
+        if self.luma_curve is not None:
+            changed = changed.with_curve(self.luma_curve)
         return changed
 
     def to_dict(self) -> dict[str, Any]:
@@ -123,6 +129,8 @@ class Preset:
             document["white_balance"] = self.white_balance
         if self.filter is not None:
             document["filter"] = self.filter
+        if self.luma_curve is not None:
+            document["luma_curve"] = [list(point) for point in self.luma_curve]
         return document
 
     @classmethod
@@ -161,6 +169,7 @@ class Preset:
             adjustments=adjustments,
             white_balance=unit,
             filter=chosen if isinstance(chosen, str) else None,
+            luma_curve=tone_curve.cleaned(data["luma_curve"]) if "luma_curve" in data else None,
             created_at=str(data.get("created_at") or ""),
             path=path,
         )
@@ -188,6 +197,7 @@ def create(name: str, state: EditState, reference: EditState) -> Preset:
         adjustments=adjustments,
         white_balance=unit,
         filter=state.filter if state.filter != reference.filter else None,
+        luma_curve=state.luma_curve if state.luma_curve != reference.luma_curve else None,
         created_at=datetime.now().isoformat(timespec="seconds"),
     )
 

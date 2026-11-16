@@ -59,6 +59,7 @@ from core import (
     sidecar,
     skin_range,
     thumbnails,
+    tone_curve,
     watermark,
 )
 from core.auto_light import AUTO_NAMES
@@ -1559,6 +1560,14 @@ class Controller(QObject):
         """
         self.set_adjustments(self._state.with_value(name, value), dragging)
 
+    def set_curve(self, curve: tone_curve.Curve, dragging: bool = False) -> None:
+        """Draw the luminance curve of the photo being shown (A-34).
+
+        A point still under the hand is a draft like a slider on the move;
+        letting it go is one step of history.
+        """
+        self.set_adjustments(self._state.with_curve(curve), dragging)
+
     def set_lens(self, settings: LensSettings, dragging: bool = False) -> None:
         """Change the lens correction of the photo being shown (PLAN.md 2.2).
 
@@ -1656,17 +1665,18 @@ class Controller(QObject):
             if name in _KIND_NAMES and copied.is_raw != state.is_raw:
                 continue
             changed = changed.with_value(name, getattr(copied, name))
-        return changed.with_filter(copied.filter)
+        return changed.with_filter(copied.filter).with_curve(copied.luma_curve)
 
     def _paste_into_file(self, photo: Path, copied: EditState) -> bool:
         """Change the stored adjustments of a photo that is not open."""
         same_kind = decoder.is_raw(photo) == copied.is_raw
-        values: dict[str, float | str] = {
+        values: dict[str, Any] = {
             name: float(getattr(copied, name))
             for name in NUMERIC_NAMES
             if same_kind or name not in _KIND_NAMES
         }
         values["filter"] = copied.filter
+        values["luma_curve"] = [list(point) for point in copied.luma_curve]
         result = _update_sidecar(photo, values, self._application, self._store)
         if result.failed:
             return False
@@ -2534,7 +2544,7 @@ class Controller(QObject):
         state = self._state
         for name in RESET_NAMES:
             state = state.with_value(name, getattr(self._reference, name))
-        self._state = state
+        self._state = state.with_curve(self._reference.luma_curve)
         self._record(path, self.edit)
         self.state_restored.emit(self._state)
         self._develop_current()

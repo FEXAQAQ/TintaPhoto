@@ -307,7 +307,7 @@ def save(
 
 def update_adjustments(
     photo: Path,
-    values: dict[str, float | str],
+    values: dict[str, Any],
     application: Application,
     store: Path,
 ) -> SaveResult:
@@ -321,8 +321,9 @@ def update_adjustments(
     photo had, which for a white balance that cannot be carried across is
     what has to happen (PLAN.md 7.2).
 
-    One of the values is a name rather than a number - the film filter - so
-    what is handed in is written as it comes rather than read as a number.
+    Two of the values are not numbers - the film filter is a name and the
+    luminance curve a list of points - so what is handed in is written as it
+    comes rather than read as a number.
     """
     if not values:
         return SaveResult()
@@ -333,7 +334,7 @@ def update_adjustments(
     adjustments = dict(stored) if isinstance(stored, dict) else {}
     adjustments.update(
         {
-            name: value if isinstance(value, str) else float(value)
+            name: value if isinstance(value, (str, list)) else float(value)
             for name, value in values.items()
         }
     )

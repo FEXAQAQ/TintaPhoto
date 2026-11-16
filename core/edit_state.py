@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields, replace
 from typing import Any, Final
 
+from core import tone_curve
 from core.filters import NO_FILTER
 from core.geometry import DEFAULT_GEOMETRY, Geometry
 
@@ -140,6 +141,10 @@ class EditState:
     sharpen_masking: float = 0.0
     luminance_noise: float = 0.0
     colour_noise: float = 0.0
+    #: The luminance curve (PLAN.md 2.2, A-34, and section 6 step 9.55): its
+    #: points, brightness in and brightness out. Not a number either, and
+    #: carried beside the numbers the way the filter's name is.
+    luma_curve: tone_curve.Curve = tone_curve.STRAIGHT
     #: Whether temperature and tint are in kelvin or relative.
     is_raw: bool = False
 
@@ -191,6 +196,7 @@ class EditState:
             and self.grain == 0.0
             and self.skin == 0.0
             and self.whiten == 0.0
+            and self.luma_curve == tone_curve.STRAIGHT
         )
 
     @property
@@ -258,6 +264,14 @@ class EditState:
         """Return a copy wearing the film look *identifier*, or none for ""."""
         return replace(self, filter=str(identifier))
 
+    def with_curve(self, curve: tone_curve.Curve) -> "EditState":
+        """Return a copy with the luminance curve drawn through *curve*.
+
+        A curve that draws the diagonal is stored as the straight one, so
+        that a photo with a point left lying on it still counts as untouched.
+        """
+        return replace(self, luma_curve=tone_curve.normalised(tuple(curve)))
+
     def range_of(self, name: str) -> tuple[float, float]:
         """Return the lowest and highest value *name* may take."""
         if name == "filter_strength":
@@ -292,11 +306,13 @@ class EditState:
 
     def to_dict(self) -> dict[str, Any]:
         """Return the adjustments as a dictionary, for the sidecar file."""
-        return {
+        stored: dict[str, Any] = {
             field.name: getattr(self, field.name)
             for field in fields(self)
-            if field.name != "is_raw"
+            if field.name not in ("is_raw", "luma_curve")
         }
+        stored["luma_curve"] = [list(point) for point in self.luma_curve]
+        return stored
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], reference: "EditState") -> "EditState":
@@ -319,6 +335,8 @@ class EditState:
         chosen = data.get("filter")
         if isinstance(chosen, str):
             state = state.with_filter(chosen)
+        if "luma_curve" in data:
+            state = state.with_curve(tone_curve.cleaned(data["luma_curve"]))
         return state
 
 

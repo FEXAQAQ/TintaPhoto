@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Sequence
+from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any, Final
@@ -32,6 +33,7 @@ from core import depth_of_field
 from core import faces as faces_module
 from core import geometry as geometry_module
 from core import skin_range
+from core import tone_curve
 from core.decoder import PROXY_LONG_EDGE, ColorSpace, DecodedPhoto
 from core.depth_of_field import DepthOfField
 from core.filters import Look
@@ -166,6 +168,23 @@ WHITE_POINT_MAX_EV: Final[float] = 1.0
 #: because a white point belongs to the photo and not to a region of it.
 WHITE_PIVOT_EV: Final[float] = 2.0
 WHITE_FALLOFF_PER_EV: Final[float] = 2.5
+
+# -- luminance curve (PLAN.md section 6 step 9.55) ------------------------
+#: The curve is read from a table of the luminance it gives, laid out along
+#: the square root of the luminance coming in: a square root costs far less
+#: than the power the sRGB encoding takes, and it spaces the entries closely
+#: in the shadows, as the encoding does. The table runs to this many times the
+#: square root of white - two stops past white in light - and what is
+#: brighter still is read at its last entry.
+CURVE_TABLE_REACH: Final[float] = 2.0
+#: How many entries it has. At 8192 the straight curve comes back within a
+#: hundred-millionth of what went in.
+CURVE_TABLE_SIZE: Final[int] = 8192
+#: Below this luminance (linear; about three levels of 255) a pixel is no
+#: longer scaled up to where the curve wants it: what the scaling does not
+#: reach is added as neutral grey. Scaling alone cannot lift pure black at
+#: all, and just above it would multiply noise into colour.
+CURVE_BLACK_FLOOR: Final[float] = 0.001
 
 # -- vignette (PLAN.md section 6 step 9.6) --------------------------------
 #: How far the corners move at the ends of the vignette slider, in stops.
@@ -2279,6 +2298,75 @@ def black_and_white_points(
 
 
 # --------------------------------------------------------------------------
+# Step 9.55: luminance curve
+# --------------------------------------------------------------------------
+#
+# A curve drawn by hand, read against the brightness of each pixel. It sits
+# here for the reason the black and white points sit before it: this is where
+# a RAW photo and a JPEG share one convention, so one curve is one thing for
+# both, and where the sliders above it have already done their work, so the
+# curve shapes what they left. Only the luminance is read and only it is set:
+# the three channels are scaled alike, as in steps 7 to 9, so the hue and the
+# ratio between the channels stay where they were.
+
+
+@lru_cache(maxsize=8)
+def curve_table(curve: tone_curve.Curve) -> NDArray[np.float32]:
+    """Return the luminance *curve* gives, along the root of the one coming in.
+
+    Entry ``i`` is for a luminance whose square root is
+    ``i / (CURVE_TABLE_SIZE - 1) * CURVE_TABLE_REACH``. The curve itself is
+    drawn in sRGB encoded brightness (PLAN.md 2.2), so each entry is encoded,
+    read off the curve and decoded again. The table is the same for every
+    photo wearing the curve, which is why it is kept.
+    """
+    roots = np.linspace(0.0, CURVE_TABLE_REACH, CURVE_TABLE_SIZE, dtype=np.float64)
+    encoded = cm.linear_to_srgb((roots * roots).astype(np.float32)).astype(np.float64)
+    shaped = tone_curve.evaluate(curve, encoded).astype(np.float32)
+    table = cm.srgb_to_linear(shaped).astype(np.float32)
+    table.setflags(write=False)
+    return table
+
+
+def luminance_curve(
+    image: NDArray[np.float32], curve: tone_curve.Curve
+) -> NDArray[np.float32]:
+    """Shape the brightness of *image* with *curve* (PLAN.md section 6 step 9.55).
+
+    The straight curve hands the photo back as it is. Otherwise each pixel is
+    scaled, all three channels alike, so that its luminance lands where the
+    curve puts it. Scaling down is always safe. Scaling up is held, below the
+    floor, to what a pixel at the floor would get, and the rest of the way is
+    made up with neutral grey: that is how a curve whose left end has been
+    raised lifts pure black to a grey, without multiplying the noise just
+    above black into colour.
+    """
+    if tone_curve.is_straight(curve):
+        return image
+    table = curve_table(curve)
+    brightness = cv2.max(_luminance(image), 0.0)
+    # Reading the table is a resampling of a one row picture, which OpenCV
+    # does several times faster than indexing with an array of positions.
+    position = cv2.sqrt(brightness)
+    position *= np.float32((CURVE_TABLE_SIZE - 1) / CURVE_TABLE_REACH)
+    target = cv2.remap(
+        table.reshape(1, -1),
+        position,
+        np.zeros_like(position),
+        cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+    held = cv2.max(target * np.float32(1.0 / CURVE_BLACK_FLOOR), 1.0)
+    factor = cv2.min(cv2.divide(target, cv2.max(brightness, _EPSILON)), held)
+    shaped = _scale_evenly(image, factor)
+    lift = cv2.subtract(target, cv2.multiply(factor, brightness))
+    if cv2.minMaxLoc(lift)[1] > CURVE_BLACK_FLOOR * 1e-3:
+        grey = cv2.max(lift, 0.0)
+        shaped = cv2.add(shaped, cv2.merge((grey, grey, grey)))
+    return shaped
+
+
+# --------------------------------------------------------------------------
 # Step 9.6: vignette
 # --------------------------------------------------------------------------
 #
@@ -3249,7 +3337,7 @@ def develop(
     Steps 2.5 to 12, in the order the plan fixes and never another: noise
     reduction and sharpening, white balance, clipped highlights, colour
     space, exposure, the depth of field, the black mist, highlights and shadows, contrast, the base tone curve,
-    the black and white points, the vignette, the film filter, vibrance and
+    the black and white points, the luminance curve, the vignette, the film filter, vibrance and
     saturation with the skin's tone, gamut compression, film grain, output;
     the skin is smoothed right after the detail step (2.6). The screen's own profile is
     applied afterwards, by whoever is showing the result, because it must not
@@ -3446,6 +3534,7 @@ def develop(
         if photo.is_raw:
             part = base_tone_curve(part)
         part = black_and_white_points(part, state.blacks, state.whites)
+        part = luminance_curve(part, state.luma_curve)
         if down_part is not None:
             assert vignette_across is not None  # the two are set together
             part = _scale_evenly(
