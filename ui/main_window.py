@@ -286,6 +286,13 @@ class MainWindow(QMainWindow):
         self.filmstrip.checked_changed.connect(lambda _photos: self._show_export_count())
 
         self.inspector.adjust_tab.value_set.connect(self.controller.set_adjustment)
+        self.inspector.adjust_tab.curve_set.connect(self.controller.set_curve)
+        self.controller.curve_backdrop_ready.connect(
+            self.inspector.adjust_tab.curve_editor.set_backdrop
+        )
+        self.inspector.adjust_tab.curve_group.toggled.connect(
+            lambda _open: self._update_curve_backdrop()
+        )
         self.inspector.retouch_tab.lens_set.connect(self._on_lens_set)
         self.controller.lens_ready.connect(self.inspector.retouch_tab.set_lens_profile)
         self.inspector.histogram.clipping_toggled.connect(self._on_clipping_toggled)
@@ -2014,6 +2021,15 @@ class MainWindow(QMainWindow):
             self.set_spot_tool(False)
         self._set_cropping(tab is InspectorTab.CROP)
         self._update_look_thumbnails()
+        self._update_curve_backdrop()
+
+    def _update_curve_backdrop(self) -> None:
+        """Ask for the histogram behind the curve only while the curve can be seen."""
+        self.controller.set_curve_backdrop_wanted(
+            self.inspector.current_tab is InspectorTab.ADJUST
+            and not self.is_inspector_collapsed()
+            and self.inspector.adjust_tab.curve_group.is_open
+        )
 
     def _update_look_thumbnails(self) -> None:
         """Ask for the filter tab's thumbnails only while it can be seen.
@@ -2419,6 +2435,7 @@ class MainWindow(QMainWindow):
             self._update_display_profile()
             # Another screen may have another pixel density.
             self._update_look_thumbnails()
+            self._update_curve_backdrop()
 
     def _update_display_profile(self) -> None:
         """Tell the controller which screen the photo is being shown on.
@@ -2853,6 +2870,7 @@ class MainWindow(QMainWindow):
             self.inspector, "panel_width", theme.PANEL_WIDTH, collapsed, animate
         )
         self._update_look_thumbnails()
+        self._update_curve_backdrop()
 
     def set_filmstrip_collapsed(
         self, collapsed: bool, animate: bool = True, hidden: bool = False

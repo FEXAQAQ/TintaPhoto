@@ -280,6 +280,21 @@ HISTOGRAM_HEIGHT: Final[int] = 160
 HISTOGRAM_TITLE_HEIGHT: Final[int] = 28
 #: How far the arrows and the triangles sit from the histogram's sides.
 HISTOGRAM_EDGE: Final[int] = SPACE_SM
+#: The luminance curve's editor (PLAN.md 3.1, A-34): a square as wide as the
+#: controls of a group, with the curve kept clear of its edge so that a
+#: point on an end is drawn whole.
+CURVE_EDITOR_SIZE: Final[int] = PANEL_WIDTH - 2 * PANEL_PADDING
+CURVE_EDITOR_INSET: Final[int] = SPACE_SM
+#: The line under the square that reads the chosen point.
+CURVE_READOUT_HEIGHT: Final[int] = 20
+#: How many parts the square is ruled into each way.
+CURVE_GRID_DIVISIONS: Final[int] = 4
+CURVE_LINE_WIDTH: Final[float] = 1.5
+CURVE_POINT_RADIUS: Final[int] = 4
+#: How near the pointer has to be to take hold of a point.
+CURVE_GRAB_RADIUS: Final[int] = 8
+#: The histogram behind the curve, out of 255: there to be read through.
+CURVE_BACKDROP_ALPHA: Final[int] = 48
 TAB_BAR_HEIGHT: Final[int] = 36
 TAB_UNDERLINE_HEIGHT: Final[int] = 2
 PANEL_ACTION_ROW_HEIGHT: Final[int] = 44

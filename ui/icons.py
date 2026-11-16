@@ -67,6 +67,9 @@ ICON_PIPETTE: Final[str] = "pipette"
 ICON_PLUS: Final[str] = "plus"
 #: The automatic light, on the light group's header: a wand and three sparks.
 ICON_WAND: Final[str] = "wand"
+#: Puts the luminance curve back to straight, on the curve group's header:
+#: an arrow turning back on itself.
+ICON_RESET: Final[str] = "reset"
 #: The spot removal tool, on the spot group's header (A-32): a blemish
 #: fading out, drawn dashed, with a spark where it was.
 ICON_SPOT: Final[str] = "spot"

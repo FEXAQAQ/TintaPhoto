@@ -1,4 +1,4 @@
-"""The adjust tab: the saved presets, then the sliders in five groups (PLAN.md 2.2 and 3.1).
+"""The adjust tab: the saved presets, the sliders in five groups and the curve (PLAN.md 2.2 and 3.1).
 
 The presets come first: a preset is a set of slider values, so clicking one
 moves the sliders right underneath it, where what it changed can be seen and
@@ -11,6 +11,10 @@ depending on the photo: a RAW file is adjusted in kelvin from where the
 camera was, a JPEG only relatively from where it already is. The white
 balance header also carries the eyedropper (A-24), which sets the pair from
 a spot on the photo.
+
+The luminance curve (A-34) has a group of its own between light and colour,
+folded until it is wanted: its square is as tall as nine sliders. Its header
+carries the button that puts the curve back to straight.
 
 Portrait and lens correction are on the retouch tab (``ui/retouch_tab.py``):
 neither is wanted on every photo.
@@ -26,10 +30,11 @@ from PySide6.QtWidgets import QMenu, QVBoxLayout, QWidget
 
 from app.i18n import tr
 from core import color_management as cm
-from core import edit_state
+from core import edit_state, tone_curve
 from core.edit_state import EditState
 from core.presets import Preset
 from ui import icons, theme
+from ui.curve_editor import CurveEditor
 from ui.presets import NameDialog, PresetRow
 from ui.theme import MARK_BLUE, MARK_GREEN, MARK_MAGENTA, MARK_YELLOW
 from ui.widgets.buttons import IconButton
@@ -213,6 +218,9 @@ class AdjustTab(QWidget):
     #: whatever else the photo holds - the filter chosen on its own tab, say -
     #: is taken from the photo and not from what this tab last heard.
     value_set = Signal(str, float, bool)
+    #: The luminance curve drawn (A-34): its points, and whether one of them
+    #: is still under the hand.
+    curve_set = Signal(object, bool)
     #: A preset to put on (P-05).
     preset_applied = Signal(object)
     #: A preset to rename, with the name it should now have (P-06).
@@ -267,6 +275,8 @@ class AdjustTab(QWidget):
                 self._rows[name] = row
                 group.add_row(row)
             groups_layout.addWidget(group)
+            if title_key == "adjust.group.light":
+                groups_layout.addWidget(self._build_curve_group())
         layout.addWidget(self._groups)
         layout.addStretch(1)
 
@@ -288,6 +298,22 @@ class AdjustTab(QWidget):
         self._no_presets.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         group.add_row(self._no_presets)
         self.presets_group = group
+        return group
+
+    def _build_curve_group(self) -> ControlGroup:
+        """The luminance curve, with the button that straightens it on the header."""
+        group = ControlGroup("adjust.group.curve", parent=self._groups)
+        self._group_widgets.append(group)
+        #: Puts the curve back to straight, as one step of history.
+        self.curve_reset_button = IconButton(icons.ICON_RESET, "adjust.reset_curve")
+        self.curve_reset_button.clicked.connect(self._reset_curve)
+        group.header.set_action(self.curve_reset_button)
+        self.curve_editor = CurveEditor(group)
+        self.curve_editor.curve_set.connect(self._on_curve_set)
+        group.add_row(self.curve_editor)
+        # Not every photo wants a curve, and the square is tall.
+        group.set_open(False)
+        self.curve_group = group
         return group
 
     # -- state -----------------------------------------------------------
@@ -333,6 +359,7 @@ class AdjustTab(QWidget):
         the unit after a RAW photo's temperature is part of the description.
         """
         self._rebuild_rows()
+        self.curve_editor.retranslate()
 
     def _rebuild_rows(self) -> None:
         """Give every slider the description it should have, and its value."""
@@ -347,6 +374,7 @@ class AdjustTab(QWidget):
             row.set_value(self._shown(name, getattr(self._state, name)))
             row.blockSignals(False)
         self._update_masking()
+        self._show_curve()
 
     def set_state(self, state: EditState) -> None:
         """Show *state* without announcing it, as undo and presets do."""
@@ -356,6 +384,14 @@ class AdjustTab(QWidget):
             row.set_value(self._shown(name, getattr(state, name)))
             row.blockSignals(False)
         self._update_masking()
+        self._show_curve()
+
+    def _show_curve(self) -> None:
+        """Draw the curve the photo holds; the button only has a bent one to undo."""
+        self.curve_editor.set_curve(self._state.luma_curve)
+        self.curve_reset_button.setEnabled(
+            self._state.luma_curve != tone_curve.STRAIGHT
+        )
 
     def _update_masking(self) -> None:
         """Let the masking be moved only while there is sharpening to mask.
@@ -442,6 +478,20 @@ class AdjustTab(QWidget):
 
         self._set_titles_dimmed(dragging)
         self.value_set.emit(name, held, dragging)
+
+    def _on_curve_set(self, curve: tone_curve.Curve, dragging: bool) -> None:
+        """Take the curve as it was just drawn and pass it on."""
+        self._state = self._state.with_curve(curve)
+        self.curve_reset_button.setEnabled(
+            self._state.luma_curve != tone_curve.STRAIGHT
+        )
+        self._set_titles_dimmed(dragging)
+        self.curve_set.emit(curve, dragging)
+
+    def _reset_curve(self) -> None:
+        """Put the curve back to straight."""
+        self.curve_editor.set_curve(tone_curve.STRAIGHT)
+        self._on_curve_set(tone_curve.STRAIGHT, False)
 
     def _set_titles_dimmed(self, dimmed: bool) -> None:
         """Fade the group titles while a slider is moving (PLAN.md 3.6)."""

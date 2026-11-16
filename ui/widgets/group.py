@@ -49,8 +49,8 @@ class GroupHeader(QPushButton):
         self.setIconSize(QSize(theme.ICON_SIZE_SMALL, theme.ICON_SIZE_SMALL))
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.setCursor(Qt.CursorShape.ArrowCursor)
-        self.toggled.connect(self._show_whether_open)
-        self._show_whether_open(True)
+        self.toggled.connect(self.show_whether_open)
+        self.show_whether_open(True)
         #: A button that sits at the right end of the header, such as the
         #: white balance eyedropper (A-24).
         self._action: QWidget | None = None
@@ -85,7 +85,7 @@ class GroupHeader(QPushButton):
             (self.height() - size.height()) // 2,
         )
 
-    def _show_whether_open(self, open_: bool) -> None:
+    def show_whether_open(self, open_: bool) -> None:
         """Point the arrow down while the group is open, right while closed."""
         self.setIcon(
             icons.load_icon(
@@ -99,7 +99,7 @@ class GroupHeader(QPushButton):
         """Read the name and the tooltip again after a language change."""
         self.setText(tr(self._label_key))
         if not self._fixed:
-            self._show_whether_open(self.isChecked())
+            self.show_whether_open(self.isChecked())
 
     def set_faded(self, faded: bool) -> None:
         """Fade the title while a slider is being dragged (PLAN.md 3.6)."""
@@ -190,6 +190,23 @@ class ControlGroup(QWidget):
         A group whose header only names it is always open.
         """
         return self.header.isChecked() or not self.header.isCheckable()
+
+    def set_open(self, open_: bool) -> None:
+        """Open or fold the group at once, with no animation.
+
+        For a group that starts folded, and for anything that has to
+        bring one into view before pointing at what is in it.
+        """
+        if not self.header.isCheckable() or open_ == self.header.isChecked():
+            return
+        self._stop_folding()
+        blocked = self.header.blockSignals(True)
+        self.header.setChecked(open_)
+        self.header.blockSignals(blocked)
+        self.header.show_whether_open(open_)
+        self._body.setMaximumHeight(_NO_MAXIMUM)
+        self._body.setVisible(open_)
+        self.toggled.emit(open_)
 
     @property
     def folding(self) -> bool:

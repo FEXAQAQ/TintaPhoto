@@ -112,6 +112,8 @@ _GROUP_LENS_DATABASE = "lens-database"
 _GROUP_FACES = "faces"
 #: The small pictures on the filter tab: only the newest set is wanted.
 _GROUP_LOOK_THUMBNAILS = "look-thumbnails"
+#: The histogram behind the luminance curve: only the newest is wanted.
+_GROUP_CURVE_BACKDROP = "curve-backdrop"
 #: Finding where a new spot takes its texture from. No group: every click
 #: of the spot removal tool is a spot of its own and none may be dropped.
 _GROUP_SPOT_SOURCE: Final[None] = None
@@ -125,6 +127,9 @@ _GROUP_LIQUIFY_DRAFT = "liquify-draft"
 #: its long edge, so that even a 3:1 panorama still has the side across its
 #: short one.
 LOOK_THUMBNAIL_REACH: Final[int] = 3
+#: The long edge of the small copy the histogram behind the luminance
+#: curve is counted from: a histogram needs no more.
+CURVE_BACKDROP_LONG_EDGE: Final[int] = 512
 #: How many lens corrected photos are kept: the preview, its draft, the
 #: proxy and the full size photo behind a zoomed in window.
 _LENSED_KEPT = 4
@@ -348,6 +353,10 @@ class Controller(QObject):
     #: identifier ("" for none), as square 8 bit pictures for the filter
     #: tab; empty when the photo changes and they are not known yet.
     look_thumbnails_ready = Signal(object)
+    #: The photo now open as it is with the luminance curve straight, as a
+    #: small 8 bit picture for the histogram behind the curve (A-34), or
+    #: ``None`` when the photo changes and it is not known yet.
+    curve_backdrop_ready = Signal(object)
     #: A stroke of the spot removal tool (A-32) has been mended and added,
     #: by its index in the geometry's spots.
     spot_added = Signal(int)
@@ -502,6 +511,10 @@ class Controller(QObject):
         #: What the thumbnails last asked for were made of, so that the same
         #: photo, adjustments and size are not developed twice.
         self._look_thumbnails_key: object = None
+        #: Whether the luminance curve's editor is in sight, and what the
+        #: histogram behind it was last made of.
+        self._curve_backdrop_wanted = False
+        self._curve_backdrop_key: object = None
 
         #: The last fully developed preview, and the photo as it was found, so
         #: that holding the before and after key is instant the second time.
@@ -1241,6 +1254,8 @@ class Controller(QObject):
         path = self._photos[index]
         self._look_thumbnails_key = None
         self.look_thumbnails_ready.emit({})
+        self._curve_backdrop_key = None
+        self.curve_backdrop_ready.emit(None)
         self.selection_changed.emit(index, len(self._photos))
         self._forget_distant_photos()
         self._show(path)
@@ -2734,6 +2749,7 @@ class Controller(QObject):
         """
         if not draft and state is None:
             self._request_look_thumbnails()
+            self._request_curve_backdrop()
         if self._zoomed_in():
             if not draft:
                 # The photo underneath is what panning uncovers, so it is out
@@ -2968,6 +2984,61 @@ class Controller(QObject):
             self._look_thumbnails_key = None
             return
         self.look_thumbnails_ready.emit(thumbnails)
+
+    # -- the histogram behind the luminance curve (A-34) -------------------
+
+    def set_curve_backdrop_wanted(self, wanted: bool) -> None:
+        """Say whether the luminance curve's editor can be seen.
+
+        Out of sight nothing is developed for it; it catches up the moment
+        it comes back.
+        """
+        self._curve_backdrop_wanted = bool(wanted)
+        self._request_curve_backdrop()
+
+    def _request_curve_backdrop(self) -> None:
+        """Develop a small copy of the photo with the curve straight, in the background.
+
+        Its brightness is what the curve acts on, near enough, so its
+        histogram is what a point is placed against. The curve itself is
+        left out of what it is made of: drawing the curve never makes it
+        again, and it holds still under the hand.
+        """
+        path = self.current
+        decoded = self._decoded.get(path) if path is not None else None
+        if not self._curve_backdrop_wanted or path is None or decoded is None:
+            return
+        values = self._state.with_curve(tone_curve.STRAIGHT)
+        shape = self._geometry
+        known_faces = (path, shape.lens) in self._faces
+        key = (path, values, shape, known_faces)
+        if key == self._curve_backdrop_key:
+            return
+        self._curve_backdrop_key = key
+        look = self._filters.get(values.filter) if values.filter else None
+        with_faces = self._with_faces
+
+        def develop_small() -> NDArray[np.uint8] | None:
+            """Develop the small copy, on whichever thread takes this on."""
+            try:
+                sized = decoder.resize_photo(decoded, CURVE_BACKDROP_LONG_EDGE)
+                corrected = with_faces(path, lens.correct(sized, shape.lens), shape)
+                framed = geometry.apply(corrected, shape, crop=True)
+                return pipeline.develop(framed, values, look=look)
+            except Exception:  # noqa: BLE001 - a histogram must never trouble the user
+                logger.exception("The curve's histogram of %s could not be made", path.name)
+                return None
+
+        self._submit(develop_small, _GROUP_CURVE_BACKDROP, self._on_curve_backdrop, path)
+
+    def _on_curve_backdrop(self, path: Path, image: NDArray[np.uint8] | None) -> None:
+        if path != self.current:
+            return
+        if image is None:
+            # Asking again for the same thing is allowed after a failure.
+            self._curve_backdrop_key = None
+            return
+        self.curve_backdrop_ready.emit(image)
 
     def _sized_photo(self, path: Path, decoded: DecodedPhoto, long_edge: int) -> DecodedPhoto:
         """Return *decoded* at *long_edge*, keeping the copy for next time."""

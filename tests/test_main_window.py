@@ -1724,7 +1724,9 @@ def test_every_tab_of_the_panel_marks_its_sections_the_same_way(
         for group in groups:
             assert isinstance(group, ControlGroup)
             assert group.header.height() == theme.GROUP_HEADER_HEIGHT
-            assert group.is_open
+            # Every group starts open but the curve, whose square is tall and
+            # not wanted on every photo (PLAN.md 3.1).
+            assert group.is_open == (group is not getattr(tab, "curve_group", None))
 
 
 def test_the_info_cards_groups_are_named_but_do_not_fold(window: MainWindow) -> None:

@@ -365,10 +365,10 @@ def test_every_group_has_a_header_that_names_it(tab: AdjustTab) -> None:
     from ui.adjust_tab import GROUPS
 
     headers = [group.header.text() for group in tab.groups()]
-    assert headers == (
-        [tr("adjust.group.presets")]
-        + [tr(title_key) for title_key, _names in GROUPS]
-    )
+    # The curve has no sliders, so it is not in GROUPS; it sits after light.
+    titles = [tr(title_key) for title_key, _names in GROUPS]
+    titles.insert(titles.index(tr("adjust.group.light")) + 1, tr("adjust.group.curve"))
+    assert headers == [tr("adjust.group.presets")] + titles
 
 
 def test_closing_a_group_folds_its_sliders_away(tab: AdjustTab) -> None:

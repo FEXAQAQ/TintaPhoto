@@ -15,7 +15,8 @@
   **PLAN.md 已補上濾鏡**（2.2、3.1、6、7.1.5、8、13.3 節），文件也不再出現相機廠牌。
   F1 完成：三個濾鏡已從素材擬合出來，同相機 ΔE 0.78 ～ 0.92、
   跨相機 1.56 ～ 1.73。見「濾鏡功能 F1」、「濾鏡功能 F2」
-- **最後更新**：2026-11-16（最後一項工作：景深的「套用景深」開關（D-13），0.49.1。使用者問「套用後就不能取消？」，我說明可以復原或把模糊程度拉回 0，並提「重設景深按鈕」或「開關」，使用者選開關。見文末「套用景深開關」）
+- **最後更新**：2026-11-17（最後一項工作：亮度曲線（階段 24），0.50.0。使用者要新增亮度曲線並請我規劃；我提「調整分頁新群組、步驟 9.55、只改亮度」與示意圖，使用者「照建議動工」。見文末「亮度曲線（階段 24）」）
+  在此之前：2026-11-16（最後一項工作：景深的「套用景深」開關（D-13），0.49.1。使用者問「套用後就不能取消？」，我說明可以復原或把模糊程度拉回 0，並提「重設景深按鈕」或「開關」，使用者選開關。見文末「套用景深開關」）
   在此之前：2026-11-16（景深（階段 23），0.49.0。使用者問有沒有景深、請我規劃；我提「先手動、之後再接深度模型」，解釋手動是什麼之後使用者說「好的」。見文末「景深（階段 23）」）
   在此之前：2026-11-13（發行 0.48.0——`tools/build_release.py` 產出安裝檔與 zip，main 快轉到 develop，打 tag `v0.48.0`，GitHub Releases 附上兩個檔案。見文末「發行 0.48.0」）
   在此之前：2026-11-12（最後一項工作：一圖切割（階段 22），0.48.0。使用者要把一張照片切成好幾張；看過「放在匯出對話框」與「獨立模式」兩種做法，選了獨立模式、但切線平均不能拖，看過規劃後「照規劃動工」。見文末「一圖切割（階段 22）」）
@@ -5959,3 +5960,44 @@ app 樣式表的通用 `QPushButton` 最小高度會把標籤撐成 27 px，所�
   test_depth_panel（開關不回傳、說明文字、按下會通知）。
 - PLAN.md：2.13 新增 D-13、3.18（模擬圖與面板說明）、7.1（`enabled`）、階段 23 驗收多一項。
 - 還沒做：實機看開關的位置與外觀。
+
+## 亮度曲線（階段 24，0.50.0，2026-11-17）
+
+使用者說「我想要新增亮度曲線功能，幫我規劃」。我提了規劃與一張曲線群組的示意圖：調整分頁光線下面的新群組、
+步驟 9.55（黑階白階之後、暈影之前）、只改亮度、不過衝的三次內插，並替使用者做了三個選擇（群組預設收合、這次不做
+各通道曲線、不做在照片上點選加點），使用者「照建議動工」。
+
+- `core/tone_curve.py`（新）：`Curve` 是一串 (x, y)；`STRAIGHT`、`MAX_POINTS` 16、`MIN_GAP` 2/255；`cleaned()` 讀存檔資料、
+  `with_point()`／`moved()`／`without_point()` 給編輯器用、`slopes()`＋`evaluate()` 是 Fritsch–Butland 的不過衝三次內插
+  （依公開公式自行實作），超過 1 沿右端斜率延伸、斜率為負當 0。點全在對角線上一律視為直線（`normalised()`）。
+- `core/edit_state.py`：`EditState.luma_curve`、`with_curve()`；`is_neutral_colour` 看它；`to_dict()` 寫成清單、`from_dict()` 用 `cleaned()`。
+  它不在 `NUMERIC_NAMES` 裡（不是數字），所以參數檔、預設集、複製貼上、重設都另外帶，做法同濾鏡的名字。
+- `core/pipeline.py`：常數 `CURVE_TABLE_REACH` 2、`CURVE_TABLE_SIZE` 8192、`CURVE_BLACK_FLOOR` 0.001；`curve_table()`（lru_cache）
+  與 `luminance_curve()`，在 `develop()` 的帶子裡接在 `black_and_white_points()` 之後。
+  - 試過的：第一版逐像素用陣列索引查表，2560 px 單執行緒 184 ms，其中查表 74 ms；改用 `cv2.remap` 把表當成一列的圖來取樣
+    是 14 ms，整步約 80 ms，放進帶子後整個預覽量不出差別（170 ms 上下）。`cv2.remap` 超出表的部分讀最後一格，
+    所以表涵蓋到白的 4 倍亮度。
+  - 接近純黑：第一版寫成「低於地板就一律除以地板」，結果只動亮部的曲線也會把 3/255 以下的暗部壓得更黑，測試前自己發現；
+    改成「要放大時倍數才封頂、不足的補中性灰，縮小時照常」。
+- `core/sidecar.py`：`update_adjustments()` 的值可以是清單；`core/presets.py`：`Preset.luma_curve`（同 `filter`，沒提到就不動）。
+- `app/controller.py`：`set_curve()`；重設、貼上（目前照片與沒開啟的照片）帶曲線；背景直方圖
+  `set_curve_backdrop_wanted()`／`_request_curve_backdrop()`／`curve_backdrop_ready`，做法同濾鏡縮圖：長邊 512 的小副本、
+  以「曲線放回直線的狀態」顯影，鍵值不含曲線，所以拖曲線不重算。
+- `ui/curve_editor.py`（新）：`CurvePlot`（方格）與 `CurveEditor`（方格＋下方一行數值）。Delete 以 ShortcutOverride 留給自己，
+  不會被視窗的快捷鍵搶走。`ui/adjust_tab.py`：`curve_group`、`curve_editor`、`curve_reset_button`、`curve_set` 訊號。
+  `ui/widgets/group.py`：`ControlGroup.set_open()`（不帶動畫，給預設收合用），`GroupHeader._show_whether_open` 改名公開。
+  `ui/theme.py`：`CURVE_*` 常數；`resources/icons/reset.svg`（自繪）、`icons.ICON_RESET`；翻譯 `adjust.group.curve`、
+  `adjust.reset_curve`、`curve.hint`、`curve.readout`。
+- 決定：兩端的點只能上下（左右固定在邊緣），所以曲線永遠涵蓋整個 0 \~ 1，不必定義端點以外怎麼辦；要把黑點往右收仍用黑階滑桿。
+- 決定：背景直方圖用「曲線放回直線的輸出」而不是步驟 9.55 當下的亮度：後者要在流程中間另開一個出口，
+  而前者只差濾鏡與色彩滑桿，對「點要放在哪一段」夠準。
+- 測試：`tests/test_tone_curve.py`（36 項）、`tests/test_curve_editor.py`（17 項）、`tests/test_controller.py` 4 項；
+  `test_slider_row`、`test_main_window` 各一項跟著「多一個預設收合的群組」更新。完整 pytest 通過；
+  第一次跑完整 pytest 時中途 access violation 一次（沒抓到是哪一項），重跑三次都通過——和之前記的
+  `test_controller` 偶發當掉可能是同一件事，原因仍未找到。
+- 參考影像比對（`tests/test_reference.py`）通過：曲線是直線時顏色完全沒變。
+- 以真實視窗（1440×900）開 `_DSC2828.JPG`、展開曲線群組、點兩個點拉成 S 曲線截圖看過：背景直方圖、格線、曲線、
+  選取的點、下方數值都正常，照片對比跟著變。
+- PLAN.md：2.2（表格 A-34、亮度曲線說明、「不是數字的參數」）、3.1（調整分頁內容、新「曲線群組」）、6（新步驟 9.55）、
+  7.1（`luma_curve`）、7.2、8（Delete）、新階段 24、12（色調曲線剩各通道與照片上點選）；CLAUDE.md 第 4 節步驟清單加 9.55。
+- 還沒做：實機看曲線的手感與外觀（階段 24 最後三項）；各通道曲線、在照片上點選加點（第 12 節）。

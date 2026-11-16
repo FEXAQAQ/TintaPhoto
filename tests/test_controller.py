@@ -25,7 +25,7 @@ from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer  # noqa: E402
 
 from app import controller as controller_module  # noqa: E402
 from app.controller import DRAFT_MINIMUM_LONG_EDGE, Controller  # noqa: E402
-from core import geometry, liquify, sidecar  # noqa: E402
+from core import geometry, liquify, sidecar, tone_curve  # noqa: E402
 from core.geometry import Geometry, Rect  # noqa: E402
 from core.edit_state import Edit, EditState  # noqa: E402
 from core.exporter import ExportOptions  # noqa: E402
@@ -2958,3 +2958,73 @@ def test_moving_to_another_photo_while_placing_keeps_the_points_as_one_step(
     controller._end_face_session()  # what moving to another photo does first
     assert first is not None
     assert controller._history.depth(first) == 3  # opened, the slider, the points
+
+
+# -- the luminance curve (A-34) ---------------------------------------------
+
+_S_CURVE = ((0.0, 0.0), (0.25, 0.18), (0.75, 0.84), (1.0, 1.0))
+
+
+def test_drawing_the_curve_is_one_step_however_long_the_drag(
+    controller: Controller, folder: Path
+) -> None:
+    _opened(controller, folder)
+
+    controller.set_curve(((0.0, 0.0), (0.5, 0.6), (1.0, 1.0)), dragging=True)
+    controller.set_curve(((0.0, 0.0), (0.5, 0.7), (1.0, 1.0)), dragging=True)
+    controller.set_curve(_S_CURVE)
+    assert controller.state.luma_curve == _S_CURVE
+
+    controller.undo()
+    assert controller.state.luma_curve == tone_curve.STRAIGHT
+    assert not controller.can_undo
+
+
+def test_the_adjust_tab_s_reset_straightens_the_curve(
+    controller: Controller, folder: Path
+) -> None:
+    _opened(controller, folder)
+    controller.set_curve(_S_CURVE)
+
+    controller.reset()
+
+    assert controller.state.luma_curve == tone_curve.STRAIGHT
+
+
+def test_the_curve_is_pasted_onto_the_photo_shown_and_into_a_file(
+    controller: Controller, folder: Path
+) -> None:
+    _shown(controller, folder)
+    controller.set_curve(_S_CURVE)
+    controller.copy_adjustments()
+    controller.select(1)
+    _wait_for_preview(controller)
+
+    controller.paste_adjustments([controller.photos[2]])
+
+    assert controller.state.luma_curve == _S_CURVE
+    controller.select(2)
+    _wait_for_preview(controller)
+    assert controller.state.luma_curve == _S_CURVE
+
+
+def test_the_histogram_behind_the_curve_is_the_photo_with_the_curve_straight(
+    controller: Controller, folder: Path
+) -> None:
+    _shown(controller, folder)
+    asked: list[object] = []
+    controller.curve_backdrop_ready.connect(asked.append)
+
+    controller.set_curve_backdrop_wanted(True)
+    (straight,) = wait_for(controller.curve_backdrop_ready)
+    assert straight.dtype == np.uint8 and max(straight.shape[:2]) <= 512
+
+    # Drawing the curve does not make it again: it is what the curve acts on.
+    controller.set_curve(((0.0, 0.3), (1.0, 1.0)))
+    _wait_for_preview(controller)
+    assert len(asked) == 1
+
+    # Another slider does, and the curve is still left out of it.
+    controller.set_adjustments(controller.state.with_value("exposure", 1.0))
+    (brighter,) = wait_for(controller.curve_backdrop_ready)
+    assert brighter.mean() > straight.mean()
