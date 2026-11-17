@@ -1,10 +1,14 @@
-"""The luminance curve's editor (PLAN.md 2.2 A-34 and 3.1).
+"""The curves' editor (PLAN.md 2.2 A-34, A-35 and 3.1).
 
-A square with the curve drawn across it: how bright a tone was runs left to
-right, how bright it is to be runs bottom to top. Behind the curve lies the
-brightness histogram of the photo as it is with the curve straight, so a
-point can be put under the tones it is meant to move; it does not shift while
-the curve is being drawn, since it is what the curve acts on.
+A row of choices over a square: the luminance curve, the curve shared by red,
+green and blue, or one of those three alone. The chosen curve is drawn across
+the square: how bright a tone was runs left to right, how bright it is to be
+runs bottom to top. Behind the curve lies the histogram of the photo as that
+curve finds it - brightness for the luminance curve, the three channels for
+the shared one, one channel for its own - so a point can be put under the
+tones it is meant to move; it does not shift while the curve is being drawn,
+since it is what the curve acts on. A curve that has been bent carries a dot
+after its name.
 
 A press on empty ground adds a point and takes hold of it, a drag moves a
 point, and a double click or Delete takes one away. The two ends stay on
@@ -27,8 +31,10 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from app.i18n import tr
 from core import tone_curve
+from core.edit_state import CURVE_NAMES, LUMA_CURVE, RGB_CURVE, EditState
 from ui import theme
 from ui.histogram_widget import BINS, SCALE_HEADROOM, SCALE_PERCENTILE, luma_values
+from ui.widgets.segmented import Segmented
 from ui.widgets.text import use_tabular_figures
 
 #: The levels a point is read out in.
@@ -38,6 +44,40 @@ _LEVELS: Final[int] = 255
 _NONE: Final[int] = -1
 
 _DELETE_KEYS: Final[tuple[Qt.Key, ...]] = (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+
+#: The curves on offer, in the order of the row, with the key of each name.
+CURVE_CHOICES: Final[tuple[tuple[str, str], ...]] = (
+    (LUMA_CURVE, "curve.choice.luma"),
+    (RGB_CURVE, "curve.choice.rgb"),
+    ("red_curve", "curve.choice.red"),
+    ("green_curve", "curve.choice.green"),
+    ("blue_curve", "curve.choice.blue"),
+)
+
+#: Which rows of the backdrop's counts each curve is drawn over - brightness
+#: first, then red, green and blue - and the colour of each row.
+_BACKDROP_ROWS: Final[dict[str, tuple[int, ...]]] = {
+    LUMA_CURVE: (0,),
+    RGB_CURVE: (1, 2, 3),
+    "red_curve": (1,),
+    "green_curve": (2,),
+    "blue_curve": (3,),
+}
+_ROW_COLOURS: Final[tuple[str, str, str, str]] = (
+    theme.HISTOGRAM_LUMA,
+    theme.HISTOGRAM_RED,
+    theme.HISTOGRAM_GREEN,
+    theme.HISTOGRAM_BLUE,
+)
+#: The colour a curve is drawn in: a channel's own in its colour, the two
+#: that act on all three in the colour of text.
+_CURVE_COLOURS: Final[dict[str, str]] = {
+    LUMA_CURVE: theme.TEXT_PRIMARY,
+    RGB_CURVE: theme.TEXT_PRIMARY,
+    "red_curve": theme.HISTOGRAM_RED,
+    "green_curve": theme.HISTOGRAM_GREEN,
+    "blue_curve": theme.HISTOGRAM_BLUE,
+}
 
 
 class CurvePlot(QWidget):
@@ -56,6 +96,9 @@ class CurvePlot(QWidget):
         self._dragging = False
         #: Whether the press now held has changed the curve.
         self._moved = False
+        #: Which curve is drawn, by its name in EditState.
+        self._channel = LUMA_CURVE
+        #: The backdrop's counts: brightness, then red, green and blue.
         self._backdrop: NDArray[np.int64] | None = None
         self.setFixedSize(theme.CURVE_EDITOR_SIZE, theme.CURVE_EDITOR_SIZE)
         self.setMouseTracking(True)
@@ -79,6 +122,18 @@ class CurvePlot(QWidget):
         """Return whether a point is under the hand."""
         return self._dragging
 
+    @property
+    def channel(self) -> str:
+        """Return which curve is drawn, by its name in EditState."""
+        return self._channel
+
+    def set_channel(self, name: str) -> None:
+        """Draw the curve called *name* in its colour, over its histogram."""
+        if name == self._channel:
+            return
+        self._channel = name
+        self.update()
+
     def set_curve(self, curve: tone_curve.Curve) -> None:
         """Show *curve* without announcing it, as undo and presets do."""
         if curve == self._curve:
@@ -91,12 +146,19 @@ class CurvePlot(QWidget):
         self.update()
 
     def set_backdrop(self, image: NDArray[np.uint8] | None) -> None:
-        """Lay the brightness histogram of *image* behind the curve, or none."""
+        """Lay the histograms of *image* behind the curve, or none.
+
+        Brightness and all three channels are counted at once, so that the
+        choice of curve only changes which of them is drawn.
+        """
         if image is None or image.size == 0:
             self._backdrop = None
         else:
-            self._backdrop = np.bincount(
-                luma_values(image).reshape(-1), minlength=BINS
+            rows = [luma_values(image).reshape(-1)] + [
+                image[..., channel].reshape(-1) for channel in range(3)
+            ]
+            self._backdrop = np.stack(
+                [np.bincount(row, minlength=BINS)[:BINS] for row in rows]
             ).astype(np.int64)
         self.update()
 
@@ -283,23 +345,26 @@ class CurvePlot(QWidget):
         self._draw_points(painter)
 
     def _draw_backdrop(self, painter: QPainter, area: QRectF) -> None:
-        """Fill the brightness histogram, faint enough to read the curve over."""
+        """Fill the curve's histograms, faint enough to read the curve over."""
         counts = self._backdrop
         assert counts is not None  # the caller has looked
-        scale = max(1.0, float(np.percentile(counts, SCALE_PERCENTILE)) * SCALE_HEADROOM)
-        path = QPainterPath()
-        path.moveTo(area.left(), area.bottom())
-        for index in range(BINS):
-            x = area.left() + area.width() * index / (BINS - 1)
-            height = min(1.0, counts[index] / scale) * area.height()
-            path.lineTo(x, area.bottom() - height)
-        path.lineTo(area.right(), area.bottom())
-        path.closeSubpath()
-        fill = QColor(theme.HISTOGRAM_LUMA)
-        fill.setAlpha(theme.CURVE_BACKDROP_ALPHA)
+        rows = _BACKDROP_ROWS[self._channel]
+        shown = counts[list(rows)]
+        scale = max(1.0, float(np.percentile(shown, SCALE_PERCENTILE)) * SCALE_HEADROOM)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(fill)
-        painter.drawPath(path)
+        for row in rows:
+            path = QPainterPath()
+            path.moveTo(area.left(), area.bottom())
+            for index in range(BINS):
+                x = area.left() + area.width() * index / (BINS - 1)
+                height = min(1.0, counts[row, index] / scale) * area.height()
+                path.lineTo(x, area.bottom() - height)
+            path.lineTo(area.right(), area.bottom())
+            path.closeSubpath()
+            fill = QColor(_ROW_COLOURS[row])
+            fill.setAlpha(theme.CURVE_BACKDROP_ALPHA)
+            painter.setBrush(fill)
+            painter.drawPath(path)
 
     def _draw_grid(self, painter: QPainter, area: QRectF) -> None:
         """Rule the square in quarters and draw the line that changes nothing."""
@@ -326,15 +391,19 @@ class CurvePlot(QWidget):
         path.moveTo(self.position_of(float(across[0]), float(heights[0])))
         for x, y in zip(across[1:], heights[1:]):
             path.lineTo(self.position_of(float(x), float(y)))
-        colour = theme.TEXT_PRIMARY if self.isEnabled() else theme.TEXT_TERTIARY
-        painter.setPen(QPen(QColor(colour), theme.CURVE_LINE_WIDTH))
+        painter.setPen(QPen(QColor(self.curve_colour()), theme.CURVE_LINE_WIDTH))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(path)
 
+    def curve_colour(self) -> str:
+        """Return the colour the curve and the rings of its points are drawn in."""
+        if not self.isEnabled():
+            return theme.TEXT_TERTIARY
+        return _CURVE_COLOURS[self._channel]
+
     def _draw_points(self, painter: QPainter) -> None:
         """Draw every point: hollow at rest, lit under the pointer, solid when chosen."""
-        ring = theme.TEXT_PRIMARY if self.isEnabled() else theme.TEXT_TERTIARY
-        painter.setPen(QPen(QColor(ring), theme.CURVE_LINE_WIDTH))
+        painter.setPen(QPen(QColor(self.curve_colour()), theme.CURVE_LINE_WIDTH))
         for index, (x, y) in enumerate(self._curve):
             if index == self._selected:
                 fill = theme.ACCENT
@@ -349,13 +418,21 @@ class CurvePlot(QWidget):
 
 
 class CurveEditor(QWidget):
-    """The curve's square with the line under it that reads the chosen point."""
+    """The choice of curve, its square and the line under it that reads the chosen point."""
 
-    #: The curve as it now is, and whether a point is still under the hand.
-    curve_set = Signal(object, bool)
+    #: The curve shown as it now is, whether a point is still under the hand,
+    #: and which curve it is, by its name in EditState.
+    curve_set = Signal(object, bool, str)
+    #: Another curve was chosen to be drawn.
+    channel_changed = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        #: Every curve the photo holds, the shown one among them.
+        self._curves: dict[str, tone_curve.Curve] = {
+            name: tone_curve.STRAIGHT for name in CURVE_NAMES
+        }
+        self.channels = Segmented(CURVE_CHOICES, self)
         self.plot = CurvePlot(self)
         self.readout = QLabel(self)
         self.readout.setProperty("role", "caption")
@@ -365,30 +442,76 @@ class CurveEditor(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(theme.SPACE_XS)
+        layout.setSpacing(0)
+        layout.addWidget(self.channels)
+        layout.addSpacing(theme.CURVE_CHOICE_GAP)
         layout.addWidget(self.plot, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addSpacing(theme.SPACE_XS)
         layout.addWidget(self.readout)
 
-        self.plot.curve_set.connect(self.curve_set)
+        self.channels.chosen.connect(self._choose)
+        self.plot.curve_set.connect(self._on_drawn)
         self.plot.readout_changed.connect(self._show_readout)
         self._show_readout()
 
     @property
+    def channel(self) -> str:
+        """Return which curve is shown, by its name in EditState."""
+        return self.plot.channel
+
+    @property
     def curve(self) -> tone_curve.Curve:
-        """Return the points as they now are."""
+        """Return the points of the shown curve as they now are."""
         return self.plot.curve
 
-    def set_curve(self, curve: tone_curve.Curve) -> None:
-        """Show *curve* without announcing it."""
-        self.plot.set_curve(curve)
+    def curve_of(self, name: str) -> tone_curve.Curve:
+        """Return the points of the curve called *name* as the editor holds them."""
+        return self._curves[name]
+
+    def set_curve(self, curve: tone_curve.Curve, name: str | None = None) -> None:
+        """Hold *curve* as the curve called *name*, without announcing it.
+
+        The shown curve is meant when no name is given.
+        """
+        name = self.channel if name is None else name
+        self._curves[name] = curve
+        self.channels.set_marked(name, not tone_curve.is_straight(curve))
+        if name == self.channel:
+            self.plot.set_curve(curve)
+
+    def set_curves(self, state: EditState) -> None:
+        """Hold every curve of *state* without announcing it, as undo and presets do."""
+        for name in CURVE_NAMES:
+            self.set_curve(state.curve(name), name)
+
+    def set_channel(self, name: str) -> None:
+        """Show the curve called *name*, as a click on its name does."""
+        if name == self.channel:
+            return
+        self.channels.set_value(name)
+        self._choose(name)
 
     def set_backdrop(self, image: NDArray[np.uint8] | None) -> None:
-        """Lay the brightness histogram of *image* behind the curve, or none."""
+        """Lay the histograms of *image* behind the curve, or none."""
         self.plot.set_backdrop(image)
 
     def retranslate(self) -> None:
-        """Read the line under the square again after a language change."""
+        """Read the names and the line under the square again after a language change."""
+        self.channels.retranslate()
         self._show_readout()
+
+    def _choose(self, name: str) -> None:
+        """Draw the curve called *name* instead of the one shown."""
+        self.plot.set_channel(name)
+        self.plot.set_curve(self._curves[name])
+        self.channel_changed.emit(name)
+
+    def _on_drawn(self, curve: tone_curve.Curve, dragging: bool) -> None:
+        """Keep the curve just drawn and pass it on with its name."""
+        name = self.channel
+        self._curves[name] = curve
+        self.channels.set_marked(name, not tone_curve.is_straight(curve))
+        self.curve_set.emit(curve, dragging, name)
 
     def _show_readout(self) -> None:
         """Read the chosen point in levels, or say how to begin."""

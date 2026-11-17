@@ -295,6 +295,13 @@ CURVE_POINT_RADIUS: Final[int] = 4
 CURVE_GRAB_RADIUS: Final[int] = 8
 #: The histogram behind the curve, out of 255: there to be read through.
 CURVE_BACKDROP_ALPHA: Final[int] = 48
+#: The space between the choice of curve (A-35) and the square under it.
+CURVE_CHOICE_GAP: Final[int] = SPACE_SM
+#: The dot in the top right corner of a choice that holds something, such
+#: as a curve that has been bent (PLAN.md 3.1): 4 px across, SPACE_XS inside
+#: the border.
+CHOICE_MARK_RADIUS: Final[int] = 2
+CHOICE_MARK_INSET: Final[int] = SPACE_XS
 TAB_BAR_HEIGHT: Final[int] = 36
 TAB_UNDERLINE_HEIGHT: Final[int] = 2
 PANEL_ACTION_ROW_HEIGHT: Final[int] = 44

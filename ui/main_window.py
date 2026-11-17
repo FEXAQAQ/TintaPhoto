@@ -293,6 +293,9 @@ class MainWindow(QMainWindow):
         self.inspector.adjust_tab.curve_group.toggled.connect(
             lambda _open: self._update_curve_backdrop()
         )
+        self.inspector.adjust_tab.curve_channel_changed.connect(
+            lambda _name: self._update_curve_backdrop()
+        )
         self.inspector.retouch_tab.lens_set.connect(self._on_lens_set)
         self.controller.lens_ready.connect(self.inspector.retouch_tab.set_lens_profile)
         self.inspector.histogram.clipping_toggled.connect(self._on_clipping_toggled)
@@ -2025,10 +2028,12 @@ class MainWindow(QMainWindow):
 
     def _update_curve_backdrop(self) -> None:
         """Ask for the histogram behind the curve only while the curve can be seen."""
+        adjust_tab = self.inspector.adjust_tab
         self.controller.set_curve_backdrop_wanted(
             self.inspector.current_tab is InspectorTab.ADJUST
             and not self.is_inspector_collapsed()
-            and self.inspector.adjust_tab.curve_group.is_open
+            and adjust_tab.curve_group.is_open,
+            adjust_tab.curve_editor.channel,
         )
 
     def _update_look_thumbnails(self) -> None:

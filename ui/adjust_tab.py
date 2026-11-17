@@ -218,9 +218,12 @@ class AdjustTab(QWidget):
     #: whatever else the photo holds - the filter chosen on its own tab, say -
     #: is taken from the photo and not from what this tab last heard.
     value_set = Signal(str, float, bool)
-    #: The luminance curve drawn (A-34): its points, and whether one of them
-    #: is still under the hand.
-    curve_set = Signal(object, bool)
+    #: A curve drawn (A-34, A-35): its points, whether one of them is still
+    #: under the hand, and which curve it is, by its name in EditState.
+    curve_set = Signal(object, bool, str)
+    #: Another curve was chosen to be shown, so the histogram behind it is
+    #: another one.
+    curve_channel_changed = Signal(str)
     #: A preset to put on (P-05).
     preset_applied = Signal(object)
     #: A preset to rename, with the name it should now have (P-06).
@@ -301,15 +304,16 @@ class AdjustTab(QWidget):
         return group
 
     def _build_curve_group(self) -> ControlGroup:
-        """The luminance curve, with the button that straightens it on the header."""
+        """The curves, with the button that straightens the shown one on the header."""
         group = ControlGroup("adjust.group.curve", parent=self._groups)
         self._group_widgets.append(group)
-        #: Puts the curve back to straight, as one step of history.
+        #: Puts the shown curve back to straight, as one step of history.
         self.curve_reset_button = IconButton(icons.ICON_RESET, "adjust.reset_curve")
         self.curve_reset_button.clicked.connect(self._reset_curve)
         group.header.set_action(self.curve_reset_button)
         self.curve_editor = CurveEditor(group)
         self.curve_editor.curve_set.connect(self._on_curve_set)
+        self.curve_editor.channel_changed.connect(self._on_curve_channel_changed)
         group.add_row(self.curve_editor)
         # Not every photo wants a curve, and the square is tall.
         group.set_open(False)
@@ -387,10 +391,14 @@ class AdjustTab(QWidget):
         self._show_curve()
 
     def _show_curve(self) -> None:
-        """Draw the curve the photo holds; the button only has a bent one to undo."""
-        self.curve_editor.set_curve(self._state.luma_curve)
+        """Draw the curves the photo holds; the button only has a bent one to undo."""
+        self.curve_editor.set_curves(self._state)
+        self._update_curve_reset()
+
+    def _update_curve_reset(self) -> None:
+        """Let the reset button be pressed only while the shown curve is bent."""
         self.curve_reset_button.setEnabled(
-            self._state.luma_curve != tone_curve.STRAIGHT
+            self._state.curve(self.curve_editor.channel) != tone_curve.STRAIGHT
         )
 
     def _update_masking(self) -> None:
@@ -479,19 +487,23 @@ class AdjustTab(QWidget):
         self._set_titles_dimmed(dragging)
         self.value_set.emit(name, held, dragging)
 
-    def _on_curve_set(self, curve: tone_curve.Curve, dragging: bool) -> None:
+    def _on_curve_set(self, curve: tone_curve.Curve, dragging: bool, name: str) -> None:
         """Take the curve as it was just drawn and pass it on."""
-        self._state = self._state.with_curve(curve)
-        self.curve_reset_button.setEnabled(
-            self._state.luma_curve != tone_curve.STRAIGHT
-        )
+        self._state = self._state.with_curve(curve, name)
+        self._update_curve_reset()
         self._set_titles_dimmed(dragging)
-        self.curve_set.emit(curve, dragging)
+        self.curve_set.emit(curve, dragging, name)
+
+    def _on_curve_channel_changed(self, name: str) -> None:
+        """Follow the editor to another curve."""
+        self._update_curve_reset()
+        self.curve_channel_changed.emit(name)
 
     def _reset_curve(self) -> None:
-        """Put the curve back to straight."""
-        self.curve_editor.set_curve(tone_curve.STRAIGHT)
-        self._on_curve_set(tone_curve.STRAIGHT, False)
+        """Put the shown curve back to straight; the others stay as they are."""
+        name = self.curve_editor.channel
+        self.curve_editor.set_curve(tone_curve.STRAIGHT, name)
+        self._on_curve_set(tone_curve.STRAIGHT, False, name)
 
     def _set_titles_dimmed(self, dimmed: bool) -> None:
         """Fade the group titles while a slider is moving (PLAN.md 3.6)."""

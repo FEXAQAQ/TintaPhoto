@@ -3028,3 +3028,71 @@ def test_the_histogram_behind_the_curve_is_the_photo_with_the_curve_straight(
     controller.set_adjustments(controller.state.with_value("exposure", 1.0))
     (brighter,) = wait_for(controller.curve_backdrop_ready)
     assert brighter.mean() > straight.mean()
+
+
+# -- the RGB and the red, green and blue curves (A-35) ------------------------
+
+
+def test_a_channel_curve_is_drawn_reset_and_pasted_with_the_others(
+    controller: Controller, folder: Path
+) -> None:
+    _shown(controller, folder)
+    controller.set_curve(_S_CURVE, name="rgb_curve")
+    controller.set_curve(((0.0, 0.0), (0.5, 0.6), (1.0, 1.0)), dragging=True, name="blue_curve")
+    controller.set_curve(((0.0, 0.0), (0.5, 0.7), (1.0, 1.0)), name="blue_curve")
+    assert controller.state.rgb_curve == _S_CURVE
+    assert controller.state.blue_curve == ((0.0, 0.0), (0.5, 0.7), (1.0, 1.0))
+    assert controller.state.luma_curve == tone_curve.STRAIGHT
+
+    controller.copy_adjustments()
+    controller.select(1)
+    _wait_for_preview(controller)
+    controller.paste_adjustments([controller.photos[2]])
+    assert controller.state.rgb_curve == _S_CURVE
+    controller.select(2)
+    _wait_for_preview(controller)
+    assert controller.state.blue_curve == ((0.0, 0.0), (0.5, 0.7), (1.0, 1.0))
+
+    controller.reset()
+    assert controller.state.curves_are_straight
+    controller.undo()
+    assert controller.state.rgb_curve == _S_CURVE
+
+
+def test_a_channel_curve_drag_is_one_step(controller: Controller, folder: Path) -> None:
+    _opened(controller, folder)
+
+    controller.set_curve(((0.0, 0.0), (0.5, 0.6), (1.0, 1.0)), dragging=True, name="red_curve")
+    controller.set_curve(_S_CURVE, name="red_curve")
+
+    controller.undo()
+    assert controller.state.red_curve == tone_curve.STRAIGHT
+    assert not controller.can_undo
+
+
+def test_the_histogram_behind_a_channel_curve_keeps_the_curves_before_it(
+    controller: Controller, folder: Path
+) -> None:
+    _shown(controller, folder)
+    controller.set_curve(((0.0, 0.3), (1.0, 1.0)))
+    _wait_for_preview(controller)
+    asked: list[object] = []
+    controller.curve_backdrop_ready.connect(asked.append)
+
+    controller.set_curve_backdrop_wanted(True)
+    (for_luma,) = wait_for(controller.curve_backdrop_ready)
+    controller.set_curve_backdrop_wanted(True, "rgb_curve")
+    (for_rgb,) = wait_for(controller.curve_backdrop_ready)
+
+    # The shared curve finds the photo with the luminance curve on it.
+    assert for_rgb.mean() > for_luma.mean()
+
+    # Its own curve is left out, so drawing it does not make it again.
+    controller.set_curve(((0.0, 0.3), (1.0, 1.0)), name="rgb_curve")
+    _wait_for_preview(controller)
+    assert len(asked) == 2
+
+    # A channel's own curve finds the shared one on the photo.
+    controller.set_curve_backdrop_wanted(True, "red_curve")
+    (for_red,) = wait_for(controller.curve_backdrop_ready)
+    assert for_red.mean() > for_rgb.mean()
