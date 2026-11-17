@@ -213,13 +213,14 @@ def test_a_preset_records_the_curve_only_when_it_was_drawn() -> None:
     plain = presets.create("plain", JPEG.with_value("contrast", 10.0), JPEG)
     curved = presets.create("curved", JPEG.with_curve(S_CURVE), JPEG)
 
-    assert plain.luma_curve is None
+    assert plain.curves == {}
     assert "luma_curve" not in plain.to_dict()
     assert plain.apply_to(JPEG.with_curve(LIFTED)).luma_curve == LIFTED
     assert not curved.is_empty
+    assert curved.curves == {"luma_curve": S_CURVE}
     assert curved.apply_to(JPEG).luma_curve == S_CURVE
     again = presets.Preset.from_dict(curved.to_dict())
-    assert again is not None and again.luma_curve == S_CURVE
+    assert again is not None and again.curves == {"luma_curve": S_CURVE}
 
 
 # -- the step --------------------------------------------------------------

@@ -64,7 +64,15 @@ from core import (
 )
 from core.auto_light import AUTO_NAMES
 from core.auto_light import auto_light as find_auto_light
-from core.edit_state import DETAIL_NAMES, NUMERIC_NAMES, RESET_NAMES, Edit, EditState
+from core.edit_state import (
+    CURVE_NAMES,
+    DETAIL_NAMES,
+    LUMA_CURVE,
+    NUMERIC_NAMES,
+    RESET_NAMES,
+    Edit,
+    EditState,
+)
 from core.filters import NO_FILTER, Look, load_catalogue
 from core.exporter import ExportOptions
 from core.faces import Face
@@ -511,9 +519,10 @@ class Controller(QObject):
         #: What the thumbnails last asked for were made of, so that the same
         #: photo, adjustments and size are not developed twice.
         self._look_thumbnails_key: object = None
-        #: Whether the luminance curve's editor is in sight, and what the
-        #: histogram behind it was last made of.
+        #: Whether the curve editor is in sight, which curve it shows, and
+        #: what the histogram behind it was last made of.
         self._curve_backdrop_wanted = False
+        self._curve_backdrop_name = LUMA_CURVE
         self._curve_backdrop_key: object = None
 
         #: The last fully developed preview, and the photo as it was found, so
@@ -1575,13 +1584,15 @@ class Controller(QObject):
         """
         self.set_adjustments(self._state.with_value(name, value), dragging)
 
-    def set_curve(self, curve: tone_curve.Curve, dragging: bool = False) -> None:
-        """Draw the luminance curve of the photo being shown (A-34).
+    def set_curve(
+        self, curve: tone_curve.Curve, dragging: bool = False, name: str = LUMA_CURVE
+    ) -> None:
+        """Draw the curve called *name* of the photo being shown (A-34, A-35).
 
         A point still under the hand is a draft like a slider on the move;
         letting it go is one step of history.
         """
-        self.set_adjustments(self._state.with_curve(curve), dragging)
+        self.set_adjustments(self._state.with_curve(curve, name), dragging)
 
     def set_lens(self, settings: LensSettings, dragging: bool = False) -> None:
         """Change the lens correction of the photo being shown (PLAN.md 2.2).
@@ -1680,7 +1691,7 @@ class Controller(QObject):
             if name in _KIND_NAMES and copied.is_raw != state.is_raw:
                 continue
             changed = changed.with_value(name, getattr(copied, name))
-        return changed.with_filter(copied.filter).with_curve(copied.luma_curve)
+        return changed.with_filter(copied.filter).with_curves_of(copied)
 
     def _paste_into_file(self, photo: Path, copied: EditState) -> bool:
         """Change the stored adjustments of a photo that is not open."""
@@ -1691,7 +1702,8 @@ class Controller(QObject):
             if same_kind or name not in _KIND_NAMES
         }
         values["filter"] = copied.filter
-        values["luma_curve"] = [list(point) for point in copied.luma_curve]
+        for name in CURVE_NAMES:
+            values[name] = [list(point) for point in copied.curve(name)]
         result = _update_sidecar(photo, values, self._application, self._store)
         if result.failed:
             return False
@@ -2559,7 +2571,7 @@ class Controller(QObject):
         state = self._state
         for name in RESET_NAMES:
             state = state.with_value(name, getattr(self._reference, name))
-        self._state = state.with_curve(self._reference.luma_curve)
+        self._state = state.with_curves_of(self._reference)
         self._record(path, self.edit)
         self.state_restored.emit(self._state)
         self._develop_current()
@@ -2985,21 +2997,23 @@ class Controller(QObject):
             return
         self.look_thumbnails_ready.emit(thumbnails)
 
-    # -- the histogram behind the luminance curve (A-34) -------------------
+    # -- the histogram behind the curves (A-34, A-35) ----------------------
 
-    def set_curve_backdrop_wanted(self, wanted: bool) -> None:
-        """Say whether the luminance curve's editor can be seen.
+    def set_curve_backdrop_wanted(self, wanted: bool, name: str = LUMA_CURVE) -> None:
+        """Say whether the curve editor can be seen, and which curve it shows.
 
         Out of sight nothing is developed for it; it catches up the moment
         it comes back.
         """
         self._curve_backdrop_wanted = bool(wanted)
+        self._curve_backdrop_name = name
         self._request_curve_backdrop()
 
     def _request_curve_backdrop(self) -> None:
-        """Develop a small copy of the photo with the curve straight, in the background.
+        """Develop a small copy of the photo as the shown curve finds it, in the background.
 
-        Its brightness is what the curve acts on, near enough, so its
+        That is the photo with the shown curve, and every curve after it,
+        straight (PLAN.md 3.1): what the curve acts on, near enough, so its
         histogram is what a point is placed against. The curve itself is
         left out of what it is made of: drawing the curve never makes it
         again, and it holds still under the hand.
@@ -3008,7 +3022,7 @@ class Controller(QObject):
         decoded = self._decoded.get(path) if path is not None else None
         if not self._curve_backdrop_wanted or path is None or decoded is None:
             return
-        values = self._state.with_curve(tone_curve.STRAIGHT)
+        values = self._state.before_curve(self._curve_backdrop_name)
         shape = self._geometry
         known_faces = (path, shape.lens) in self._faces
         key = (path, values, shape, known_faces)

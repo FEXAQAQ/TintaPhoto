@@ -2310,22 +2310,48 @@ def black_and_white_points(
 # ratio between the channels stay where they were.
 
 
+def _table_through(curves: tuple[tone_curve.Curve, ...]) -> NDArray[np.float32]:
+    """Return the light *curves* give, one after another, along the root of the light in.
+
+    Entry ``i`` is for a value whose square root is
+    ``i / (CURVE_TABLE_SIZE - 1) * CURVE_TABLE_REACH``. A curve is drawn in
+    sRGB encoded brightness (PLAN.md 2.2), so each entry is encoded, read off
+    each curve in turn and decoded again.
+    """
+    roots = np.linspace(0.0, CURVE_TABLE_REACH, CURVE_TABLE_SIZE, dtype=np.float64)
+    encoded = cm.linear_to_srgb((roots * roots).astype(np.float32)).astype(np.float64)
+    for curve in curves:
+        encoded = tone_curve.evaluate(curve, encoded)
+    table = cm.srgb_to_linear(encoded.astype(np.float32)).astype(np.float32)
+    table.setflags(write=False)
+    return table
+
+
+def _read_table(
+    table: NDArray[np.float32], value: NDArray[np.float32]
+) -> NDArray[np.float32]:
+    """Return *table* read at every one of *value*, which is not below nought."""
+    # Reading the table is a resampling of a one row picture, which OpenCV
+    # does several times faster than indexing with an array of positions.
+    position = cv2.sqrt(value)
+    position *= np.float32((CURVE_TABLE_SIZE - 1) / CURVE_TABLE_REACH)
+    return cv2.remap(
+        table.reshape(1, -1),
+        position,
+        np.zeros_like(position),
+        cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+
+
 @lru_cache(maxsize=8)
 def curve_table(curve: tone_curve.Curve) -> NDArray[np.float32]:
     """Return the luminance *curve* gives, along the root of the one coming in.
 
-    Entry ``i`` is for a luminance whose square root is
-    ``i / (CURVE_TABLE_SIZE - 1) * CURVE_TABLE_REACH``. The curve itself is
-    drawn in sRGB encoded brightness (PLAN.md 2.2), so each entry is encoded,
-    read off the curve and decoded again. The table is the same for every
-    photo wearing the curve, which is why it is kept.
+    The table is the same for every photo wearing the curve, which is why it
+    is kept.
     """
-    roots = np.linspace(0.0, CURVE_TABLE_REACH, CURVE_TABLE_SIZE, dtype=np.float64)
-    encoded = cm.linear_to_srgb((roots * roots).astype(np.float32)).astype(np.float64)
-    shaped = tone_curve.evaluate(curve, encoded).astype(np.float32)
-    table = cm.srgb_to_linear(shaped).astype(np.float32)
-    table.setflags(write=False)
-    return table
+    return _table_through((curve,))
 
 
 def luminance_curve(
@@ -2343,19 +2369,8 @@ def luminance_curve(
     """
     if tone_curve.is_straight(curve):
         return image
-    table = curve_table(curve)
     brightness = cv2.max(_luminance(image), 0.0)
-    # Reading the table is a resampling of a one row picture, which OpenCV
-    # does several times faster than indexing with an array of positions.
-    position = cv2.sqrt(brightness)
-    position *= np.float32((CURVE_TABLE_SIZE - 1) / CURVE_TABLE_REACH)
-    target = cv2.remap(
-        table.reshape(1, -1),
-        position,
-        np.zeros_like(position),
-        cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REPLICATE,
-    )
+    target = _read_table(curve_table(curve), brightness)
     held = cv2.max(target * np.float32(1.0 / CURVE_BLACK_FLOOR), 1.0)
     factor = cv2.min(cv2.divide(target, cv2.max(brightness, _EPSILON)), held)
     shaped = _scale_evenly(image, factor)
@@ -2364,6 +2379,65 @@ def luminance_curve(
         grey = cv2.max(lift, 0.0)
         shaped = cv2.add(shaped, cv2.merge((grey, grey, grey)))
     return shaped
+
+
+# --------------------------------------------------------------------------
+# Step 9.56: channel curves
+# --------------------------------------------------------------------------
+#
+# The curves of red, green and blue. One curve is put on the three channels
+# alike, each on its own, and then each channel has a curve of its own. Unlike
+# the luminance curve the channels are not kept in step: an S curve here
+# deepens the colour as it deepens the contrast, and a curve on one channel
+# tints the photo, which is what these curves are for. They follow the
+# luminance curve and come before the vignette for the same reasons it does.
+# They work on the red, green and blue of sRGB, the ones the photo is shown
+# and exported in and the histogram counts, so that raising blue adds the
+# blue that is seen and a point put under a peak of a channel's histogram
+# moves that peak; the working space's own primaries lie far outside what a
+# screen shows, and raising one of them would turn the photo some other
+# colour. What the curves push out of gamut is brought back by step 11.
+
+
+@lru_cache(maxsize=8)
+def channel_table(
+    shared: tone_curve.Curve, own: tone_curve.Curve
+) -> NDArray[np.float32]:
+    """Return the light one channel is given by *shared* and then by *own*.
+
+    Laid out along the root of the light coming in, as :func:`curve_table`
+    is, so one reading of the table puts both curves on the channel.
+    """
+    return _table_through((shared, own))
+
+
+def channel_curves(
+    image: NDArray[np.float32],
+    shared: tone_curve.Curve,
+    red: tone_curve.Curve,
+    green: tone_curve.Curve,
+    blue: tone_curve.Curve,
+) -> NDArray[np.float32]:
+    """Put the channel curves on *image* (PLAN.md section 6 step 9.56).
+
+    *shared* is put on red, green and blue alike and then each channel's own
+    curve on that channel, in linear sRGB. A channel whose two curves are
+    straight keeps its value, and the photo is handed back as it is when all
+    four are. A value below nought - a colour sRGB cannot show - keeps what
+    lies below nought, so the curve moves it as it moves black and does not
+    cut it off.
+    """
+    owns = (red, green, blue)
+    if tone_curve.is_straight(shared) and all(tone_curve.is_straight(own) for own in owns):
+        return image
+    channels = list(cv2.split(cm.apply_matrix(image, cm.PROPHOTO_TO_SRGB)))
+    for index, own in enumerate(owns):
+        if tone_curve.is_straight(shared) and tone_curve.is_straight(own):
+            continue
+        value = channels[index]
+        shaped = _read_table(channel_table(shared, own), cv2.max(value, 0.0))
+        channels[index] = cv2.add(shaped, cv2.min(value, 0.0))
+    return cm.apply_matrix(cv2.merge(channels), cm.SRGB_TO_PROPHOTO)
 
 
 # --------------------------------------------------------------------------
@@ -3337,7 +3411,7 @@ def develop(
     Steps 2.5 to 12, in the order the plan fixes and never another: noise
     reduction and sharpening, white balance, clipped highlights, colour
     space, exposure, the depth of field, the black mist, highlights and shadows, contrast, the base tone curve,
-    the black and white points, the luminance curve, the vignette, the film filter, vibrance and
+    the black and white points, the luminance curve, the channel curves, the vignette, the film filter, vibrance and
     saturation with the skin's tone, gamut compression, film grain, output;
     the skin is smoothed right after the detail step (2.6). The screen's own profile is
     applied afterwards, by whoever is showing the result, because it must not
@@ -3535,6 +3609,9 @@ def develop(
             part = base_tone_curve(part)
         part = black_and_white_points(part, state.blacks, state.whites)
         part = luminance_curve(part, state.luma_curve)
+        part = channel_curves(
+            part, state.rgb_curve, state.red_curve, state.green_curve, state.blue_curve
+        )
         if down_part is not None:
             assert vignette_across is not None  # the two are set together
             part = _scale_evenly(

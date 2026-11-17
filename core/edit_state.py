@@ -20,6 +20,30 @@ from core.filters import NO_FILTER
 from core.geometry import DEFAULT_GEOMETRY, Geometry
 
 # --------------------------------------------------------------------------
+# Curves (PLAN.md section 2.2, A-34 and A-35)
+# --------------------------------------------------------------------------
+
+#: The luminance curve, which moves brightness alone (section 6 step 9.55).
+LUMA_CURVE: Final[str] = "luma_curve"
+#: The curve put on red, green and blue alike, each on its own.
+RGB_CURVE: Final[str] = "rgb_curve"
+#: The curves of red, green and blue alone, in that order.
+CHANNEL_CURVE_NAMES: Final[tuple[str, str, str]] = (
+    "red_curve",
+    "green_curve",
+    "blue_curve",
+)
+#: Every curve a photo carries, in the order the curve group offers them.
+CURVE_NAMES: Final[tuple[str, ...]] = (LUMA_CURVE, RGB_CURVE) + CHANNEL_CURVE_NAMES
+#: Where in the pipeline each curve acts: the luminance curve, then the one
+#: shared by the channels, then each channel's own.
+_CURVE_STAGES: Final[dict[str, int]] = {
+    LUMA_CURVE: 0,
+    RGB_CURVE: 1,
+    **{name: 2 for name in CHANNEL_CURVE_NAMES},
+}
+
+# --------------------------------------------------------------------------
 # Ranges (PLAN.md section 2.2)
 # --------------------------------------------------------------------------
 
@@ -145,6 +169,12 @@ class EditState:
     #: points, brightness in and brightness out. Not a number either, and
     #: carried beside the numbers the way the filter's name is.
     luma_curve: tone_curve.Curve = tone_curve.STRAIGHT
+    #: The channel curves (PLAN.md 2.2, A-35, and section 6 step 9.56): one
+    #: curve put on red, green and blue each, then one for each of them alone.
+    rgb_curve: tone_curve.Curve = tone_curve.STRAIGHT
+    red_curve: tone_curve.Curve = tone_curve.STRAIGHT
+    green_curve: tone_curve.Curve = tone_curve.STRAIGHT
+    blue_curve: tone_curve.Curve = tone_curve.STRAIGHT
     #: Whether temperature and tint are in kelvin or relative.
     is_raw: bool = False
 
@@ -196,8 +226,20 @@ class EditState:
             and self.grain == 0.0
             and self.skin == 0.0
             and self.whiten == 0.0
-            and self.luma_curve == tone_curve.STRAIGHT
+            and self.curves_are_straight
         )
+
+    @property
+    def curves_are_straight(self) -> bool:
+        """Return whether none of the five curves has been bent (A-34, A-35)."""
+        return all(self.curve(name) == tone_curve.STRAIGHT for name in CURVE_NAMES)
+
+    def curve(self, name: str) -> tone_curve.Curve:
+        """Return the curve called *name*, one of :data:`CURVE_NAMES`."""
+        if name not in CURVE_NAMES:
+            raise KeyError(f"{name} is not a curve")
+        curve: tone_curve.Curve = getattr(self, name)
+        return curve
 
     @property
     def uses_faces(self) -> bool:
@@ -264,13 +306,38 @@ class EditState:
         """Return a copy wearing the film look *identifier*, or none for ""."""
         return replace(self, filter=str(identifier))
 
-    def with_curve(self, curve: tone_curve.Curve) -> "EditState":
-        """Return a copy with the luminance curve drawn through *curve*.
+    def with_curve(
+        self, curve: tone_curve.Curve, name: str = LUMA_CURVE
+    ) -> "EditState":
+        """Return a copy with the curve called *name* drawn through *curve*.
 
         A curve that draws the diagonal is stored as the straight one, so
         that a photo with a point left lying on it still counts as untouched.
         """
-        return replace(self, luma_curve=tone_curve.normalised(tuple(curve)))
+        if name not in CURVE_NAMES:
+            raise KeyError(f"{name} is not a curve")
+        return replace(self, **{name: tone_curve.normalised(tuple(curve))})
+
+    def before_curve(self, name: str) -> "EditState":
+        """Return this state as it reaches the curve called *name*.
+
+        That curve and every curve after it in the pipeline are straight
+        (PLAN.md section 6 steps 9.55 and 9.56). The channels' own curves act
+        on the three channels side by side, so they are straightened together.
+        """
+        stage = _CURVE_STAGES[name]
+        changed = self
+        for other in CURVE_NAMES:
+            if _CURVE_STAGES[other] >= stage:
+                changed = changed.with_curve(tone_curve.STRAIGHT, other)
+        return changed
+
+    def with_curves_of(self, other: "EditState") -> "EditState":
+        """Return a copy drawing the five curves of *other*."""
+        changed = self
+        for name in CURVE_NAMES:
+            changed = changed.with_curve(other.curve(name), name)
+        return changed
 
     def range_of(self, name: str) -> tuple[float, float]:
         """Return the lowest and highest value *name* may take."""
@@ -309,9 +376,10 @@ class EditState:
         stored: dict[str, Any] = {
             field.name: getattr(self, field.name)
             for field in fields(self)
-            if field.name not in ("is_raw", "luma_curve")
+            if field.name != "is_raw" and field.name not in CURVE_NAMES
         }
-        stored["luma_curve"] = [list(point) for point in self.luma_curve]
+        for name in CURVE_NAMES:
+            stored[name] = [list(point) for point in self.curve(name)]
         return stored
 
     @classmethod
@@ -335,8 +403,9 @@ class EditState:
         chosen = data.get("filter")
         if isinstance(chosen, str):
             state = state.with_filter(chosen)
-        if "luma_curve" in data:
-            state = state.with_curve(tone_curve.cleaned(data["luma_curve"]))
+        for name in CURVE_NAMES:
+            if name in data:
+                state = state.with_curve(tone_curve.cleaned(data[name]), name)
         return state
 
 
