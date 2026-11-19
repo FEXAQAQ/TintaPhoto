@@ -212,10 +212,11 @@ def test_the_curve_is_drawn_where_it_runs(editor: CurveEditor) -> None:
 # -- the group on the adjust tab -------------------------------------------
 
 
-def test_the_curve_group_sits_after_light_and_starts_folded(tab: AdjustTab) -> None:
+def test_the_curve_group_sits_after_colour_and_starts_folded(tab: AdjustTab) -> None:
     titles = [group.header.text() for group in tab.groups()]
 
-    assert titles.index(tr("adjust.group.curve")) == titles.index(tr("adjust.group.light")) + 1
+    assert titles.index(tr("adjust.group.curve")) == titles.index(tr("adjust.group.colour")) + 1
+    assert titles.index(tr("adjust.group.effects")) == titles.index(tr("adjust.group.curve")) + 1
     assert not tab.curve_group.is_open
     assert not tab.curve_editor.isVisible()
 

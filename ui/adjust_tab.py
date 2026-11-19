@@ -12,9 +12,11 @@ camera was, a JPEG only relatively from where it already is. The white
 balance header also carries the eyedropper (A-24), which sets the pair from
 a spot on the photo.
 
-The luminance curve (A-34) has a group of its own between light and colour,
-folded until it is wanted: its square is as tall as nine sliders. Its header
-carries the button that puts the curve back to straight.
+The curves (A-34, A-35) have a group of their own between colour and
+effects, folded until they are wanted: the square is as tall as nine sliders,
+and below colour it pushes down only the groups touched least when it is
+opened. Its header carries the button that puts the shown curve back to
+straight.
 
 Portrait and lens correction are on the retouch tab (``ui/retouch_tab.py``):
 neither is wanted on every photo.
@@ -278,7 +280,7 @@ class AdjustTab(QWidget):
                 self._rows[name] = row
                 group.add_row(row)
             groups_layout.addWidget(group)
-            if title_key == "adjust.group.light":
+            if title_key == "adjust.group.colour":
                 groups_layout.addWidget(self._build_curve_group())
         layout.addWidget(self._groups)
         layout.addStretch(1)
